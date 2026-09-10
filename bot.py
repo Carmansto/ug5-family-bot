@@ -1237,7 +1237,7 @@ class UnpaidCompletedView(discord.ui.View):
   async def paid(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
       await interaction.response.send_message(
-        "❌ Оплачувати контракти може тільки керівництво.",
+        "❌ У вас немає доступу до оплати контрактів.",
         ephemeral=True,
       )
       return
@@ -1269,7 +1269,7 @@ class UnpaidCompletedView(discord.ui.View):
   async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
       await interaction.response.send_message(
-        "❌ Скасовувати записи може тільки керівництво.",
+        "❌ У вас не має доступу до скасування.",
         ephemeral=True,
       )
       return
@@ -1858,7 +1858,7 @@ class MainContractPanelView(discord.ui.View):
   async def self_contract(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not db.active_contract_types(limit=1):
       await interaction.response.send_message(
-        "❌ Перелік контрактів ще порожній. Керівництво має додати їх через `/contracts_admin`.",
+        "❌ Перелік контрактів ще порожній.",
         ephemeral=True,
       )
       return
@@ -1884,7 +1884,7 @@ class MainContractPanelView(discord.ui.View):
   async def group_contract(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not db.active_contract_types(limit=1):
       await interaction.response.send_message(
-        "❌ Перелік контрактів ще порожній. Керівництво має додати їх через `/contracts_admin`.",
+        "❌ Перелік контрактів ще порожній.",
         ephemeral=True,
       )
       return
@@ -1950,7 +1950,7 @@ bot = ContractBot()
 async def setup_panel(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
     await interaction.response.send_message(
-      "❌ Ця команда тільки для керівництва.",
+      "❌ Ця команда не доступна для вас.",
       ephemeral=True,
     )
     return
@@ -1998,7 +1998,7 @@ async def setup_panel(interaction: discord.Interaction):
 async def contracts_admin(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
     await interaction.response.send_message(
-      "❌ Ця команда тільки для керівництва.",
+      "❌ Ця команда не доступна для вас.",
       ephemeral=True,
     )
     return
@@ -2006,7 +2006,7 @@ async def contracts_admin(interaction: discord.Interaction):
   embed = discord.Embed(
     title="⚙️ Керування контрактами",
     description=(
-      "Тут керівництво створює та редагує перелік контрактів.\n"
+      "Тут можна створити та редагувати перелік контрактів.\n"
       "Для кожного контракту зберігаються **назва, ціна та КД**.\n"
       "Рейтинг і статистика заробітку обнуляються **окремо**."
     ),
@@ -2019,11 +2019,11 @@ async def contracts_admin(interaction: discord.Interaction):
   )
 
 
-@bot.tree.command(name="stats", description="Статистика контрактів для керівництва")
+@bot.tree.command(name="stats", description="Статистика контрактів")
 async def stats(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
     await interaction.response.send_message(
-      "❌ Статистика доступна тільки керівництву.",
+      "❌ Немає доступу.",
       ephemeral=True,
     )
     return
@@ -2195,7 +2195,7 @@ async def stats(interaction: discord.Interaction):
 async def unpaid(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
     await interaction.response.send_message(
-      "❌ Доступно тільки керівництву.",
+      "❌ Немає доступу.",
       ephemeral=True,
     )
     return

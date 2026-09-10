@@ -1150,64 +1150,146 @@ class ContractTypeModal(discord.ui.Modal):
         )
 
 
-class AdminSearchTypeModal(discord.ui.Modal, title="Знайти контракт"):
-    query = discord.ui.TextInput(
-        label="Назва або частина назви",
-        placeholder="Наприклад: бак",
-        max_length=80,
+def admin_picker_page_data(page: int, page_size: int = 25):
+    rows = db.list_active_contract_types(limit=500)
+    total = len(rows)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = max(0, min(page, total_pages - 1))
+    start = page * page_size
+    return rows[start:start + page_size], page, total_pages
+
+
+def admin_picker_text(page: int, total_pages: int) -> str:
+    return (
+        "📋 **Керування контрактами**\n"
+        f"Оберіть контракт зі списку • сторінка **{page + 1}/{total_pages}**"
     )
 
-    async def on_submit(self, interaction: discord.Interaction):
+
+class AdminManageSelect(discord.ui.Select):
+    def __init__(self, page: int):
+        rows, page, total_pages = admin_picker_page_data(page)
+        self.page = page
+        self.total_pages = total_pages
+
+        options = [
+            discord.SelectOption(
+                label=row["name"][:100],
+                value=str(row["id"]),
+                description=(
+                    f"{format_money_dollars(row['price'])} $ • КД {row['cooldown']}"
+                )[:100],
+            )
+            for row in rows
+        ]
+
+        if not options:
+            options = [
+                discord.SelectOption(
+                    label="Контрактів ще немає",
+                    value="none",
+                    description="Спочатку натисніть «Додати»",
+                )
+            ]
+
+        super().__init__(
+            placeholder=f"Контракти • {page + 1}/{total_pages}",
+            options=options,
+            min_values=1,
+            max_values=1,
+            disabled=(options[0].value == "none"),
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
         if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
             await interaction.response.send_message("❌ Немає права.", ephemeral=True)
             return
 
-        rows = db.search_contract_types(str(self.query), limit=25)
-        if not rows:
-            await interaction.response.send_message("❌ Нічого не знайдено.", ephemeral=True)
-            return
-
-        await interaction.response.send_message(
-            "Оберіть контракт для керування:",
-            view=AdminTypeResultsView(rows),
-            ephemeral=True,
-        )
-
-
-class AdminTypeSelect(discord.ui.Select):
-    def __init__(self, rows):
-        options = [
-            discord.SelectOption(
-                label=r["name"][:100],
-                value=str(r["id"]),
-                description=f"{format_money_dollars(r['price'])} $ • КД {r['cooldown']}"[:100],
-            )
-            for r in rows[:25]
-        ]
-        super().__init__(placeholder="Контракт", options=options)
-
-    async def callback(self, interaction: discord.Interaction):
         type_id = int(self.values[0])
         row = db.get_contract_type(type_id)
-        if not row:
-            await interaction.response.send_message("❌ Контракт не знайдено.", ephemeral=True)
+
+        if not row or not row["active"]:
+            await interaction.response.edit_message(
+                content="❌ Цей контракт уже недоступний.",
+                embed=None,
+                view=AdminManagePickerView(self.page),
+            )
             return
 
-        embed = discord.Embed(title=row["name"], color=discord.Color.blurple())
-        embed.add_field(name="💰 Ціна", value=f"{format_money_dollars(row['price'])} $", inline=True)
-        embed.add_field(name="⏳ КД", value=row["cooldown"], inline=True)
+        embed = discord.Embed(
+            title=f"⚙️ {row['name']}",
+            color=discord.Color.blurple(),
+        )
+        embed.add_field(
+            name="💰 Ціна",
+            value=f"{format_money_dollars(row['price'])} $",
+            inline=True,
+        )
+        embed.add_field(
+            name="⏳ КД",
+            value=row["cooldown"],
+            inline=True,
+        )
 
         await interaction.response.edit_message(
             content=None,
             embed=embed,
-            view=ManageOneTypeView(type_id),
+            view=ManageOneTypeView(type_id, return_page=self.page),
         )
 
 
-class AdminTypeResultsView(discord.ui.View):
-    def __init__(self, rows):
+class AdminManagePickerView(discord.ui.View):
+    def __init__(self, page: int = 0):
         super().__init__(timeout=300)
-        self.add_item(AdminTypeSelect(rows))
+
+        _, self.page, self.total_pages = admin_picker_page_data(page)
+        self.add_item(AdminManageSelect(self.page))
+
+        self.previous.disabled = self.page <= 0
+        self.page_indicator.label = f"{self.page + 1}/{self.total_pages}"
+        self.next_page.disabled = self.page >= self.total_pages - 1
+
+    @discord.ui.button(
+        label="Назад",
+        style=discord.ButtonStyle.secondary,
+        emoji="◀️",
+        row=1,
+    )
+    async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
+        new_page = max(0, self.page - 1)
+        _, new_page, total_pages = admin_picker_page_data(new_page)
+
+        await interaction.response.edit_message(
+            content=admin_picker_text(new_page, total_pages),
+            embed=None,
+            view=AdminManagePickerView(new_page),
+        )
+
+    @discord.ui.button(
+        label="1/1",
+        style=discord.ButtonStyle.secondary,
+        disabled=True,
+        row=1,
+    )
+    async def page_indicator(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pass
+
+    @discord.ui.button(
+        label="Далі",
+        style=discord.ButtonStyle.secondary,
+        emoji="▶️",
+        row=1,
+    )
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        new_page = min(self.total_pages - 1, self.page + 1)
+        _, new_page, total_pages = admin_picker_page_data(new_page)
+
+        await interaction.response.edit_message(
+            content=admin_picker_text(new_page, total_pages),
+            embed=None,
+            view=AdminManagePickerView(new_page),
+        )
 
 
 class DeleteTypeConfirmView(discord.ui.View):
@@ -1234,9 +1316,10 @@ class DeleteTypeConfirmView(discord.ui.View):
 
 
 class ManageOneTypeView(discord.ui.View):
-    def __init__(self, type_id: int):
+    def __init__(self, type_id: int, return_page: int = 0):
         super().__init__(timeout=300)
         self.type_id = type_id
+        self.return_page = return_page
 
     @discord.ui.button(label="Редагувати", style=discord.ButtonStyle.primary, emoji="✏️")
     async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1244,6 +1327,8 @@ class ManageOneTypeView(discord.ui.View):
             await interaction.response.send_message("❌ Немає права.", ephemeral=True)
             return
 
+        # Тут форма залишається, бо Discord дозволяє вводити назву/ціну/КД
+        # саме через Modal. Але пошуку через окреме вікно більше немає.
         await interaction.response.send_modal(
             ContractTypeModal("edit", interaction.user.id, self.type_id)
         )
@@ -1259,6 +1344,15 @@ class ManageOneTypeView(discord.ui.View):
             content=f"⚠️ Прибрати **{row['name']}** з переліку?",
             embed=None,
             view=DeleteTypeConfirmView(self.type_id),
+        )
+
+    @discord.ui.button(label="До списку", style=discord.ButtonStyle.secondary, emoji="↩️")
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+        _, page, total_pages = admin_picker_page_data(self.return_page)
+        await interaction.response.edit_message(
+            content=admin_picker_text(page, total_pages),
+            embed=None,
+            view=AdminManagePickerView(page),
         )
 
 
@@ -1354,52 +1448,29 @@ class ContractAdminPanelView(discord.ui.View):
             return
         await interaction.response.send_modal(ContractTypeModal("add", interaction.user.id))
 
-    @discord.ui.button(label="Знайти / редагувати", style=discord.ButtonStyle.primary, emoji="🔎")
-    async def find_edit(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-            await interaction.response.send_message("❌ Немає права.", ephemeral=True)
-            return
-        await interaction.response.send_modal(AdminSearchTypeModal())
-
-    @discord.ui.button(label="Список", style=discord.ButtonStyle.secondary, emoji="📋")
-    async def list_types(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(
+        label="Керувати контрактами",
+        style=discord.ButtonStyle.primary,
+        emoji="📋",
+    )
+    async def manage_contracts(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
             await interaction.response.send_message("❌ Немає права.", ephemeral=True)
             return
 
-        rows = db.list_active_contract_types(limit=100)
+        rows, page, total_pages = admin_picker_page_data(0)
         if not rows:
-            await interaction.response.send_message("Поки що контрактів немає.", ephemeral=True)
+            await interaction.response.send_message(
+                "Поки що контрактів немає. Спочатку натисніть **➕ Додати**.",
+                ephemeral=True,
+            )
             return
 
-        lines = [
-            f"**{idx}. {row['name']}** — {format_money_dollars(row['price'])} $ — КД {row['cooldown']}"
-            for idx, row in enumerate(rows, start=1)
-        ]
-
-        # Keep under Discord embed limit by splitting.
-        chunks = []
-        current = ""
-        for line in lines:
-            if len(current) + len(line) + 1 > 3500:
-                chunks.append(current)
-                current = line
-            else:
-                current = f"{current}\n{line}".strip()
-        if current:
-            chunks.append(current)
-
-        embeds = []
-        for i, chunk in enumerate(chunks[:10], start=1):
-            embeds.append(
-                discord.Embed(
-                    title=f"📋 Контракти ({i}/{len(chunks)})",
-                    description=chunk,
-                    color=discord.Color.blurple(),
-                )
-            )
-
-        await interaction.response.send_message(embeds=embeds, ephemeral=True)
+        await interaction.response.send_message(
+            admin_picker_text(page, total_pages),
+            view=AdminManagePickerView(page),
+            ephemeral=True,
+        )
 
 
     @discord.ui.button(
@@ -1712,7 +1783,7 @@ async def contracts_admin(interaction: discord.Interaction):
     embed = discord.Embed(
         title="⚙️ Керування контрактами",
         description=(
-            "Тут керівництво створює перелік контрактів.\n"
+            "Тут керівництво створює та редагує перелік контрактів.\n"
             "Для кожного контракту зберігаються **назва, ціна та КД**.\n"
             "Рейтинг і статистика заробітку обнуляються **окремо**."
         ),

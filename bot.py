@@ -633,10 +633,6 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
   embed.add_field(name="⏳ КД", value=row["cooldown"], inline=True)
   embed.add_field(name="💳 Статус", value=status_text, inline=False)
 
-  created_ts = iso_to_unix(row["created_at"])
-  if created_ts:
-    embed.add_field(name="🕒 Записано", value=f"<t:{created_ts}:f>", inline=True)
-
   if row["status"] == "paid":
     paid_ts = iso_to_unix(row["paid_at"])
     if paid_ts:

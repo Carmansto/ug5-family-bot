@@ -488,8 +488,6 @@ db = Database(DB_PATH)
 
 def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
     participants = parse_ids(row["participant_ids"])
-    n = max(len(participants), 1)
-    points_each = Fraction(1, n)
 
     if row["status"] == "paid":
         color = discord.Color.green()
@@ -514,11 +512,6 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
     embed.add_field(name="📋 Контракт", value=row["contract_name"], inline=True)
     embed.add_field(name="💰 Сума", value=f"{format_money_dollars(row['price'])} $", inline=True)
     embed.add_field(name="⏳ КД", value=row["cooldown"], inline=True)
-    embed.add_field(
-        name="🏆 Бали",
-        value=f"1 бал за контракт • по **{format_points(points_each)}** кожному",
-        inline=False,
-    )
     embed.add_field(name="💳 Статус", value=status_text, inline=False)
 
     created_ts = iso_to_unix(row["created_at"])
@@ -625,21 +618,21 @@ class PerformerSelect(discord.ui.UserSelect):
             )
             return
 
+        _, page, total_pages = picker_page_data(0)
         await interaction.response.edit_message(
-            content=(
-                "👥 Виконавці: "
-                + " ".join(f"<@{uid}>" for uid in ids)
-                + "\n\nТепер оберіть контракт."
-            ),
-            view=ContractPickerView(view.bot, ids),
+            content=picker_content(ids, page, total_pages),
+            view=ContractPickerView(view.bot, ids, page),
         )
 
 
 class PerformerStepView(discord.ui.View):
-    def __init__(self, bot_instance: "ContractBot"):
+    def __init__(self, bot_instance: "ContractBot", show_self_button: bool = True):
         super().__init__(timeout=300)
         self.bot = bot_instance
         self.add_item(PerformerSelect())
+
+        if not show_self_button:
+            self.remove_item(self.myself)
 
     @discord.ui.button(
         label="Я виконав сам",
@@ -651,124 +644,72 @@ class PerformerStepView(discord.ui.View):
             await interaction.response.send_message("❌ Бот не може бути виконавцем.", ephemeral=True)
             return
 
+        participant_ids = [interaction.user.id]
+        _, page, total_pages = picker_page_data(0)
         await interaction.response.edit_message(
-            content=f"👤 Виконавець: {interaction.user.mention}\n\nТепер оберіть контракт.",
-            view=ContractPickerView(self.bot, [interaction.user.id]),
+            content=picker_content(participant_ids, page, total_pages),
+            view=ContractPickerView(self.bot, participant_ids, page),
         )
 
 
-class QuickContractSelect(discord.ui.Select):
-    def __init__(self, bot_instance: "ContractBot", participant_ids: list[int]):
+def picker_page_data(page: int, page_size: int = 25):
+    rows = db.list_active_contract_types(limit=500)
+    total = len(rows)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = max(0, min(page, total_pages - 1))
+    start = page * page_size
+    return rows[start:start + page_size], page, total_pages
+
+
+def picker_content(participant_ids: list[int], page: int, total_pages: int) -> str:
+    mentions = " ".join(f"<@{uid}>" for uid in participant_ids)
+    return (
+        f"👥 Виконавці: {mentions}\n\n"
+        f"📋 Оберіть контракт зі списку • сторінка **{page + 1}/{total_pages}**"
+    )
+
+
+class ContractPageSelect(discord.ui.Select):
+    def __init__(
+        self,
+        bot_instance: "ContractBot",
+        participant_ids: list[int],
+        page: int,
+    ):
         self.bot_instance = bot_instance
         self.participant_ids = participant_ids
-        rows = db.active_contract_types(limit=25)
 
-        options = []
-        for row in rows:
-            desc = f"{format_money_dollars(row['price'])} $ • КД {row['cooldown']}"
-            options.append(
-                discord.SelectOption(
-                    label=row["name"][:100],
-                    value=str(row["id"]),
-                    description=desc[:100],
-                )
+        rows, page, total_pages = picker_page_data(page)
+        self.page = page
+        self.total_pages = total_pages
+
+        options = [
+            discord.SelectOption(
+                label=row["name"][:100],
+                value=str(row["id"]),
+                description=(
+                    f"{format_money_dollars(row['price'])} $ • КД {row['cooldown']}"
+                )[:100],
             )
+            for row in rows
+        ]
 
         if not options:
             options = [
                 discord.SelectOption(
                     label="Контрактів ще немає",
                     value="none",
-                    description="Керівництво має додати їх у /contracts_admin",
+                    description="Керівництво має додати їх через /contracts_admin",
                 )
             ]
 
         super().__init__(
-            placeholder="Популярні / доступні контракти",
+            placeholder=f"Контракти • {page + 1}/{total_pages}",
             options=options,
             min_values=1,
             max_values=1,
             disabled=(options[0].value == "none"),
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        type_id = int(self.values[0])
-        row = db.get_contract_type(type_id)
-
-        if not row or not row["active"]:
-            await interaction.response.send_message(
-                "❌ Цей контракт уже недоступний. Спробуйте ще раз.",
-                ephemeral=True,
-            )
-            return
-
-        await interaction.response.edit_message(
-            content="Перевірте дані й підтвердьте.",
-            embed=build_confirmation_embed(row, self.participant_ids),
-            view=ConfirmContractView(self.bot_instance, self.participant_ids, type_id),
-        )
-
-
-class ContractSearchModal(discord.ui.Modal, title="Пошук контракту"):
-    query = discord.ui.TextInput(
-        label="Введіть частину назви",
-        placeholder="Наприклад: балон, дрова, риба...",
-        max_length=80,
-    )
-
-    def __init__(self, bot_instance: "ContractBot", participant_ids: list[int]):
-        super().__init__(timeout=300)
-        self.bot_instance = bot_instance
-        self.participant_ids = participant_ids
-
-    async def on_submit(self, interaction: discord.Interaction):
-        rows = db.search_contract_types(str(self.query), limit=25)
-
-        if not rows:
-            await interaction.response.send_message(
-                f"❌ Нічого не знайшов за запитом **{str(self.query).strip()}**.",
-                view=SearchAgainView(self.bot_instance, self.participant_ids),
-                ephemeral=True,
-            )
-            return
-
-        await interaction.response.send_message(
-            f"🔎 Знайдено: **{len(rows)}**. Оберіть контракт:",
-            view=SearchResultsView(self.bot_instance, self.participant_ids, rows),
-            ephemeral=True,
-        )
-
-
-class SearchAgainView(discord.ui.View):
-    def __init__(self, bot_instance: "ContractBot", participant_ids: list[int]):
-        super().__init__(timeout=300)
-        self.bot_instance = bot_instance
-        self.participant_ids = participant_ids
-
-    @discord.ui.button(label="Шукати ще", style=discord.ButtonStyle.primary, emoji="🔎")
-    async def retry(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(
-            ContractSearchModal(self.bot_instance, self.participant_ids)
-        )
-
-
-class SearchResultSelect(discord.ui.Select):
-    def __init__(self, bot_instance: "ContractBot", participant_ids: list[int], rows):
-        self.bot_instance = bot_instance
-        self.participant_ids = participant_ids
-        options = [
-            discord.SelectOption(
-                label=row["name"][:100],
-                value=str(row["id"]),
-                description=f"{format_money_dollars(row['price'])} $ • КД {row['cooldown']}"[:100],
-            )
-            for row in rows[:25]
-        ]
-        super().__init__(
-            placeholder="Оберіть знайдений контракт",
-            options=options,
-            min_values=1,
-            max_values=1,
+            row=0,
         )
 
     async def callback(self, interaction: discord.Interaction):
@@ -785,32 +726,88 @@ class SearchResultSelect(discord.ui.Select):
         await interaction.response.edit_message(
             content="Перевірте дані й підтвердьте.",
             embed=build_confirmation_embed(row, self.participant_ids),
-            view=ConfirmContractView(self.bot_instance, self.participant_ids, type_id),
+            view=ConfirmContractView(
+                self.bot_instance,
+                self.participant_ids,
+                type_id,
+                return_page=self.page,
+            ),
         )
 
 
-class SearchResultsView(discord.ui.View):
-    def __init__(self, bot_instance: "ContractBot", participant_ids: list[int], rows):
-        super().__init__(timeout=300)
-        self.add_item(SearchResultSelect(bot_instance, participant_ids, rows))
-
-
 class ContractPickerView(discord.ui.View):
-    def __init__(self, bot_instance: "ContractBot", participant_ids: list[int]):
+    def __init__(
+        self,
+        bot_instance: "ContractBot",
+        participant_ids: list[int],
+        page: int = 0,
+    ):
         super().__init__(timeout=300)
         self.bot_instance = bot_instance
         self.participant_ids = participant_ids
-        self.add_item(QuickContractSelect(bot_instance, participant_ids))
 
-    @discord.ui.button(label="Пошук", style=discord.ButtonStyle.secondary, emoji="🔎")
-    async def search(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(
-            ContractSearchModal(self.bot_instance, self.participant_ids)
+        _, self.page, self.total_pages = picker_page_data(page)
+        self.add_item(
+            ContractPageSelect(
+                bot_instance,
+                participant_ids,
+                self.page,
+            )
+        )
+
+        self.previous.disabled = self.page <= 0
+        self.page_indicator.label = f"{self.page + 1}/{self.total_pages}"
+        self.next_page.disabled = self.page >= self.total_pages - 1
+
+    @discord.ui.button(
+        label="Назад",
+        style=discord.ButtonStyle.secondary,
+        emoji="◀️",
+        row=1,
+    )
+    async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
+        new_page = max(0, self.page - 1)
+        _, new_page, total_pages = picker_page_data(new_page)
+        await interaction.response.edit_message(
+            content=picker_content(self.participant_ids, new_page, total_pages),
+            embed=None,
+            view=ContractPickerView(
+                self.bot_instance,
+                self.participant_ids,
+                new_page,
+            ),
+        )
+
+    @discord.ui.button(
+        label="1/1",
+        style=discord.ButtonStyle.secondary,
+        disabled=True,
+        row=1,
+    )
+    async def page_indicator(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pass
+
+    @discord.ui.button(
+        label="Далі",
+        style=discord.ButtonStyle.secondary,
+        emoji="▶️",
+        row=1,
+    )
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        new_page = min(self.total_pages - 1, self.page + 1)
+        _, new_page, total_pages = picker_page_data(new_page)
+        await interaction.response.edit_message(
+            content=picker_content(self.participant_ids, new_page, total_pages),
+            embed=None,
+            view=ContractPickerView(
+                self.bot_instance,
+                self.participant_ids,
+                new_page,
+            ),
         )
 
 
 def build_confirmation_embed(contract_type: sqlite3.Row, participant_ids: list[int]) -> discord.Embed:
-    points_each = Fraction(1, len(participant_ids))
     embed = discord.Embed(
         title="Підтвердити виконання контракту",
         color=discord.Color.blurple(),
@@ -827,20 +824,22 @@ def build_confirmation_embed(contract_type: sqlite3.Row, participant_ids: list[i
         inline=True,
     )
     embed.add_field(name="⏳ КД", value=contract_type["cooldown"], inline=True)
-    embed.add_field(
-        name="🏆 Бали",
-        value=f"по **{format_points(points_each)}** кожному",
-        inline=False,
-    )
     return embed
 
 
 class ConfirmContractView(discord.ui.View):
-    def __init__(self, bot_instance: "ContractBot", participant_ids: list[int], type_id: int):
+    def __init__(
+        self,
+        bot_instance: "ContractBot",
+        participant_ids: list[int],
+        type_id: int,
+        return_page: int = 0,
+    ):
         super().__init__(timeout=300)
         self.bot_instance = bot_instance
         self.participant_ids = participant_ids
         self.type_id = type_id
+        self.return_page = return_page
 
     @discord.ui.button(label="Підтвердити", style=discord.ButtonStyle.success, emoji="✅")
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -865,6 +864,9 @@ class ConfirmContractView(discord.ui.View):
             )
             return
 
+        # Відповідаємо Discord одразу, щоб кнопка не "думала" кілька секунд.
+        await interaction.response.defer()
+
         placeholder = await channel.send("⏳ Записую контракт...")
 
         db.add_completed_contract(
@@ -883,7 +885,11 @@ class ConfirmContractView(discord.ui.View):
             view=UnpaidCompletedView(self.bot_instance),
         )
 
-        await interaction.response.edit_message(
+        # Панель завжди переносимо в самий низ каналу.
+        if isinstance(channel, discord.TextChannel):
+            await move_main_panel_to_bottom(guild, channel)
+
+        await interaction.edit_original_response(
             content=f"✅ Контракт записано: {placeholder.jump_url}",
             embed=None,
             view=None,
@@ -891,10 +897,15 @@ class ConfirmContractView(discord.ui.View):
 
     @discord.ui.button(label="Назад", style=discord.ButtonStyle.secondary, emoji="↩️")
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+        _, page, total_pages = picker_page_data(self.return_page)
         await interaction.response.edit_message(
-            content="Оберіть контракт.",
+            content=picker_content(self.participant_ids, page, total_pages),
             embed=None,
-            view=ContractPickerView(self.bot_instance, self.participant_ids),
+            view=ContractPickerView(
+                self.bot_instance,
+                self.participant_ids,
+                page,
+            ),
         )
 
 
@@ -1216,8 +1227,8 @@ class ResetRatingConfirmView(discord.ui.View):
         await interaction.response.edit_message(
             content=(
                 f"✅ Рейтинг обнулено {when}.\n"
-                "Старі контракти та загальна фінансова історія не видалені. "
-                "З цього моменту з нуля рахуються бали, участі та заробіток у рейтингу."
+                "Старі контракти та фінанси не змінені. "
+                "З цього моменту з нуля рахується тільки рейтинг за балами."
             ),
             view=None,
         )
@@ -1225,6 +1236,50 @@ class ResetRatingConfirmView(discord.ui.View):
     @discord.ui.button(label="Ні", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(content="Обнулення рейтингу скасовано.", view=None)
+
+
+class ResetEarningsConfirmView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.button(
+        label="Так, обнулити заробіток",
+        style=discord.ButtonStyle.danger,
+        emoji="💸",
+    )
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
+            await interaction.response.edit_message(content="❌ Немає права.", view=None)
+            return
+
+        if interaction.guild is None:
+            await interaction.response.edit_message(
+                content="❌ Це працює тільки на сервері.",
+                view=None,
+            )
+            return
+
+        reset_at = utc_now_iso()
+        db.set_setting(interaction.guild.id, "earnings_reset_at", reset_at)
+        reset_ts = iso_to_unix(reset_at)
+        when = f"<t:{reset_ts}:f>" if reset_ts else "зараз"
+
+        await interaction.response.edit_message(
+            content=(
+                f"✅ Заробіток обнулено {when}.\\n"
+                "Історія контрактів та оплат не видалена. "
+                "З цього моменту з нуля рахуються загальний заробіток, "
+                "Банк сім'ї та заробіток кожного учасника."
+            ),
+            view=None,
+        )
+
+    @discord.ui.button(label="Ні", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(
+            content="Обнулення заробітку скасовано.",
+            view=None,
+        )
 
 
 class ContractAdminPanelView(discord.ui.View):
@@ -1298,11 +1353,140 @@ class ContractAdminPanelView(discord.ui.View):
 
         await interaction.response.send_message(
             "⚠️ Обнулити поточний рейтинг?\n"
-            "Контракти й загальна фінансова історія залишаться. "
-            "З нуля почнуться бали, участі та заробіток у рейтингу.",
+            "Контракти, виплати та заробіток залишаться без змін. "
+            "З нуля почнуться тільки бали рейтингу.",
             view=ResetRatingConfirmView(),
             ephemeral=True,
         )
+
+
+    @discord.ui.button(
+        label="Обнулити заробіток",
+        style=discord.ButtonStyle.danger,
+        emoji="💸",
+    )
+    async def reset_earnings(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
+            await interaction.response.send_message("❌ Немає права.", ephemeral=True)
+            return
+
+        await interaction.response.send_message(
+            "⚠️ Обнулити статистику заробітку?\\n"
+            "Контракти й історія оплат залишаться в базі. "
+            "Але загальний заробіток, Банк сім'ї та заробіток учасників "
+            "у статистиці почнуться з нуля.",
+            view=ResetEarningsConfirmView(),
+            ephemeral=True,
+        )
+
+
+def build_public_rating_embed(guild_id: int) -> discord.Embed:
+    rows = db.all_non_cancelled(guild_id)
+    rating_reset_at = db.get_setting(guild_id, "rating_reset_at")
+
+    rating_rows = [
+        row for row in rows
+        if not rating_reset_at or row["created_at"] >= rating_reset_at
+    ]
+
+    points = defaultdict(lambda: Fraction(0, 1))
+
+    for row in rating_rows:
+        members = parse_ids(row["participant_ids"])
+        if not members:
+            continue
+
+        share = Fraction(1, len(members))
+        for uid in members:
+            points[uid] += share
+
+    ranking = sorted(
+        points,
+        key=lambda uid: points[uid],
+        reverse=True,
+    )
+
+    reset_ts = iso_to_unix(rating_reset_at) if rating_reset_at else None
+    subtitle = (
+        f"Поточний рейтинг • з <t:{reset_ts}:d>"
+        if reset_ts
+        else "Поточний рейтинг • від початку"
+    )
+
+    embed = discord.Embed(
+        title="🏆 Рейтинг учасників",
+        description=subtitle,
+        color=discord.Color.gold(),
+    )
+
+    if not ranking:
+        embed.add_field(
+            name="Рейтинг",
+            value="Поки немає виконаних контрактів.",
+            inline=False,
+        )
+        return embed
+
+    lines = [
+        f"**{idx}.** <@{uid}> — **{format_points(points[uid])}**"
+        for idx, uid in enumerate(ranking[:25], start=1)
+    ]
+    embed.add_field(
+        name="Таблиця",
+        value="\n".join(lines),
+        inline=False,
+    )
+    embed.set_footer(text="У рейтингу показуються тільки бали.")
+    return embed
+
+
+def build_main_panel_embed() -> discord.Embed:
+    return discord.Embed(
+        title="📋 КОНТРАКТИ СІМ’Ї",
+        description=(
+            "Виконав контракт — обери потрібну кнопку.\n\n"
+            "👤 **Я виконав** — якщо виконував сам.\n"
+            "👥 **Кілька виконавців** — якщо контракт робили разом.\n"
+            "🏆 **Рейтинг** — поточний рейтинг учасників.\n\n"
+            "Назва, ціна та КД підтягуються автоматично."
+        ),
+        color=discord.Color.blurple(),
+    )
+
+
+async def move_main_panel_to_bottom(
+    guild: discord.Guild,
+    channel: discord.TextChannel,
+) -> Optional[discord.Message]:
+    """
+    Тримає панель останнім повідомленням у каналі.
+    Стару панель видаляємо; якщо Discord не дає — прибираємо з неї кнопки.
+    """
+    old_panel_id = db.get_setting(guild.id, "panel_message_id")
+
+    if old_panel_id:
+        try:
+            old = await channel.fetch_message(int(old_panel_id))
+            try:
+                await old.delete()
+            except discord.DiscordException:
+                try:
+                    await old.edit(view=None)
+                except discord.DiscordException:
+                    pass
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException, ValueError):
+            pass
+
+    try:
+        panel = await channel.send(
+            embed=build_main_panel_embed(),
+            view=MainContractPanelView(bot),
+        )
+    except discord.DiscordException:
+        return None
+
+    db.set_setting(guild.id, "panel_message_id", str(panel.id))
+    return panel
 
 
 # ----------------------------
@@ -1315,12 +1499,38 @@ class MainContractPanelView(discord.ui.View):
         self.bot_instance = bot_instance
 
     @discord.ui.button(
-        label="Виконав контракт",
+        label="Я виконав",
         style=discord.ButtonStyle.success,
-        emoji="✅",
-        custom_id="contract_v3:new",
+        emoji="👤",
+        custom_id="contract_v34:self",
     )
-    async def new_contract(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def self_contract(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not db.active_contract_types(limit=1):
+            await interaction.response.send_message(
+                "❌ Перелік контрактів ще порожній. Керівництво має додати їх через `/contracts_admin`.",
+                ephemeral=True,
+            )
+            return
+
+        participant_ids = [interaction.user.id]
+        _, page, total_pages = picker_page_data(0)
+        await interaction.response.send_message(
+            picker_content(participant_ids, page, total_pages),
+            view=ContractPickerView(
+                self.bot_instance,
+                participant_ids,
+                page,
+            ),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(
+        label="Кілька виконавців",
+        style=discord.ButtonStyle.primary,
+        emoji="👥",
+        custom_id="contract_v34:group",
+    )
+    async def group_contract(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not db.active_contract_types(limit=1):
             await interaction.response.send_message(
                 "❌ Перелік контрактів ще порожній. Керівництво має додати їх через `/contracts_admin`.",
@@ -1329,8 +1539,27 @@ class MainContractPanelView(discord.ui.View):
             return
 
         await interaction.response.send_message(
-            "Хто виконав контракт?",
-            view=PerformerStepView(self.bot_instance),
+            "👥 Оберіть усіх виконавців контракту:",
+            view=PerformerStepView(self.bot_instance, show_self_button=False),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(
+        label="Рейтинг",
+        style=discord.ButtonStyle.secondary,
+        emoji="🏆",
+        custom_id="contract_v34:rating",
+    )
+    async def rating(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "❌ Це працює тільки на сервері.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            embed=build_public_rating_embed(interaction.guild.id),
             ephemeral=True,
         )
 
@@ -1364,7 +1593,7 @@ class ContractBot(commands.Bot):
 bot = ContractBot()
 
 
-@bot.tree.command(name="setup", description="Створити та закріпити панель контрактів")
+@bot.tree.command(name="setup", description="Створити панель контрактів")
 async def setup_panel(interaction: discord.Interaction):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
         await interaction.response.send_message(
@@ -1375,7 +1604,10 @@ async def setup_panel(interaction: discord.Interaction):
 
     guild = interaction.guild
     if guild is None:
-        await interaction.response.send_message("❌ Це працює тільки на сервері.", ephemeral=True)
+        await interaction.response.send_message(
+            "❌ Це працює тільки на сервері.",
+            ephemeral=True,
+        )
         return
 
     channel = await get_target_channel(guild, interaction.channel_id)
@@ -1388,46 +1620,23 @@ async def setup_panel(interaction: discord.Interaction):
 
     await interaction.response.defer(ephemeral=True)
 
-    embed = discord.Embed(
-        title="📋 КОНТРАКТИ СІМ’Ї",
-        description=(
-            "Виконав контракт — натисни кнопку нижче.\n\n"
-            "Треба лише:\n"
-            "• обрати виконавця / виконавців;\n"
-            "• обрати контракт із переліку;\n"
-            "• підтвердити.\n\n"
-            "Назва, ціна та КД підтягуються автоматично."
+    panel = await move_main_panel_to_bottom(guild, channel)
+
+    if panel is None:
+        await interaction.followup.send(
+            "❌ Не вдалося створити панель у каналі.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.followup.send(
+        (
+            f"✅ Панель готова: {panel.jump_url}\n"
+            "Її більше не треба шукати в закріплених — після кожного нового контракту "
+            "бот автоматично переносить панель у самий низ каналу."
         ),
-        color=discord.Color.blurple(),
+        ephemeral=True,
     )
-
-    old_panel_id = db.get_setting(guild.id, "panel_message_id")
-    panel_message = None
-
-    if old_panel_id:
-        try:
-            panel_message = await channel.fetch_message(int(old_panel_id))
-            await panel_message.edit(embed=embed, view=MainContractPanelView(bot))
-        except Exception:
-            panel_message = None
-
-    if panel_message is None:
-        panel_message = await channel.send(embed=embed, view=MainContractPanelView(bot))
-        db.set_setting(guild.id, "panel_message_id", str(panel_message.id))
-
-    pinned = panel_message.pinned
-    if not pinned:
-        try:
-            await panel_message.pin(reason="Панель сімейних контрактів")
-            pinned = True
-        except discord.DiscordException:
-            pinned = False
-
-    text = f"✅ Панель готова: {panel_message.jump_url}"
-    if not pinned:
-        text += "\n📌 Не зміг закріпити автоматично — закріпи вручну або дай право «Керувати повідомленнями»."
-
-    await interaction.followup.send(text, ephemeral=True)
 
 
 @bot.tree.command(name="contracts_admin", description="Керування переліком контрактів")
@@ -1444,7 +1653,7 @@ async def contracts_admin(interaction: discord.Interaction):
         description=(
             "Тут керівництво створює перелік контрактів.\n"
             "Для кожного контракту зберігаються **назва, ціна та КД**.\n"
-            "Тут же можна **обнулити рейтинг** без видалення фінансової історії."
+            "Рейтинг і статистика заробітку обнуляються **окремо**."
         ),
         color=discord.Color.blurple(),
     )
@@ -1466,49 +1675,72 @@ async def stats(interaction: discord.Interaction):
 
     guild = interaction.guild
     if guild is None:
-        await interaction.response.send_message("❌ Це працює тільки на сервері.", ephemeral=True)
+        await interaction.response.send_message(
+            "❌ Це працює тільки на сервері.",
+            ephemeral=True,
+        )
         return
 
     rows = db.all_non_cancelled(guild.id)
     payout_rows = db.paid_payouts_for_guild(guild.id)
 
     total_contracts = len(rows)
-    paid_rows = [r for r in rows if r["status"] == "paid"]
+    paid_rows_all = [r for r in rows if r["status"] == "paid"]
     unpaid_rows = [r for r in rows if r["status"] == "unpaid"]
 
-    total_paid_gross_cents = sum(r["price"] * 100 for r in paid_rows)
-    total_fomo_cents = sum((r["fomo_cents"] or 0) for r in paid_rows)
-    total_net_cents = sum((r["net_cents"] or 0) for r in paid_rows)
-    unpaid_gross_cents = sum(r["price"] * 100 for r in unpaid_rows)
-
+    # РЕЙТИНГ: reset впливає тільки на бали й кількість участей у поточному рейтингу.
     rating_reset_at = db.get_setting(guild.id, "rating_reset_at")
     rating_rows = [
         row for row in rows
         if not rating_reset_at or row["created_at"] >= rating_reset_at
     ]
-    rating_contract_ids = {row["id"] for row in rating_rows}
 
-    participation_count = Counter()
-    points = defaultdict(lambda: Fraction(0, 1))
-    earnings_cents = Counter()
+    rating_points = defaultdict(lambda: Fraction(0, 1))
+    rating_participations = Counter()
 
     for row in rating_rows:
         members = parse_ids(row["participant_ids"])
         if not members:
             continue
-        p = Fraction(1, len(members))
+
+        share = Fraction(1, len(members))
         for uid in members:
-            participation_count[uid] += 1
-            points[uid] += p
+            rating_points[uid] += share
+            rating_participations[uid] += 1
 
-    for payout in payout_rows:
-        if payout["contract_id"] in rating_contract_ids:
-            earnings_cents[payout["user_id"]] += payout["amount_cents"]
+    rating_users = sorted(
+        rating_points,
+        key=lambda uid: (rating_points[uid], rating_participations[uid]),
+        reverse=True,
+    )
 
-    user_ids = set(participation_count) | set(earnings_cents)
-    ranking = sorted(
-        user_ids,
-        key=lambda uid: (points[uid], earnings_cents[uid], participation_count[uid]),
+    # ЗАРОБІТОК: окремий reset. Фільтруємо за моментом оплати.
+    earnings_reset_at = db.get_setting(guild.id, "earnings_reset_at")
+
+    paid_rows_period = [
+        row for row in paid_rows_all
+        if not earnings_reset_at
+        or (row["paid_at"] and row["paid_at"] >= earnings_reset_at)
+    ]
+
+    payout_rows_period = [
+        payout for payout in payout_rows
+        if not earnings_reset_at
+        or payout["created_at"] >= earnings_reset_at
+    ]
+
+    total_paid_gross_cents = sum(row["price"] * 100 for row in paid_rows_period)
+    total_family_bank_cents = sum((row["fomo_cents"] or 0) for row in paid_rows_period)
+    total_members_cents = sum((row["net_cents"] or 0) for row in paid_rows_period)
+    unpaid_gross_cents = sum(row["price"] * 100 for row in unpaid_rows)
+
+    member_earnings = Counter()
+    for payout in payout_rows_period:
+        member_earnings[payout["user_id"]] += payout["amount_cents"]
+
+    earning_users = sorted(
+        member_earnings,
+        key=lambda uid: member_earnings[uid],
         reverse=True,
     )
 
@@ -1516,58 +1748,90 @@ async def stats(interaction: discord.Interaction):
         title="📊 Статистика контрактів",
         color=discord.Color.blurple(),
     )
+
     embed.add_field(
         name="📋 Контракти",
         value=(
-            f"Всього: **{total_contracts}**\n"
-            f"Оплачено: **{len(paid_rows)}**\n"
+            f"Всього: **{total_contracts}**\\n"
+            f"Оплачено: **{len(paid_rows_all)}**\\n"
             f"Не оплачено: **{len(unpaid_rows)}**"
         ),
         inline=True,
     )
+
+    earnings_reset_ts = iso_to_unix(earnings_reset_at) if earnings_reset_at else None
+    finance_title = (
+        f"💰 Заробіток • з <t:{earnings_reset_ts}:d>"
+        if earnings_reset_ts
+        else "💰 Заробіток • від початку"
+    )
+
     embed.add_field(
-        name="💰 Фінанси",
+        name=finance_title,
         value=(
-            f"Оплачені контракти: **{format_cents(total_paid_gross_cents)}**\n"
-            f"Банк сім'ї ({FAMILY_PERCENT.normalize()}%): **{format_cents(total_fomo_cents)}**\n"
-            f"Учасникам: **{format_cents(total_net_cents)}**"
+            f"Загальний: **{format_cents(total_paid_gross_cents)}**\\n"
+            f"Банк сім'ї ({FAMILY_PERCENT.normalize()}%): "
+            f"**{format_cents(total_family_bank_cents)}**\\n"
+            f"Виплачено учасникам: **{format_cents(total_members_cents)}**"
         ),
         inline=False,
     )
+
     embed.add_field(
-        name="⏳ Не оплачено",
+        name="⏳ Не оплачено зараз",
         value=f"На суму: **{format_cents(unpaid_gross_cents)}**",
         inline=False,
     )
 
-    if ranking:
-        lines = []
-        for idx, uid in enumerate(ranking[:15], start=1):
-            lines.append(
+    rating_reset_ts = iso_to_unix(rating_reset_at) if rating_reset_at else None
+    rating_title = (
+        f"🏆 Рейтинг • з <t:{rating_reset_ts}:d>"
+        if rating_reset_ts
+        else "🏆 Рейтинг • від початку"
+    )
+
+    if rating_users:
+        rating_lines = []
+        for idx, uid in enumerate(rating_users[:15], start=1):
+            rating_lines.append(
                 f"**{idx}.** <@{uid}> — "
-                f"балів **{format_points(points[uid])}** • "
-                f"участей **{participation_count[uid]}** • "
-                f"заробив **{format_cents(earnings_cents[uid])}**"
+                f"**{format_points(rating_points[uid])}** бала • "
+                f"участей **{rating_participations[uid]}**"
             )
-        reset_ts = iso_to_unix(rating_reset_at) if rating_reset_at else None
-        leaderboard_name = (
-            f"🏆 Лідерство • з <t:{reset_ts}:d>"
-            if reset_ts
-            else "🏆 Лідерство • від початку"
-        )
         embed.add_field(
-            name=leaderboard_name,
-            value="\n".join(lines),
+            name=rating_title,
+            value="\\n".join(rating_lines),
             inline=False,
         )
     else:
-        reset_ts = iso_to_unix(rating_reset_at) if rating_reset_at else None
-        leaderboard_name = (
-            f"🏆 Лідерство • з <t:{reset_ts}:d>"
-            if reset_ts
-            else "🏆 Лідерство • від початку"
+        embed.add_field(
+            name=rating_title,
+            value="Після обнулення ще немає виконаних контрактів.",
+            inline=False,
         )
-        embed.add_field(name=leaderboard_name, value="Поки немає даних.", inline=False)
+
+    earnings_people_title = (
+        f"💵 Заробіток учасників • з <t:{earnings_reset_ts}:d>"
+        if earnings_reset_ts
+        else "💵 Заробіток учасників • від початку"
+    )
+
+    if earning_users:
+        earning_lines = [
+            f"**{idx}.** <@{uid}> — **{format_cents(member_earnings[uid])}**"
+            for idx, uid in enumerate(earning_users[:15], start=1)
+        ]
+        embed.add_field(
+            name=earnings_people_title,
+            value="\\n".join(earning_lines),
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name=earnings_people_title,
+            value="Поки немає оплачених контрактів.",
+            inline=False,
+        )
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 

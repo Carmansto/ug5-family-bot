@@ -196,6 +196,7 @@ class Database:
       price INTEGER NOT NULL,
       cooldown TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'unpaid',
+      payment_mode TEXT NOT NULL DEFAULT 'normal',
       paid_by INTEGER,
       created_at TEXT NOT NULL,
       paid_at TEXT
@@ -236,6 +237,7 @@ class Database:
       "cancelled_at": "ALTER TABLE contracts ADD COLUMN cancelled_at TEXT",
       "fomo_cents": "ALTER TABLE contracts ADD COLUMN fomo_cents INTEGER",
       "net_cents": "ALTER TABLE contracts ADD COLUMN net_cents INTEGER",
+      "payment_mode": "ALTER TABLE contracts ADD COLUMN payment_mode TEXT NOT NULL DEFAULT 'normal'",
     }
 
     for name, sql in migrations.items():
@@ -268,13 +270,21 @@ class Database:
         (row["id"],),
       ).fetchone()["cnt"]
 
+      payment_mode = row["payment_mode"] or "normal"
       needs_totals = row["fomo_cents"] is None or row["net_cents"] is None
-      needs_payouts = payout_count == 0
+
+      if payment_mode == "family":
+        needs_payouts = False
+        family_cents = row["price"] * 100
+        net_cents = 0
+        payouts = {}
+      else:
+        needs_payouts = payout_count == 0
+        family_cents, net_cents, payouts = split_payment(row["price"], member_ids)
 
       if not needs_totals and not needs_payouts:
         continue
 
-      family_cents, net_cents, payouts = split_payment(row["price"], member_ids)
       payout_date = row["paid_at"] or row["created_at"] or utc_now_iso()
 
       try:
@@ -451,7 +461,12 @@ class Database:
     self.conn.commit()
     return cur.rowcount > 0
 
-  def pay_completed(self, message_id: int, paid_by: int):
+  def pay_completed(
+    self,
+    message_id: int,
+    paid_by: int,
+    payment_mode: str = "normal",
+  ):
     row = self.get_completed_by_message(message_id)
     if not row or row["status"] != "unpaid":
       return None
@@ -460,7 +475,18 @@ class Database:
     if not participant_ids:
       return None
 
-    fomo_cents, net_cents, payouts = split_payment(row["price"], participant_ids)
+    payment_mode = "family" if payment_mode == "family" else "normal"
+
+    if payment_mode == "family":
+      fomo_cents = row["price"] * 100
+      net_cents = 0
+      payouts = {}
+    else:
+      fomo_cents, net_cents, payouts = split_payment(
+        row["price"],
+        participant_ids,
+      )
+
     paid_at = utc_now_iso()
 
     try:
@@ -469,13 +495,21 @@ class Database:
       cur = self.conn.execute("""
       UPDATE contracts
       SET status = 'paid',
+        payment_mode = ?,
         paid_by = ?,
         paid_at = ?,
         fomo_cents = ?,
         net_cents = ?
       WHERE message_id = ?
        AND status = 'unpaid'
-      """, (paid_by, paid_at, fomo_cents, net_cents, message_id))
+      """, (
+        payment_mode,
+        paid_by,
+        paid_at,
+        fomo_cents,
+        net_cents,
+        message_id,
+      ))
 
       if cur.rowcount != 1:
         self.conn.rollback()
@@ -483,12 +517,18 @@ class Database:
 
       contract_id = row["id"]
 
-      for uid, amount_cents in payouts.items():
-        self.conn.execute("""
-        INSERT OR REPLACE INTO contract_payouts
-        (contract_id, user_id, amount_cents, created_at)
-        VALUES (?, ?, ?, ?)
-        """, (contract_id, uid, amount_cents, paid_at))
+      if payment_mode == "family":
+        self.conn.execute(
+          "DELETE FROM contract_payouts WHERE contract_id = ?",
+          (contract_id,),
+        )
+      else:
+        for uid, amount_cents in payouts.items():
+          self.conn.execute("""
+          INSERT OR REPLACE INTO contract_payouts
+          (contract_id, user_id, amount_cents, created_at)
+          VALUES (?, ?, ?, ?)
+          """, (contract_id, uid, amount_cents, paid_at))
 
       self.conn.commit()
     except Exception:
@@ -496,11 +536,13 @@ class Database:
       raise
 
     return {
+      "payment_mode": payment_mode,
       "fomo_cents": fomo_cents,
       "net_cents": net_cents,
       "payouts": payouts,
       "paid_at": paid_at,
     }
+
 
   def payouts_for_contract(self, contract_id: int):
     return self.conn.execute("""
@@ -565,7 +607,10 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
 
   if row["status"] == "paid":
     color = discord.Color.green()
-    status_text = "🟢 **Оплачено**"
+    if (row["payment_mode"] or "normal") == "family":
+      status_text = "🏠 **На фаму**"
+    else:
+      status_text = "🟢 **Оплачено**"
   elif row["status"] == "cancelled":
     color = discord.Color.dark_grey()
     status_text = "⚫ **Скасовано**"
@@ -599,8 +644,16 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
 
     fomo_cents = row["fomo_cents"] or 0
     net_cents = row["net_cents"] or 0
+    payment_mode = row["payment_mode"] or "normal"
+
+    bank_label = (
+      "🏦 Банк сім'ї (100%)"
+      if payment_mode == "family"
+      else f"🏦 Банк сім'ї ({FAMILY_PERCENT.normalize()}%)"
+    )
+
     embed.add_field(
-      name=f"🏦 Банк сім'ї ({FAMILY_PERCENT.normalize()}%)",
+      name=bank_label,
       value=format_cents(fomo_cents),
       inline=True,
     )
@@ -1237,7 +1290,7 @@ class UnpaidCompletedView(discord.ui.View):
   async def paid(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
       await interaction.response.send_message(
-        "❌ У вас немає доступу до оплати контрактів.",
+        "❌ Оплачувати контракти може тільки керівництво.",
         ephemeral=True,
       )
       return
@@ -1261,6 +1314,46 @@ class UnpaidCompletedView(discord.ui.View):
     )
 
   @discord.ui.button(
+    label="На фаму",
+    style=discord.ButtonStyle.primary,
+    emoji="🏠",
+    custom_id="contract_v3:family",
+  )
+  async def family(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
+      await interaction.response.send_message(
+        "❌ Закривати контракт «На фаму» може тільки керівництво.",
+        ephemeral=True,
+      )
+      return
+
+    if interaction.message is None:
+      await interaction.response.send_message("❌ Не знайшов запис.", ephemeral=True)
+      return
+
+    result = db.pay_completed(
+      interaction.message.id,
+      interaction.user.id,
+      payment_mode="family",
+    )
+    if not result:
+      await interaction.response.send_message(
+        "❌ Цей контракт уже оплачений або скасований.",
+        ephemeral=True,
+      )
+      return
+
+    row = db.get_completed_by_message(interaction.message.id)
+    await interaction.response.edit_message(
+      embed=build_completed_embed(row),
+      view=None,
+    )
+
+  @discord.ui.button(
     label="Скасувати",
     style=discord.ButtonStyle.danger,
     emoji="🗑️",
@@ -1269,7 +1362,7 @@ class UnpaidCompletedView(discord.ui.View):
   async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
       await interaction.response.send_message(
-        "❌ У вас не має доступу до скасування.",
+        "❌ Скасовувати записи може тільки керівництво.",
         ephemeral=True,
       )
       return
@@ -1858,7 +1951,7 @@ class MainContractPanelView(discord.ui.View):
   async def self_contract(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not db.active_contract_types(limit=1):
       await interaction.response.send_message(
-        "❌ Перелік контрактів ще порожній.",
+        "❌ Перелік контрактів ще порожній. Керівництво має додати їх через `/contracts_admin`.",
         ephemeral=True,
       )
       return
@@ -1884,7 +1977,7 @@ class MainContractPanelView(discord.ui.View):
   async def group_contract(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not db.active_contract_types(limit=1):
       await interaction.response.send_message(
-        "❌ Перелік контрактів ще порожній.",
+        "❌ Перелік контрактів ще порожній. Керівництво має додати їх через `/contracts_admin`.",
         ephemeral=True,
       )
       return
@@ -1950,7 +2043,7 @@ bot = ContractBot()
 async def setup_panel(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
     await interaction.response.send_message(
-      "❌ Ця команда не доступна для вас.",
+      "❌ Ця команда тільки для керівництва.",
       ephemeral=True,
     )
     return
@@ -1998,7 +2091,7 @@ async def setup_panel(interaction: discord.Interaction):
 async def contracts_admin(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
     await interaction.response.send_message(
-      "❌ Ця команда не доступна для вас.",
+      "❌ Ця команда тільки для керівництва.",
       ephemeral=True,
     )
     return
@@ -2006,7 +2099,7 @@ async def contracts_admin(interaction: discord.Interaction):
   embed = discord.Embed(
     title="⚙️ Керування контрактами",
     description=(
-      "Тут можна створити та редагувати перелік контрактів.\n"
+      "Тут керівництво створює та редагує перелік контрактів.\n"
       "Для кожного контракту зберігаються **назва, ціна та КД**.\n"
       "Рейтинг і статистика заробітку обнуляються **окремо**."
     ),
@@ -2019,11 +2112,11 @@ async def contracts_admin(interaction: discord.Interaction):
   )
 
 
-@bot.tree.command(name="stats", description="Статистика контрактів")
+@bot.tree.command(name="stats", description="Статистика контрактів для керівництва")
 async def stats(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
     await interaction.response.send_message(
-      "❌ Немає доступу.",
+      "❌ Статистика доступна тільки керівництву.",
       ephemeral=True,
     )
     return
@@ -2125,9 +2218,9 @@ async def stats(interaction: discord.Interaction):
     name=finance_title,
     value=(
       f"Сума оплачених контрактів: **{format_cents(total_paid_gross_cents)}**\n"
-      f"Банк сім'ї ({FAMILY_PERCENT.normalize()}%): "
+      f"Банк сім'ї: "
       f"**{format_cents(total_family_bank_cents)}**\n"
-      f"Учасникам після 15%: **{format_cents(total_members_cents)}**"
+      f"Учасникам: **{format_cents(total_members_cents)}**"
     ),
     inline=False,
   )
@@ -2195,7 +2288,7 @@ async def stats(interaction: discord.Interaction):
 async def unpaid(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
     await interaction.response.send_message(
-      "❌ Немає доступу.",
+      "❌ Доступно тільки керівництву.",
       ephemeral=True,
     )
     return

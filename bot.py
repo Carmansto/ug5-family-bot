@@ -197,6 +197,7 @@ class Database:
       cooldown TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'unpaid',
       payment_mode TEXT NOT NULL DEFAULT 'normal',
+      excluded_payment_ids TEXT NOT NULL DEFAULT '[]',
       paid_by INTEGER,
       created_at TEXT NOT NULL,
       paid_at TEXT
@@ -238,6 +239,7 @@ class Database:
       "fomo_cents": "ALTER TABLE contracts ADD COLUMN fomo_cents INTEGER",
       "net_cents": "ALTER TABLE contracts ADD COLUMN net_cents INTEGER",
       "payment_mode": "ALTER TABLE contracts ADD COLUMN payment_mode TEXT NOT NULL DEFAULT 'normal'",
+      "excluded_payment_ids": "ALTER TABLE contracts ADD COLUMN excluded_payment_ids TEXT NOT NULL DEFAULT '[]'",
     }
 
     for name, sql in migrations.items():
@@ -466,6 +468,7 @@ class Database:
     message_id: int,
     paid_by: int,
     payment_mode: str = "normal",
+    excluded_payment_ids: Optional[list[int]] = None,
   ):
     row = self.get_completed_by_message(message_id)
     if not row or row["status"] != "unpaid":
@@ -477,14 +480,37 @@ class Database:
 
     payment_mode = "family" if payment_mode == "family" else "normal"
 
+    excluded_set = {
+      int(uid)
+      for uid in (excluded_payment_ids or [])
+      if int(uid) in participant_ids
+    }
+    excluded_ids = [
+      uid for uid in participant_ids
+      if uid in excluded_set
+    ]
+
     if payment_mode == "family":
+      # 100% у Банк сім'ї. Рейтинг усім виконавцям зберігається.
+      excluded_ids = participant_ids[:]
       fomo_cents = row["price"] * 100
       net_cents = 0
       payouts = {}
     else:
+      eligible_ids = [
+        uid for uid in participant_ids
+        if uid not in excluded_set
+      ]
+
+      # Якщо не платимо нікому — для цього є "На фаму".
+      if not eligible_ids:
+        return None
+
+      # 15% у Банк сім'ї, 85% діляться тільки між тими,
+      # кого адміністратор не виключив з оплати.
       fomo_cents, net_cents, payouts = split_payment(
         row["price"],
-        participant_ids,
+        eligible_ids,
       )
 
     paid_at = utc_now_iso()
@@ -496,6 +522,7 @@ class Database:
       UPDATE contracts
       SET status = 'paid',
         payment_mode = ?,
+        excluded_payment_ids = ?,
         paid_by = ?,
         paid_at = ?,
         fomo_cents = ?,
@@ -504,6 +531,7 @@ class Database:
        AND status = 'unpaid'
       """, (
         payment_mode,
+        json.dumps(excluded_ids),
         paid_by,
         paid_at,
         fomo_cents,
@@ -517,15 +545,15 @@ class Database:
 
       contract_id = row["id"]
 
-      if payment_mode == "family":
-        self.conn.execute(
-          "DELETE FROM contract_payouts WHERE contract_id = ?",
-          (contract_id,),
-        )
-      else:
+      self.conn.execute(
+        "DELETE FROM contract_payouts WHERE contract_id = ?",
+        (contract_id,),
+      )
+
+      if payment_mode != "family":
         for uid, amount_cents in payouts.items():
           self.conn.execute("""
-          INSERT OR REPLACE INTO contract_payouts
+          INSERT INTO contract_payouts
           (contract_id, user_id, amount_cents, created_at)
           VALUES (?, ?, ?, ?)
           """, (contract_id, uid, amount_cents, paid_at))
@@ -537,6 +565,7 @@ class Database:
 
     return {
       "payment_mode": payment_mode,
+      "excluded_payment_ids": excluded_ids,
       "fomo_cents": fomo_cents,
       "net_cents": net_cents,
       "payouts": payouts,
@@ -658,6 +687,14 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
       value=format_cents(net_cents),
       inline=True,
     )
+
+    excluded_payment_ids = parse_ids(row["excluded_payment_ids"] or "[]")
+    if payment_mode == "normal" and excluded_payment_ids:
+      embed.add_field(
+        name="🚫 Без виплати",
+        value=" ".join(f"<@{uid}>" for uid in excluded_payment_ids),
+        inline=False,
+      )
 
     payouts = db.payouts_for_contract(row["id"])
     if payouts:
@@ -1272,6 +1309,199 @@ class CancelCompletedConfirmView(discord.ui.View):
     await interaction.response.edit_message(content="Скасування відмінено.", view=None)
 
 
+class PaymentExcludeSelect(discord.ui.Select):
+  def __init__(
+    self,
+    guild: discord.Guild,
+    participant_ids: list[int],
+  ):
+    options = []
+
+    for uid in participant_ids:
+      member = guild.get_member(uid)
+      label = member.display_name if member else f"ID {uid}"
+      options.append(
+        discord.SelectOption(
+          label=label[:100],
+          value=str(uid),
+          description="Не виплачувати гроші цьому учаснику",
+        )
+      )
+
+    super().__init__(
+      placeholder="Кого виключити з оплати?",
+      min_values=1,
+      max_values=len(options),
+      options=options,
+      row=0,
+    )
+
+  async def callback(self, interaction: discord.Interaction):
+    view: PaymentSetupView = self.view  # type: ignore
+    view.excluded_ids = [int(uid) for uid in self.values]
+
+    all_excluded = len(view.excluded_ids) >= len(view.participant_ids)
+    view.confirm_exclusions.disabled = all_excluded
+
+    excluded_text = " ".join(f"<@{uid}>" for uid in view.excluded_ids)
+
+    if all_excluded:
+      content = (
+        f"🚫 **Без виплати:** {excluded_text}\n\n"
+        "Не можна виключити всіх при звичайній оплаті. "
+        "Якщо вся сума має піти сім'ї — використай **🏠 На фаму**."
+      )
+    else:
+      excluded_set = set(view.excluded_ids)
+      paid_ids = [
+        uid for uid in view.participant_ids
+        if uid not in excluded_set
+      ]
+      paid_text = " ".join(f"<@{uid}>" for uid in paid_ids)
+
+      content = (
+        f"💵 **Отримають гроші:** {paid_text}\n"
+        f"🚫 **Без виплати:** {excluded_text}\n\n"
+        "🏆 Рейтинг зараховується всім виконавцям."
+      )
+
+    await interaction.response.edit_message(
+      content=content,
+      view=view,
+    )
+
+
+class PaymentSetupView(discord.ui.View):
+  def __init__(
+    self,
+    bot_instance: "ContractBot",
+    message_id: int,
+    guild: discord.Guild,
+    participant_ids: list[int],
+  ):
+    super().__init__(timeout=300)
+    self.bot_instance = bot_instance
+    self.message_id = message_id
+    self.guild = guild
+    self.participant_ids = participant_ids
+    self.excluded_ids: list[int] = []
+
+    self.add_item(
+      PaymentExcludeSelect(
+        guild,
+        participant_ids,
+      )
+    )
+
+  async def finish_payment(
+    self,
+    interaction: discord.Interaction,
+    excluded_ids: list[int],
+  ):
+    if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
+      await interaction.response.edit_message(
+        content="❌ Немає права.",
+        view=None,
+      )
+      return
+
+    if excluded_ids and len(excluded_ids) >= len(self.participant_ids):
+      await interaction.response.edit_message(
+        content=(
+          "❌ Не можна виключити всіх із звичайної оплати. "
+          "Для цього використай **🏠 На фаму**."
+        ),
+        view=None,
+      )
+      return
+
+    result = db.pay_completed(
+      self.message_id,
+      interaction.user.id,
+      payment_mode="normal",
+      excluded_payment_ids=excluded_ids,
+    )
+
+    if not result:
+      await interaction.response.edit_message(
+        content="❌ Контракт уже оплачений/скасований або немає отримувачів.",
+        view=None,
+      )
+      return
+
+    await refresh_completed_message(self.message_id)
+
+    if excluded_ids:
+      excluded_set = set(excluded_ids)
+      excluded_text = " ".join(f"<@{uid}>" for uid in excluded_ids)
+      paid_ids = [
+        uid for uid in self.participant_ids
+        if uid not in excluded_set
+      ]
+      paid_text = " ".join(f"<@{uid}>" for uid in paid_ids)
+
+      await interaction.response.edit_message(
+        content=(
+          "✅ Контракт оплачено.\n"
+          f"💵 Отримали: {paid_text}\n"
+          f"🚫 Без виплати: {excluded_text}\n"
+          "🏆 Рейтинг зарахований усім виконавцям."
+        ),
+        view=None,
+      )
+    else:
+      await interaction.response.edit_message(
+        content="✅ Контракт оплачено всім виконавцям.",
+        view=None,
+      )
+
+  @discord.ui.button(
+    label="Оплатити всім",
+    style=discord.ButtonStyle.success,
+    emoji="💵",
+    row=1,
+  )
+  async def pay_all(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await self.finish_payment(interaction, [])
+
+  @discord.ui.button(
+    label="Оплатити без вибраних",
+    style=discord.ButtonStyle.primary,
+    emoji="✅",
+    disabled=True,
+    row=1,
+  )
+  async def confirm_exclusions(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await self.finish_payment(
+      interaction,
+      self.excluded_ids,
+    )
+
+  @discord.ui.button(
+    label="Назад",
+    style=discord.ButtonStyle.secondary,
+    emoji="↩️",
+    row=1,
+  )
+  async def cancel_payment(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      content="Оплату не змінено.",
+      view=None,
+    )
+
+
 class UnpaidCompletedView(discord.ui.View):
   def __init__(self, bot_instance: "ContractBot"):
     super().__init__(timeout=None)
@@ -1291,22 +1521,41 @@ class UnpaidCompletedView(discord.ui.View):
       )
       return
 
-    if interaction.message is None:
+    if interaction.message is None or interaction.guild is None:
       await interaction.response.send_message("❌ Не знайшов запис.", ephemeral=True)
       return
 
-    result = db.pay_completed(interaction.message.id, interaction.user.id)
-    if not result:
+    row = db.get_completed_by_message(interaction.message.id)
+    if not row or row["status"] != "unpaid":
       await interaction.response.send_message(
         "❌ Цей контракт уже оплачений або скасований.",
         ephemeral=True,
       )
       return
 
-    row = db.get_completed_by_message(interaction.message.id)
-    await interaction.response.edit_message(
-      embed=build_completed_embed(row),
-      view=None,
+    participant_ids = parse_ids(row["participant_ids"])
+    if not participant_ids:
+      await interaction.response.send_message(
+        "❌ У контракті немає виконавців.",
+        ephemeral=True,
+      )
+      return
+
+    await interaction.response.send_message(
+      (
+        f"💵 **Оплата: {row['contract_name']}**\n"
+        f"Сума: **{format_money_dollars(row['price'])} $**\n\n"
+        "Якщо платимо всім — натисни **Оплатити всім**.\n"
+        "Якщо когось треба виключити — вибери його нижче.\n\n"
+        "🏆 Рейтинг усе одно рахується всім виконавцям."
+      ),
+      view=PaymentSetupView(
+        self.bot_instance,
+        interaction.message.id,
+        interaction.guild,
+        participant_ids,
+      ),
+      ephemeral=True,
     )
 
   @discord.ui.button(

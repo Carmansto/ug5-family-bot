@@ -696,7 +696,7 @@ class PerformerStepView(discord.ui.View):
             self.remove_item(self.myself)
 
     @discord.ui.button(
-        label="Я виконав сам",
+        label="Я виконав/ла сам/а",
         style=discord.ButtonStyle.primary,
         emoji="👤",
     )
@@ -713,8 +713,25 @@ class PerformerStepView(discord.ui.View):
         )
 
 
-def picker_page_data(page: int, page_size: int = 25):
+def picker_rows(prefix: Optional[str] = None):
     rows = db.list_active_contract_types(limit=500)
+
+    if prefix:
+        prefix_cf = prefix.casefold()
+        rows = [
+            row for row in rows
+            if row["name"].strip().casefold().startswith(prefix_cf)
+        ]
+
+    return rows
+
+
+def picker_page_data(
+    page: int,
+    page_size: int = 25,
+    prefix: Optional[str] = None,
+):
+    rows = picker_rows(prefix)
     total = len(rows)
     total_pages = max(1, (total + page_size - 1) // page_size)
     page = max(0, min(page, total_pages - 1))
@@ -722,11 +739,23 @@ def picker_page_data(page: int, page_size: int = 25):
     return rows[start:start + page_size], page, total_pages
 
 
-def picker_content(participant_ids: list[int], page: int, total_pages: int) -> str:
+def picker_content(
+    participant_ids: list[int],
+    page: int,
+    total_pages: int,
+    prefix: Optional[str] = None,
+) -> str:
     mentions = " ".join(f"<@{uid}>" for uid in participant_ids)
+
+    if prefix:
+        mode = f"🔎 Фільтр: **{prefix.upper()}**"
+    else:
+        mode = "📋 Усі контракти"
+
     return (
         f"👥 Виконавці: {mentions}\n\n"
-        f"📋 Оберіть контракт зі списку • сторінка **{page + 1}/{total_pages}**"
+        f"{mode} • сторінка **{page + 1}/{total_pages}**\n"
+        "Оберіть контракт зі списку."
     )
 
 
@@ -736,11 +765,16 @@ class ContractPageSelect(discord.ui.Select):
         bot_instance: "ContractBot",
         participant_ids: list[int],
         page: int,
+        prefix: Optional[str] = None,
     ):
         self.bot_instance = bot_instance
         self.participant_ids = participant_ids
+        self.prefix = prefix
 
-        rows, page, total_pages = picker_page_data(page)
+        rows, page, total_pages = picker_page_data(
+            page,
+            prefix=prefix,
+        )
         self.page = page
         self.total_pages = total_pages
 
@@ -758,14 +792,20 @@ class ContractPageSelect(discord.ui.Select):
         if not options:
             options = [
                 discord.SelectOption(
-                    label="Контрактів ще немає",
+                    label="Нічого не знайдено",
                     value="none",
-                    description="Керівництво має додати їх через /contracts_admin",
+                    description="Скиньте фільтр або виберіть іншу літеру",
                 )
             ]
 
+        placeholder = (
+            f"Контракти на «{prefix.upper()}» • {page + 1}/{total_pages}"
+            if prefix
+            else f"Контракти • {page + 1}/{total_pages}"
+        )
+
         super().__init__(
-            placeholder=f"Контракти • {page + 1}/{total_pages}",
+            placeholder=placeholder,
             options=options,
             min_values=1,
             max_values=1,
@@ -792,6 +832,128 @@ class ContractPageSelect(discord.ui.Select):
                 self.participant_ids,
                 type_id,
                 return_page=self.page,
+                return_prefix=self.prefix,
+            ),
+        )
+
+
+class LetterSearchSelect(discord.ui.Select):
+    def __init__(
+        self,
+        bot_instance: "ContractBot",
+        participant_ids: list[int],
+    ):
+        self.bot_instance = bot_instance
+        self.participant_ids = participant_ids
+
+        rows = db.list_active_contract_types(limit=500)
+        letters = sorted(
+            {
+                row["name"].strip()[0].upper()
+                for row in rows
+                if row["name"].strip()
+            }
+        )
+
+        # Discord String Select supports max 25 options.
+        # "Усі" + up to 24 letters is enough for the current catalog.
+        options = [
+            discord.SelectOption(
+                label="Усі контракти",
+                value="__all__",
+                emoji="📋",
+            )
+        ]
+
+        for letter in letters[:24]:
+            options.append(
+                discord.SelectOption(
+                    label=f"На літеру {letter}",
+                    value=letter,
+                    emoji="🔎",
+                )
+            )
+
+        super().__init__(
+            placeholder="Оберіть першу літеру назви",
+            options=options,
+            min_values=1,
+            max_values=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        selected = self.values[0]
+        prefix = None if selected == "__all__" else selected
+
+        rows, page, total_pages = picker_page_data(
+            0,
+            prefix=prefix,
+        )
+
+        await interaction.response.edit_message(
+            content=picker_content(
+                self.participant_ids,
+                page,
+                total_pages,
+                prefix,
+            ),
+            view=ContractPickerView(
+                self.bot_instance,
+                self.participant_ids,
+                page,
+                prefix,
+            ),
+        )
+
+
+class LetterSearchView(discord.ui.View):
+    def __init__(
+        self,
+        bot_instance: "ContractBot",
+        participant_ids: list[int],
+        return_page: int = 0,
+        return_prefix: Optional[str] = None,
+    ):
+        super().__init__(timeout=300)
+        self.bot_instance = bot_instance
+        self.participant_ids = participant_ids
+        self.return_page = return_page
+        self.return_prefix = return_prefix
+
+        self.add_item(
+            LetterSearchSelect(
+                bot_instance,
+                participant_ids,
+            )
+        )
+
+    @discord.ui.button(
+        label="До списку",
+        style=discord.ButtonStyle.secondary,
+        emoji="↩️",
+        row=1,
+    )
+    async def back(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        _, page, total_pages = picker_page_data(
+            self.return_page,
+            prefix=self.return_prefix,
+        )
+        await interaction.response.edit_message(
+            content=picker_content(
+                self.participant_ids,
+                page,
+                total_pages,
+                self.return_prefix,
+            ),
+            view=ContractPickerView(
+                self.bot_instance,
+                self.participant_ids,
+                page,
+                self.return_prefix,
             ),
         )
 
@@ -802,23 +964,31 @@ class ContractPickerView(discord.ui.View):
         bot_instance: "ContractBot",
         participant_ids: list[int],
         page: int = 0,
+        prefix: Optional[str] = None,
     ):
         super().__init__(timeout=300)
         self.bot_instance = bot_instance
         self.participant_ids = participant_ids
+        self.prefix = prefix
 
-        _, self.page, self.total_pages = picker_page_data(page)
+        _, self.page, self.total_pages = picker_page_data(
+            page,
+            prefix=prefix,
+        )
+
         self.add_item(
             ContractPageSelect(
                 bot_instance,
                 participant_ids,
                 self.page,
+                prefix,
             )
         )
 
         self.previous.disabled = self.page <= 0
         self.page_indicator.label = f"{self.page + 1}/{self.total_pages}"
         self.next_page.disabled = self.page >= self.total_pages - 1
+        self.clear_filter.disabled = prefix is None
 
     @discord.ui.button(
         label="Назад",
@@ -826,16 +996,29 @@ class ContractPickerView(discord.ui.View):
         emoji="◀️",
         row=1,
     )
-    async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def previous(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
         new_page = max(0, self.page - 1)
-        _, new_page, total_pages = picker_page_data(new_page)
+        _, new_page, total_pages = picker_page_data(
+            new_page,
+            prefix=self.prefix,
+        )
         await interaction.response.edit_message(
-            content=picker_content(self.participant_ids, new_page, total_pages),
+            content=picker_content(
+                self.participant_ids,
+                new_page,
+                total_pages,
+                self.prefix,
+            ),
             embed=None,
             view=ContractPickerView(
                 self.bot_instance,
                 self.participant_ids,
                 new_page,
+                self.prefix,
             ),
         )
 
@@ -845,7 +1028,11 @@ class ContractPickerView(discord.ui.View):
         disabled=True,
         row=1,
     )
-    async def page_indicator(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def page_indicator(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
         pass
 
     @discord.ui.button(
@@ -854,16 +1041,83 @@ class ContractPickerView(discord.ui.View):
         emoji="▶️",
         row=1,
     )
-    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def next_page(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
         new_page = min(self.total_pages - 1, self.page + 1)
-        _, new_page, total_pages = picker_page_data(new_page)
+        _, new_page, total_pages = picker_page_data(
+            new_page,
+            prefix=self.prefix,
+        )
         await interaction.response.edit_message(
-            content=picker_content(self.participant_ids, new_page, total_pages),
+            content=picker_content(
+                self.participant_ids,
+                new_page,
+                total_pages,
+                self.prefix,
+            ),
             embed=None,
             view=ContractPickerView(
                 self.bot_instance,
                 self.participant_ids,
                 new_page,
+                self.prefix,
+            ),
+        )
+
+    @discord.ui.button(
+        label="Пошук",
+        style=discord.ButtonStyle.primary,
+        emoji="🔎",
+        row=2,
+    )
+    async def search(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        await interaction.response.edit_message(
+            content=(
+                "🔎 **Пошук контракту**\n"
+                "Оберіть першу літеру назви. "
+                "Все відбувається в цьому ж повідомленні — без окремого вікна."
+            ),
+            embed=None,
+            view=LetterSearchView(
+                self.bot_instance,
+                self.participant_ids,
+                self.page,
+                self.prefix,
+            ),
+        )
+
+    @discord.ui.button(
+        label="Показати всі",
+        style=discord.ButtonStyle.secondary,
+        emoji="📋",
+        row=2,
+    )
+    async def clear_filter(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        _, page, total_pages = picker_page_data(0)
+        await interaction.response.edit_message(
+            content=picker_content(
+                self.participant_ids,
+                page,
+                total_pages,
+                None,
+            ),
+            embed=None,
+            view=ContractPickerView(
+                self.bot_instance,
+                self.participant_ids,
+                page,
+                None,
             ),
         )
 
@@ -895,12 +1149,14 @@ class ConfirmContractView(discord.ui.View):
         participant_ids: list[int],
         type_id: int,
         return_page: int = 0,
+        return_prefix: Optional[str] = None,
     ):
         super().__init__(timeout=300)
         self.bot_instance = bot_instance
         self.participant_ids = participant_ids
         self.type_id = type_id
         self.return_page = return_page
+        self.return_prefix = return_prefix
 
     @discord.ui.button(label="Підтвердити", style=discord.ButtonStyle.success, emoji="✅")
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -958,14 +1214,23 @@ class ConfirmContractView(discord.ui.View):
 
     @discord.ui.button(label="Назад", style=discord.ButtonStyle.secondary, emoji="↩️")
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
-        _, page, total_pages = picker_page_data(self.return_page)
+        _, page, total_pages = picker_page_data(
+            self.return_page,
+            prefix=self.return_prefix,
+        )
         await interaction.response.edit_message(
-            content=picker_content(self.participant_ids, page, total_pages),
+            content=picker_content(
+                self.participant_ids,
+                page,
+                total_pages,
+                self.return_prefix,
+            ),
             embed=None,
             view=ContractPickerView(
                 self.bot_instance,
                 self.participant_ids,
                 page,
+                self.return_prefix,
             ),
         )
 
@@ -1577,7 +1842,7 @@ def build_main_panel_embed() -> discord.Embed:
         title="📋 КОНТРАКТИ СІМ’Ї",
         description=(
             "Виконав контракт — обери потрібну кнопку.\n\n"
-            "👤 **Я виконав** — якщо виконував сам.\n"
+            "👤 **Я виконав/ла** — якщо виконував/ла сам/а.\n"
             "👥 **Кілька виконавців** — якщо контракт робили разом.\n"
             "🏆 **Рейтинг** — поточний рейтинг учасників.\n\n"
             "Назва, ціна та КД підтягуються автоматично."
@@ -1631,7 +1896,7 @@ class MainContractPanelView(discord.ui.View):
         self.bot_instance = bot_instance
 
     @discord.ui.button(
-        label="Я виконав",
+        label="Я виконав/ла",
         style=discord.ButtonStyle.success,
         emoji="👤",
         custom_id="contract_v34:self",

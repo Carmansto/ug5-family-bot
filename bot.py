@@ -231,6 +231,66 @@ class Database:
 
         self.conn.commit()
 
+    def backfill_legacy_paid_contracts(self):
+        """
+        Старі MVP/V2 записи могли бути позначені як paid ще до появи
+        Банку сім'ї та персональних payout-ів. Дораховуємо їх один раз.
+        """
+        rows = self.conn.execute("""
+        SELECT *
+        FROM contracts
+        WHERE status = 'paid'
+        ORDER BY id ASC
+        """).fetchall()
+
+        changed = 0
+
+        for row in rows:
+            member_ids = parse_ids(row["participant_ids"])
+            if not member_ids:
+                continue
+
+            payout_count = self.conn.execute(
+                "SELECT COUNT(*) AS cnt FROM contract_payouts WHERE contract_id = ?",
+                (row["id"],),
+            ).fetchone()["cnt"]
+
+            needs_totals = row["fomo_cents"] is None or row["net_cents"] is None
+            needs_payouts = payout_count == 0
+
+            if not needs_totals and not needs_payouts:
+                continue
+
+            family_cents, net_cents, payouts = split_payment(row["price"], member_ids)
+            payout_date = row["paid_at"] or row["created_at"] or utc_now_iso()
+
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+
+                if needs_totals:
+                    self.conn.execute("""
+                    UPDATE contracts
+                    SET fomo_cents = ?, net_cents = ?
+                    WHERE id = ?
+                    """, (family_cents, net_cents, row["id"]))
+
+                if needs_payouts:
+                    for uid, amount_cents in payouts.items():
+                        self.conn.execute("""
+                        INSERT OR IGNORE INTO contract_payouts
+                        (contract_id, user_id, amount_cents, created_at)
+                        VALUES (?, ?, ?, ?)
+                        """, (row["id"], uid, amount_cents, payout_date))
+
+                self.conn.commit()
+                changed += 1
+            except Exception:
+                self.conn.rollback()
+                raise
+
+        if changed:
+            print(f"[MIGRATION] Backfilled {changed} legacy paid contract(s)")
+
     # Contract catalog
     def create_contract_type(self, name: str, price: int, cooldown: str, created_by: int) -> sqlite3.Row:
         existing = self.conn.execute(
@@ -480,6 +540,7 @@ class Database:
 
 
 db = Database(DB_PATH)
+db.backfill_legacy_paid_contracts()
 
 
 # ----------------------------
@@ -1266,7 +1327,7 @@ class ResetEarningsConfirmView(discord.ui.View):
 
         await interaction.response.edit_message(
             content=(
-                f"✅ Заробіток обнулено {when}.\\n"
+                f"✅ Заробіток обнулено {when}.\n"
                 "Історія контрактів та оплат не видалена. "
                 "З цього моменту з нуля рахуються загальний заробіток, "
                 "Банк сім'ї та заробіток кожного учасника."
@@ -1371,7 +1432,7 @@ class ContractAdminPanelView(discord.ui.View):
             return
 
         await interaction.response.send_message(
-            "⚠️ Обнулити статистику заробітку?\\n"
+            "⚠️ Обнулити статистику заробітку?\n"
             "Контракти й історія оплат залишаться в базі. "
             "Але загальний заробіток, Банк сім'ї та заробіток учасників "
             "у статистиці почнуться з нуля.",
@@ -1752,8 +1813,8 @@ async def stats(interaction: discord.Interaction):
     embed.add_field(
         name="📋 Контракти",
         value=(
-            f"Всього: **{total_contracts}**\\n"
-            f"Оплачено: **{len(paid_rows_all)}**\\n"
+            f"Всього: **{total_contracts}**\n"
+            f"Оплачено: **{len(paid_rows_all)}**\n"
             f"Не оплачено: **{len(unpaid_rows)}**"
         ),
         inline=True,
@@ -1769,10 +1830,10 @@ async def stats(interaction: discord.Interaction):
     embed.add_field(
         name=finance_title,
         value=(
-            f"Загальний: **{format_cents(total_paid_gross_cents)}**\\n"
+            f"Сума оплачених контрактів: **{format_cents(total_paid_gross_cents)}**\n"
             f"Банк сім'ї ({FAMILY_PERCENT.normalize()}%): "
-            f"**{format_cents(total_family_bank_cents)}**\\n"
-            f"Виплачено учасникам: **{format_cents(total_members_cents)}**"
+            f"**{format_cents(total_family_bank_cents)}**\n"
+            f"Учасникам після 15%: **{format_cents(total_members_cents)}**"
         ),
         inline=False,
     )
@@ -1800,7 +1861,7 @@ async def stats(interaction: discord.Interaction):
             )
         embed.add_field(
             name=rating_title,
-            value="\\n".join(rating_lines),
+            value="\n".join(rating_lines),
             inline=False,
         )
     else:
@@ -1823,7 +1884,7 @@ async def stats(interaction: discord.Interaction):
         ]
         embed.add_field(
             name=earnings_people_title,
-            value="\\n".join(earning_lines),
+            value="\n".join(earning_lines),
             inline=False,
         )
     else:

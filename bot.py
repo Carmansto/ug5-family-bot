@@ -2351,7 +2351,7 @@ class UnpaidCompletedView(discord.ui.View):
     style=discord.ButtonStyle.primary,
     emoji="⚙️",
     custom_id="contract_v4:custompay",
-    row=1,
+    row=0,
   )
   async def custom_payment(
     self,
@@ -2400,7 +2400,7 @@ class UnpaidCompletedView(discord.ui.View):
     style=discord.ButtonStyle.secondary,
     emoji="✏️",
     custom_id="contract_v4:edit",
-    row=2,
+    row=1,
   )
   async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
@@ -2433,7 +2433,7 @@ class UnpaidCompletedView(discord.ui.View):
     style=discord.ButtonStyle.danger,
     emoji="🗑️",
     custom_id="contract_v3:cancel",
-    row=2,
+    row=1,
   )
   async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):

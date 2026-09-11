@@ -4205,11 +4205,12 @@ def build_member_stats_embed(
 ) -> discord.Embed:
   if user_id is None:
     points, participations, rating_users, _ = rating_data_for_guild(guild_id)
+    earnings = earnings_data_for_guild(guild_id)
 
     embed = discord.Embed(
       title="👥 Статистика • Учасники",
       description=(
-        "Поточний рейтинг учасників.\n"
+        "Поточний рейтинг і топ заробітку.\n"
         "Для детальної статистики оберіть конкретну людину зі списку нижче."
       ),
       color=discord.Color.blurple(),
@@ -4233,6 +4234,32 @@ def build_member_stats_embed(
       embed.add_field(
         name="🏆 Поточний рейтинг",
         value="Поки немає виконаних контрактів у поточному періоді.",
+        inline=False,
+      )
+
+    earning_users = sorted(
+      earnings["member_earnings"],
+      key=lambda uid: earnings["member_earnings"][uid],
+      reverse=True,
+    )
+
+    if earning_users:
+      earning_lines = [
+        (
+          f"**{idx}.** <@{uid}> — "
+          f"**{format_cents(earnings['member_earnings'][uid])}**"
+        )
+        for idx, uid in enumerate(earning_users[:5], start=1)
+      ]
+      embed.add_field(
+        name="💵 Топ-5 по заробітку",
+        value="\n".join(earning_lines),
+        inline=False,
+      )
+    else:
+      embed.add_field(
+        name="💵 Топ-5 по заробітку",
+        value="Поки немає виплаченого заробітку в поточному періоді.",
         inline=False,
       )
 

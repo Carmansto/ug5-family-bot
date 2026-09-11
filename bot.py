@@ -3697,10 +3697,10 @@ def build_contract_stats_embed(guild_id: int, page: int = 0):
       embed.add_field(
         name=stat["name"],
         value=(
-          f"Оплачено: **{stat['count']}**\\n"
-          f"Загалом: **{format_cents(stat['gross'])}**\\n"
-          f"На фаму: **{format_cents(stat['family'])}**\\n"
-          f"Учасникам: **{format_cents(stat['members'])}**\\n"
+          f"Оплачено: **{stat['count']}**\n"
+          f"Загалом: **{format_cents(stat['gross'])}**\n"
+          f"На фаму: **{format_cents(stat['family'])}**\n"
+          f"Учасникам: **{format_cents(stat['members'])}**\n"
           f"З винятками: **{stat['exceptions']}**"
         ),
         inline=True,
@@ -4345,7 +4345,7 @@ async def annul_contract(
     status_name = status_names.get(row["status"], row["status"])
     await interaction.response.send_message(
       (
-        f"❌ Контракт **#{contract_id}** зараз **{status_name}**.\\n"
+        f"❌ Контракт **#{contract_id}** зараз **{status_name}**.\n"
         "Анулювати цією командою можна тільки вже оплачений контракт."
       ),
       ephemeral=True,
@@ -4361,12 +4361,12 @@ async def annul_contract(
   embed = discord.Embed(
     title=f"🚫 Анулювання контракту #{contract_id}",
     description=(
-      "Перевір контракт перед підтвердженням.\\n\\n"
-      f"📋 **{row['contract_name']}**\\n"
-      f"💰 Сума: **{format_money_dollars(row['price'])} $**\\n"
-      f"👥 Виконавці: {participant_text}\\n"
-      f"🏦 Було в Банк сім'ї: **{format_cents(row['fomo_cents'] or 0)}**\\n"
-      f"💸 Було учасникам: **{format_cents(row['net_cents'] or 0)}**\\n\\n"
+      "Перевір контракт перед підтвердженням.\n\n"
+      f"📋 **{row['contract_name']}**\n"
+      f"💰 Сума: **{format_money_dollars(row['price'])} $**\n"
+      f"👥 Виконавці: {participant_text}\n"
+      f"🏦 Було в Банк сім'ї: **{format_cents(row['fomo_cents'] or 0)}**\n"
+      f"💸 Було учасникам: **{format_cents(row['net_cents'] or 0)}**\n\n"
       f"[Відкрити повідомлення контракту]({jump_url})"
     ),
     color=discord.Color.red(),

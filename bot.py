@@ -397,7 +397,7 @@ def payment_preview_embed(
     for uid, amount in payouts.items():
       if uid in deferred_set:
         lines.append(
-          f"⏳ <@{uid}> — **{format_cents(amount)}** • борг лідера"
+          f"⏳ <@{uid}> — **{format_cents(amount)}** • відкладена оплата"
         )
       else:
         lines.append(
@@ -1342,7 +1342,7 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
         )
       else:
         payout_lines.append(
-          f"⏳ <@{debt['user_id']}> — **{format_cents(debt['amount_cents'])}** • борг лідера"
+          f"⏳ <@{debt['user_id']}> — **{format_cents(debt['amount_cents'])}** • відкладена оплата"
         )
 
     if payout_lines:
@@ -2157,7 +2157,7 @@ class PaymentConfirmView(discord.ui.View):
       for uid, amount in result["payouts"].items()
     ]
     payout_lines.extend(
-      f"⏳ <@{uid}> — **{format_cents(amount)}** • борг лідера"
+      f"⏳ <@{uid}> — **{format_cents(amount)}** • відкладена оплата"
       for uid, amount in result["deferred_payouts"].items()
     )
     payouts_text = "\n".join(payout_lines) or "—"
@@ -2179,7 +2179,7 @@ class PaymentConfirmView(discord.ui.View):
         f"Учасникам: **{format_cents(result['net_cents'])}**\n"
         f"Без виплати: {excluded_text}\n"
         f"Розподіл:\n{payouts_text}\n"
-        f"Борг замам після цього контракту: **{format_cents(sum(result['deferred_payouts'].values()))}**\n"
+        f"Відкладено після цього контракту: **{format_cents(sum(result['deferred_payouts'].values()))}**\n"
         f"Оплатив/ла: <@{interaction.user.id}>"
       ),
       discord.Color.green(),
@@ -4204,11 +4204,39 @@ def build_member_stats_embed(
   user_id: Optional[int] = None,
 ) -> discord.Embed:
   if user_id is None:
-    return discord.Embed(
+    points, participations, rating_users, _ = rating_data_for_guild(guild_id)
+
+    embed = discord.Embed(
       title="👥 Статистика • Учасники",
-      description="Оберіть учасника зі списку нижче.",
+      description=(
+        "Поточний рейтинг учасників.\n"
+        "Для детальної статистики оберіть конкретну людину зі списку нижче."
+      ),
       color=discord.Color.blurple(),
     )
+
+    if rating_users:
+      rating_lines = [
+        (
+          f"**{idx}.** <@{uid}> — "
+          f"**{format_points_with_word(points[uid])}** "
+          f"• {participations[uid]} участей"
+        )
+        for idx, uid in enumerate(rating_users[:10], start=1)
+      ]
+      embed.add_field(
+        name="🏆 Поточний рейтинг",
+        value="\n".join(rating_lines),
+        inline=False,
+      )
+    else:
+      embed.add_field(
+        name="🏆 Поточний рейтинг",
+        value="Поки немає виконаних контрактів у поточному періоді.",
+        inline=False,
+      )
+
+    return embed
 
   points, participations, rating_users, _ = rating_data_for_guild(guild_id)
   earnings = earnings_data_for_guild(guild_id)
@@ -4264,7 +4292,7 @@ def build_member_stats_embed(
     name="💵 Поточні фінанси",
     value=(
       f"Отримано: **{format_cents(current_received)}**\n"
-      f"Борг лідера: **{format_cents(pending_debt)}**\n"
+      f"Відкладена оплата: **{format_cents(pending_debt)}**\n"
       f"Оплачених контрактів: **{len(paid_period)}**\n"
       f"Очікують оплати: **{len(unpaid_now)}**"
     ),
@@ -5048,7 +5076,7 @@ class DebtUserSelect(discord.ui.Select):
         label=labels.get(row["user_id"], f"ID {row['user_id']}")[:100],
         value=str(row["user_id"]),
         description=(
-          f"Борг: {format_cents(row['total_cents'])} • "
+          f"Відкладено: {format_cents(row['total_cents'])} • "
           f"контрактів: {row['debt_count']}"
         )[:100],
       )
@@ -5096,7 +5124,7 @@ class DebtPayView(discord.ui.View):
   ):
     if not isinstance(interaction.user, discord.Member) or not leader_member(interaction.user):
       await interaction.response.send_message(
-        "❌ Закривати борг замам може тільки лідер.",
+        "❌ Проводити відкладені виплати може тільки лідер.",
         ephemeral=True,
       )
       return
@@ -5115,7 +5143,7 @@ class DebtPayView(discord.ui.View):
     )
     if not debts:
       await interaction.response.edit_message(
-        content="✅ Боргу вже немає.",
+        content="✅ Відкладеної оплати вже немає.",
         embed=None,
         view=None,
       )
@@ -5124,7 +5152,7 @@ class DebtPayView(discord.ui.View):
     total = sum(row["amount_cents"] for row in debts)
 
     await interaction.response.edit_message(
-      content="⏳ Закриваю борг...",
+      content="⏳ Проводжу відкладену оплату...",
       embed=None,
       view=None,
     )
@@ -5140,7 +5168,7 @@ class DebtPayView(discord.ui.View):
 
     await audit_log(
       guild,
-      "💵 Борг заму виплачено",
+      "💵 Відкладену оплату проведено",
       (
         f"Зам: <@{self.user_id}>\n"
         f"Сума: **{format_cents(total)}**\n"
@@ -5153,7 +5181,7 @@ class DebtPayView(discord.ui.View):
     await interaction.edit_original_response(
       content=(
         f"✅ <@{self.user_id}> виплачено **{format_cents(total)}**.\n"
-        "Борг закрито."
+        "Відкладену оплату закрито."
       ),
       embed=None,
       view=None,
@@ -5185,10 +5213,10 @@ async def show_debt_user(
   label = await debt_user_label(guild, user_id)
 
   embed = discord.Embed(
-    title="💰 Борг заму",
+    title="💰 Відкладена оплата",
     description=(
       f"**{label}** • <@{user_id}>\n"
-      f"Загальний борг: **{format_cents(total)}**\n"
+      f"Всього відкладено: **{format_cents(total)}**\n"
       f"Контрактів у боргу: **{len(debts)}**"
     ),
     color=discord.Color.gold(),
@@ -5226,8 +5254,8 @@ async def send_debts_list(
 
   if not rows:
     embed = discord.Embed(
-      title="💰 Борги замам",
-      description="✅ Поточних боргів немає.",
+      title="💰 Відкладені оплати",
+      description="✅ Відкладених оплат немає.",
       color=discord.Color.green(),
     )
     if edit:
@@ -5261,9 +5289,9 @@ async def send_debts_list(
   ]
 
   embed = discord.Embed(
-    title="💰 Борги замам",
+    title="💰 Відкладені оплати",
     description=(
-      f"Загальний борг: **{format_cents(total)}**\n\n"
+      f"Всього відкладено: **{format_cents(total)}**\n\n"
       + "\n".join(lines)
     ),
     color=discord.Color.gold(),
@@ -5287,7 +5315,7 @@ async def send_debts_list(
 
 @bot.tree.command(
   name="debts",
-  description="Показати борги замам за виконані контракти",
+  description="Показати відкладені виплати замам за виконані контракти",
 )
 async def debts(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):

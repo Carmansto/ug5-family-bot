@@ -33,6 +33,10 @@ MANAGER_ROLE_IDS = {
 if ADMIN_ROLE_ID:
   MANAGER_ROLE_IDS.add(ADMIN_ROLE_ID)
 
+# Роль лідера. Якщо окремо не задана — використовуємо ADMIN_ROLE_ID.
+# MANAGER_ROLE_IDS = ролі замів/керівництва, яким виплата може накопичуватися боргом.
+LEADER_ROLE_ID = int(os.getenv("LEADER_ROLE_ID", str(ADMIN_ROLE_ID or 0)) or 0)
+
 DB_PATH = os.getenv("DB_PATH", "contracts.db").strip()
 FAMILY_PERCENT = Decimal(os.getenv("FAMILY_PERCENT", os.getenv("FOMO_PERCENT", "15")).strip() or "15")
 TIMEZONE_NAME = os.getenv("TIMEZONE", "Europe/Kyiv").strip() or "Europe/Kyiv"
@@ -301,10 +305,50 @@ def calculate_payment(
   raise ValueError("Unknown payment mode")
 
 
+def calculate_personal_family_contributions(
+  gross_dollars: int,
+  participant_ids: list[int],
+  payment_mode: str,
+  excluded_payment_ids: Optional[list[int]] = None,
+) -> dict[int, int]:
+  """
+  Рахує тільки ОСОБИСТІ гроші учасника, які пішли в Банк сім'ї.
+  Стандартні FAMILY_PERCENT не приписуються конкретній людині.
+
+  На фаму:
+    кожному зараховується його нормальна частка з participant pool.
+
+  Частку в сім'ю:
+    особистим внеском є нормальна частка саме виключених людей.
+
+  Звичайна / Розділити між рештою:
+    особистий внесок = 0.
+  """
+  if not participant_ids:
+    return {}
+
+  participant_ids = list(dict.fromkeys(int(uid) for uid in participant_ids))
+  _, _, normal_payouts = split_payment(gross_dollars, participant_ids)
+  excluded = set(int(uid) for uid in (excluded_payment_ids or []))
+
+  if payment_mode == PAYMENT_MODE_LEGACY_FAMILY:
+    return dict(normal_payouts)
+
+  if payment_mode == PAYMENT_MODE_FAMILY_SHARE:
+    return {
+      uid: amount
+      for uid, amount in normal_payouts.items()
+      if uid in excluded
+    }
+
+  return {}
+
+
 def payment_preview_embed(
   row: sqlite3.Row,
   payment_mode: str,
   excluded_ids: Optional[list[int]] = None,
+  deferred_ids: Optional[list[int]] = None,
 ) -> discord.Embed:
   participants = parse_ids(row["participant_ids"])
 
@@ -348,10 +392,18 @@ def payment_preview_embed(
     )
 
   if payouts:
-    lines = [
-      f"<@{uid}> — **{format_cents(amount)}**"
-      for uid, amount in payouts.items()
-    ]
+    deferred_set = set(deferred_ids or [])
+    lines = []
+    for uid, amount in payouts.items():
+      if uid in deferred_set:
+        lines.append(
+          f"⏳ <@{uid}> — **{format_cents(amount)}** • борг лідера"
+        )
+      else:
+        lines.append(
+          f"<@{uid}> — **{format_cents(amount)}**"
+        )
+
     embed.add_field(
       name="👤 Розподіл",
       value="\n".join(lines),
@@ -367,6 +419,49 @@ def management_member(member: discord.Member) -> bool:
   if member.guild_permissions.administrator or member.guild_permissions.manage_guild:
     return True
   return any(role.id in MANAGER_ROLE_IDS for role in member.roles)
+
+
+def leader_member(member: discord.Member) -> bool:
+  if member.guild.owner_id == member.id:
+    return True
+  if LEADER_ROLE_ID:
+    return any(role.id == LEADER_ROLE_ID for role in member.roles)
+  return False
+
+
+def deferred_payout_member(member: discord.Member) -> bool:
+  """Зам/керівник, виплата якому накопичується боргом лідера."""
+  if LEADER_ROLE_ID and any(role.id == LEADER_ROLE_ID for role in member.roles):
+    return False
+  return any(role.id in MANAGER_ROLE_IDS for role in member.roles)
+
+
+async def fetch_member_safe(
+  guild: discord.Guild,
+  user_id: int,
+) -> Optional[discord.Member]:
+  member = guild.get_member(user_id)
+  if member is not None:
+    return member
+  try:
+    return await guild.fetch_member(user_id)
+  except discord.DiscordException:
+    return None
+
+
+async def deferred_payout_ids(
+  guild: Optional[discord.Guild],
+  user_ids: list[int],
+) -> list[int]:
+  if guild is None:
+    return []
+
+  result = []
+  for uid in user_ids:
+    member = await fetch_member_safe(guild, uid)
+    if member and deferred_payout_member(member):
+      result.append(uid)
+  return result
 
 
 # ----------------------------
@@ -421,6 +516,31 @@ class Database:
 
     self.conn.execute("""
     CREATE TABLE IF NOT EXISTS contract_payouts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      amount_cents INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(contract_id, user_id)
+    )
+    """)
+
+    self.conn.execute("""
+    CREATE TABLE IF NOT EXISTS admin_debts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      amount_cents INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL,
+      settled_at TEXT,
+      settled_by INTEGER,
+      UNIQUE(contract_id, user_id)
+    )
+    """)
+
+    self.conn.execute("""
+    CREATE TABLE IF NOT EXISTS family_contributions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       contract_id INTEGER NOT NULL,
       user_id INTEGER NOT NULL,
@@ -536,6 +656,55 @@ class Database:
 
     if changed:
       print(f"[MIGRATION] Backfilled {changed} legacy paid contract(s)")
+
+  def backfill_family_contributions(self):
+    """
+    Старі оплачені контракти вже містять payment_mode / excluded ids,
+    тому особистий внесок у Банк сім'ї можна відновити заднім числом.
+    """
+    rows = self.conn.execute("""
+    SELECT *
+    FROM contracts
+    WHERE status IN ('paid', 'annulled')
+    ORDER BY id ASC
+    """).fetchall()
+
+    inserted = 0
+
+    for row in rows:
+      participant_ids = parse_ids(row["participant_ids"])
+      if not participant_ids:
+        continue
+
+      contributions = calculate_personal_family_contributions(
+        row["price"],
+        participant_ids,
+        row["payment_mode"] or PAYMENT_MODE_NORMAL,
+        parse_ids(row["excluded_payment_ids"] or "[]"),
+      )
+
+      if not contributions:
+        continue
+
+      created_at = row["paid_at"] or row["created_at"] or utc_now_iso()
+
+      for uid, amount_cents in contributions.items():
+        cur = self.conn.execute("""
+        INSERT OR IGNORE INTO family_contributions
+        (contract_id, user_id, amount_cents, created_at)
+        VALUES (?, ?, ?, ?)
+        """, (
+          row["id"],
+          uid,
+          amount_cents,
+          created_at,
+        ))
+        inserted += cur.rowcount
+
+    self.conn.commit()
+
+    if inserted:
+      print(f"[MIGRATION] Backfilled {inserted} personal family contribution(s)")
 
   # Contract catalog
   def create_contract_type(self, name: str, price: int, cooldown: str, created_by: int) -> sqlite3.Row:
@@ -712,6 +881,7 @@ class Database:
     paid_by: int,
     payment_mode: str = PAYMENT_MODE_NORMAL,
     excluded_payment_ids: Optional[list[int]] = None,
+    deferred_payout_ids: Optional[list[int]] = None,
   ):
     row = self.get_completed_by_message(message_id)
     if not row or row["status"] != "unpaid":
@@ -730,6 +900,30 @@ class Database:
       )
     except ValueError:
       return None
+
+    deferred_set = {
+      int(uid)
+      for uid in (deferred_payout_ids or [])
+      if int(uid) in payouts
+    }
+
+    immediate_payouts = {
+      uid: amount
+      for uid, amount in payouts.items()
+      if uid not in deferred_set
+    }
+    deferred_payouts = {
+      uid: amount
+      for uid, amount in payouts.items()
+      if uid in deferred_set
+    }
+
+    contributions = calculate_personal_family_contributions(
+      row["price"],
+      participant_ids,
+      payment_mode,
+      excluded_ids,
+    )
 
     paid_at = utc_now_iso()
 
@@ -767,10 +961,32 @@ class Database:
         "DELETE FROM contract_payouts WHERE contract_id = ?",
         (contract_id,),
       )
+      self.conn.execute(
+        "DELETE FROM admin_debts WHERE contract_id = ?",
+        (contract_id,),
+      )
+      self.conn.execute(
+        "DELETE FROM family_contributions WHERE contract_id = ?",
+        (contract_id,),
+      )
 
-      for uid, amount_cents in payouts.items():
+      for uid, amount_cents in immediate_payouts.items():
         self.conn.execute("""
         INSERT INTO contract_payouts
+        (contract_id, user_id, amount_cents, created_at)
+        VALUES (?, ?, ?, ?)
+        """, (contract_id, uid, amount_cents, paid_at))
+
+      for uid, amount_cents in deferred_payouts.items():
+        self.conn.execute("""
+        INSERT INTO admin_debts
+        (contract_id, user_id, amount_cents, status, created_at)
+        VALUES (?, ?, ?, 'pending', ?)
+        """, (contract_id, uid, amount_cents, paid_at))
+
+      for uid, amount_cents in contributions.items():
+        self.conn.execute("""
+        INSERT INTO family_contributions
         (contract_id, user_id, amount_cents, created_at)
         VALUES (?, ?, ?, ?)
         """, (contract_id, uid, amount_cents, paid_at))
@@ -785,9 +1001,12 @@ class Database:
       "excluded_payment_ids": excluded_ids,
       "fomo_cents": fomo_cents,
       "net_cents": net_cents,
-      "payouts": payouts,
+      "payouts": immediate_payouts,
+      "deferred_payouts": deferred_payouts,
+      "family_contributions": contributions,
       "paid_at": paid_at,
     }
+
 
   def update_completed_participants(
     self,
@@ -867,12 +1086,140 @@ class Database:
 
   def paid_payouts_for_guild(self, guild_id: int):
     return self.conn.execute("""
-    SELECT cp.*
+    SELECT
+      cp.user_id AS user_id,
+      cp.amount_cents AS amount_cents,
+      cp.created_at AS created_at
     FROM contract_payouts cp
     JOIN contracts c ON c.id = cp.contract_id
     WHERE c.guild_id = ?
      AND c.status = 'paid'
+
+    UNION ALL
+
+    SELECT
+      d.user_id AS user_id,
+      d.amount_cents AS amount_cents,
+      d.settled_at AS created_at
+    FROM admin_debts d
+    JOIN contracts c ON c.id = d.contract_id
+    WHERE c.guild_id = ?
+     AND c.status = 'paid'
+     AND d.status = 'paid'
+     AND d.settled_at IS NOT NULL
+    """, (guild_id, guild_id)).fetchall()
+
+  def admin_debts_for_contract(self, contract_id: int):
+    return self.conn.execute("""
+    SELECT *
+    FROM admin_debts
+    WHERE contract_id = ?
+    ORDER BY id ASC
+    """, (contract_id,)).fetchall()
+
+  def pending_admin_debt_summary(self, guild_id: int):
+    return self.conn.execute("""
+    SELECT
+      d.user_id,
+      COUNT(*) AS debt_count,
+      SUM(d.amount_cents) AS total_cents
+    FROM admin_debts d
+    JOIN contracts c ON c.id = d.contract_id
+    WHERE c.guild_id = ?
+     AND c.status = 'paid'
+     AND d.status = 'pending'
+    GROUP BY d.user_id
+    ORDER BY total_cents DESC, d.user_id ASC
     """, (guild_id,)).fetchall()
+
+  def pending_admin_debts_for_user(self, guild_id: int, user_id: int):
+    return self.conn.execute("""
+    SELECT
+      d.*,
+      c.message_id,
+      c.channel_id,
+      c.contract_name,
+      c.price
+    FROM admin_debts d
+    JOIN contracts c ON c.id = d.contract_id
+    WHERE c.guild_id = ?
+     AND c.status = 'paid'
+     AND d.user_id = ?
+     AND d.status = 'pending'
+    ORDER BY d.id ASC
+    """, (guild_id, user_id)).fetchall()
+
+  def pending_admin_debt_total(self, guild_id: int, user_id: int) -> int:
+    row = self.conn.execute("""
+    SELECT COALESCE(SUM(d.amount_cents), 0) AS total
+    FROM admin_debts d
+    JOIN contracts c ON c.id = d.contract_id
+    WHERE c.guild_id = ?
+     AND c.status = 'paid'
+     AND d.user_id = ?
+     AND d.status = 'pending'
+    """, (guild_id, user_id)).fetchone()
+    return int(row["total"] or 0)
+
+  def settle_admin_debts_for_user(
+    self,
+    guild_id: int,
+    user_id: int,
+    settled_by: int,
+  ):
+    debts = self.pending_admin_debts_for_user(guild_id, user_id)
+    if not debts:
+      return []
+
+    now = utc_now_iso()
+    debt_ids = [row["id"] for row in debts]
+    placeholders = ",".join("?" for _ in debt_ids)
+
+    self.conn.execute(
+      f"""
+      UPDATE admin_debts
+      SET status = 'paid',
+        settled_at = ?,
+        settled_by = ?
+      WHERE id IN ({placeholders})
+       AND status = 'pending'
+      """,
+      (now, settled_by, *debt_ids),
+    )
+    self.conn.commit()
+    return debts
+
+  def family_contribution_for_user(
+    self,
+    guild_id: int,
+    user_id: int,
+    since: Optional[str] = None,
+  ) -> int:
+    sql = """
+    SELECT COALESCE(SUM(fc.amount_cents), 0) AS total
+    FROM family_contributions fc
+    JOIN contracts c ON c.id = fc.contract_id
+    WHERE c.guild_id = ?
+     AND c.status = 'paid'
+     AND fc.user_id = ?
+    """
+    params: list = [guild_id, user_id]
+
+    if since:
+      sql += " AND fc.created_at >= ?"
+      params.append(since)
+
+    row = self.conn.execute(sql, params).fetchone()
+    return int(row["total"] or 0)
+
+  def participant_ids_for_guild(self, guild_id: int) -> list[int]:
+    rows = self.all_non_cancelled(guild_id)
+    user_ids = {
+      uid
+      for row in rows
+      for uid in parse_ids(row["participant_ids"])
+    }
+    return sorted(user_ids)
 
   def get_setting(self, guild_id: int, key: str) -> Optional[str]:
     row = self.conn.execute("""
@@ -893,6 +1240,7 @@ class Database:
 
 db = Database(DB_PATH)
 db.backfill_legacy_paid_contracts()
+db.backfill_family_contributions()
 
 
 # ----------------------------
@@ -980,11 +1328,24 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
       )
 
     payouts = db.payouts_for_contract(row["id"])
-    if payouts:
-      payout_lines = [
-        f"<@{p['user_id']}> — **{format_cents(p['amount_cents'])}**"
-        for p in payouts
-      ]
+    debts = db.admin_debts_for_contract(row["id"])
+
+    payout_lines = [
+      f"<@{p['user_id']}> — **{format_cents(p['amount_cents'])}**"
+      for p in payouts
+    ]
+
+    for debt in debts:
+      if debt["status"] == "paid":
+        payout_lines.append(
+          f"✅ <@{debt['user_id']}> — **{format_cents(debt['amount_cents'])}** • виплачено лідером"
+        )
+      else:
+        payout_lines.append(
+          f"⏳ <@{debt['user_id']}> — **{format_cents(debt['amount_cents'])}** • борг лідера"
+        )
+
+    if payout_lines:
       embed.add_field(
         name="👤 Розподіл виплати",
         value="\n".join(payout_lines),
@@ -1692,6 +2053,43 @@ class CancelCompletedConfirmView(discord.ui.View):
     await interaction.response.edit_message(content="Скасування відмінено.", view=None)
 
 
+async def payment_preview_with_debts(
+  interaction: discord.Interaction,
+  bot_instance: "ContractBot",
+  row: sqlite3.Row,
+  payment_mode: str,
+  excluded_ids: Optional[list[int]] = None,
+  back_to_custom: bool = False,
+):
+  _, _, payouts, _ = calculate_payment(
+    row["price"],
+    parse_ids(row["participant_ids"]),
+    payment_mode,
+    excluded_ids,
+  )
+
+  deferred_ids = await deferred_payout_ids(
+    interaction.guild,
+    list(payouts.keys()),
+  )
+
+  embed = payment_preview_embed(
+    row,
+    payment_mode,
+    excluded_ids,
+    deferred_ids,
+  )
+
+  return embed, PaymentConfirmView(
+    bot_instance,
+    row["message_id"],
+    payment_mode,
+    excluded_ids,
+    back_to_custom=back_to_custom,
+    deferred_ids=deferred_ids,
+  )
+
+
 class PaymentConfirmView(discord.ui.View):
   def __init__(
     self,
@@ -1700,6 +2098,7 @@ class PaymentConfirmView(discord.ui.View):
     payment_mode: str,
     excluded_ids: Optional[list[int]] = None,
     back_to_custom: bool = False,
+    deferred_ids: Optional[list[int]] = None,
   ):
     super().__init__(timeout=180)
     self.bot_instance = bot_instance
@@ -1707,6 +2106,7 @@ class PaymentConfirmView(discord.ui.View):
     self.payment_mode = payment_mode
     self.excluded_ids = excluded_ids or []
     self.back_to_custom = back_to_custom
+    self.deferred_ids = deferred_ids or []
 
   @discord.ui.button(
     label="Підтвердити",
@@ -1739,6 +2139,7 @@ class PaymentConfirmView(discord.ui.View):
       interaction.user.id,
       payment_mode=self.payment_mode,
       excluded_payment_ids=self.excluded_ids,
+      deferred_payout_ids=self.deferred_ids,
     )
 
     if not result:
@@ -1751,10 +2152,15 @@ class PaymentConfirmView(discord.ui.View):
 
     await refresh_completed_message(self.message_id)
 
-    payouts_text = "\n".join(
+    payout_lines = [
       f"<@{uid}> — **{format_cents(amount)}**"
       for uid, amount in result["payouts"].items()
-    ) or "—"
+    ]
+    payout_lines.extend(
+      f"⏳ <@{uid}> — **{format_cents(amount)}** • борг лідера"
+      for uid, amount in result["deferred_payouts"].items()
+    )
+    payouts_text = "\n".join(payout_lines) or "—"
 
     excluded_text = (
       "—"
@@ -1773,6 +2179,7 @@ class PaymentConfirmView(discord.ui.View):
         f"Учасникам: **{format_cents(result['net_cents'])}**\n"
         f"Без виплати: {excluded_text}\n"
         f"Розподіл:\n{payouts_text}\n"
+        f"Борг замам після цього контракту: **{format_cents(sum(result['deferred_payouts'].values()))}**\n"
         f"Оплатив/ла: <@{interaction.user.id}>"
       ),
       discord.Color.green(),
@@ -1912,10 +2319,13 @@ class CustomPaymentView(discord.ui.View):
       return
 
     try:
-      embed = payment_preview_embed(
+      embed, confirm_view = await payment_preview_with_debts(
+        interaction,
+        self.bot_instance,
         row,
         PAYMENT_MODE_REDISTRIBUTE,
         self.excluded_ids,
+        back_to_custom=True,
       )
     except ValueError:
       await interaction.response.edit_message(
@@ -1927,13 +2337,7 @@ class CustomPaymentView(discord.ui.View):
     await interaction.response.edit_message(
       content=None,
       embed=embed,
-      view=PaymentConfirmView(
-        self.bot_instance,
-        self.message_id,
-        PAYMENT_MODE_REDISTRIBUTE,
-        self.excluded_ids,
-        back_to_custom=True,
-      ),
+      view=confirm_view,
     )
 
   @discord.ui.button(
@@ -1948,22 +2352,19 @@ class CustomPaymentView(discord.ui.View):
       await interaction.response.edit_message(content="❌ Контракт не знайдено.", view=None)
       return
 
-    embed = payment_preview_embed(
+    embed, confirm_view = await payment_preview_with_debts(
+      interaction,
+      self.bot_instance,
       row,
       PAYMENT_MODE_FAMILY_SHARE,
       self.excluded_ids,
+      back_to_custom=True,
     )
 
     await interaction.response.edit_message(
       content=None,
       embed=embed,
-      view=PaymentConfirmView(
-        self.bot_instance,
-        self.message_id,
-        PAYMENT_MODE_FAMILY_SHARE,
-        self.excluded_ids,
-        back_to_custom=True,
-      ),
+      view=confirm_view,
     )
 
   @discord.ui.button(
@@ -2280,7 +2681,9 @@ class UnpaidCompletedView(discord.ui.View):
       )
       return
 
-    embed = payment_preview_embed(
+    embed, confirm_view = await payment_preview_with_debts(
+      interaction,
+      self.bot_instance,
       row,
       PAYMENT_MODE_NORMAL,
       [],
@@ -2288,11 +2691,7 @@ class UnpaidCompletedView(discord.ui.View):
 
     await interaction.response.send_message(
       embed=embed,
-      view=PaymentConfirmView(
-        self.bot_instance,
-        interaction.message.id,
-        PAYMENT_MODE_NORMAL,
-      ),
+      view=confirm_view,
       ephemeral=True,
     )
 
@@ -2330,7 +2729,9 @@ class UnpaidCompletedView(discord.ui.View):
       )
       return
 
-    embed = payment_preview_embed(
+    embed, confirm_view = await payment_preview_with_debts(
+      interaction,
+      self.bot_instance,
       row,
       PAYMENT_MODE_LEGACY_FAMILY,
       [],
@@ -2338,11 +2739,7 @@ class UnpaidCompletedView(discord.ui.View):
 
     await interaction.response.send_message(
       embed=embed,
-      view=PaymentConfirmView(
-        self.bot_instance,
-        interaction.message.id,
-        PAYMENT_MODE_LEGACY_FAMILY,
-      ),
+      view=confirm_view,
       ephemeral=True,
     )
 
@@ -3802,47 +4199,287 @@ def build_daily_stats_embed(guild_id: int, page: int = 0):
   return embed, page, total_pages
 
 
-def build_member_stats_embed(guild_id: int) -> discord.Embed:
+def build_member_stats_embed(
+  guild_id: int,
+  user_id: Optional[int] = None,
+) -> discord.Embed:
+  if user_id is None:
+    return discord.Embed(
+      title="👥 Статистика • Учасники",
+      description="Оберіть учасника зі списку нижче.",
+      color=discord.Color.blurple(),
+    )
+
   points, participations, rating_users, _ = rating_data_for_guild(guild_id)
   earnings = earnings_data_for_guild(guild_id)
 
-  money_users = sorted(
-    earnings["member_earnings"],
-    key=lambda uid: earnings["member_earnings"][uid],
-    reverse=True,
+  all_points, all_participations, all_users = rating_data_for_guild_all_time(guild_id)
+  all_earnings = earnings_data_for_guild_all_time(guild_id)
+
+  position = rating_users.index(user_id) + 1 if user_id in rating_users else None
+  all_position = all_users.index(user_id) + 1 if user_id in all_users else None
+
+  current_received = earnings["member_earnings"].get(user_id, 0)
+  all_received = all_earnings["member_earnings"].get(user_id, 0)
+
+  pending_debt = db.pending_admin_debt_total(guild_id, user_id)
+
+  current_family_contribution = db.family_contribution_for_user(
+    guild_id,
+    user_id,
+    earnings["reset_at"],
+  )
+  all_family_contribution = db.family_contribution_for_user(
+    guild_id,
+    user_id,
+    None,
   )
 
+  unpaid_now = [
+    row for row in earnings["unpaid_rows"]
+    if user_id in parse_ids(row["participant_ids"])
+  ]
+  paid_period = [
+    row for row in earnings["paid_rows"]
+    if user_id in parse_ids(row["participant_ids"])
+  ]
+
   embed = discord.Embed(
-    title="👥 Статистика • Учасники • Поточний період",
+    title="👤 Статистика учасника",
+    description=f"<@{user_id}>",
     color=discord.Color.blurple(),
   )
 
-  if rating_users:
-    rating_lines = [
-      f"**{idx}.** <@{uid}> — **{format_points_with_word(points[uid])}** • {participations[uid]} участей"
-      for idx, uid in enumerate(rating_users[:10], start=1)
-    ]
-    embed.add_field(
-      name="🏆 Рейтинг",
-      value="\n".join(rating_lines),
-      inline=False,
-    )
+  embed.add_field(
+    name="🏆 Поточний рейтинг",
+    value=(
+      (f"Місце: **#{position}**\n" if position else "Місце: **—**\n")
+      + f"Бали: **{format_points_with_word(points[user_id])}**\n"
+      + f"Участей: **{participations[user_id]}**"
+    ),
+    inline=True,
+  )
 
-  if money_users:
-    money_lines = [
-      f"**{idx}.** <@{uid}> — **{format_cents(earnings['member_earnings'][uid])}**"
-      for idx, uid in enumerate(money_users[:10], start=1)
-    ]
-    embed.add_field(
-      name="💵 Заробіток",
-      value="\n".join(money_lines),
-      inline=False,
-    )
+  embed.add_field(
+    name="💵 Поточні фінанси",
+    value=(
+      f"Отримано: **{format_cents(current_received)}**\n"
+      f"Борг лідера: **{format_cents(pending_debt)}**\n"
+      f"Оплачених контрактів: **{len(paid_period)}**\n"
+      f"Очікують оплати: **{len(unpaid_now)}**"
+    ),
+    inline=True,
+  )
 
-  if not rating_users and not money_users:
-    embed.description = "Поки немає статистики."
+  embed.add_field(
+    name="🏦 Особистий внесок у Банк сім'ї",
+    value=(
+      f"Поточний період: **{format_cents(current_family_contribution)}**\n"
+      f"За весь час: **{format_cents(all_family_contribution)}**"
+    ),
+    inline=False,
+  )
+
+  embed.add_field(
+    name="🗂️ За весь час",
+    value=(
+      (f"Місце: **#{all_position}**\n" if all_position else "Місце: **—**\n")
+      + f"Бали: **{format_points_with_word(all_points[user_id])}**\n"
+      + f"Участей: **{all_participations[user_id]}**\n"
+      + f"Отримано: **{format_cents(all_received)}**"
+    ),
+    inline=False,
+  )
 
   return embed
+
+
+def member_stats_page(guild_id: int, page: int, page_size: int = 25):
+  user_ids = db.participant_ids_for_guild(guild_id)
+  total_pages = max(1, (len(user_ids) + page_size - 1) // page_size)
+  page = max(0, min(page, total_pages - 1))
+  return user_ids[page * page_size:(page + 1) * page_size], page, total_pages
+
+
+async def member_labels(
+  guild: discord.Guild,
+  user_ids: list[int],
+) -> dict[int, str]:
+  labels = {}
+  for uid in user_ids:
+    member = await fetch_member_safe(guild, uid)
+    labels[uid] = member.display_name if member else f"ID {uid}"
+  return labels
+
+
+class MemberStatsSelect(discord.ui.Select):
+  def __init__(
+    self,
+    guild_id: int,
+    page: int,
+    user_ids: list[int],
+    labels: dict[int, str],
+  ):
+    self.guild_id = guild_id
+    self.page = page
+
+    options = [
+      discord.SelectOption(
+        label=labels.get(uid, f"ID {uid}")[:100],
+        value=str(uid),
+        description=f"Статистика учасника • {uid}"[:100],
+      )
+      for uid in user_ids
+    ]
+
+    if not options:
+      options = [
+        discord.SelectOption(
+          label="Учасників ще немає",
+          value="none",
+        )
+      ]
+
+    super().__init__(
+      placeholder="Оберіть учасника",
+      min_values=1,
+      max_values=1,
+      options=options,
+      disabled=(options[0].value == "none"),
+      row=0,
+    )
+
+  async def callback(self, interaction: discord.Interaction):
+    uid = int(self.values[0])
+    view = await build_member_stats_picker_view(
+      interaction.guild,
+      self.guild_id,
+      self.page,
+    )
+    await interaction.response.edit_message(
+      embed=build_member_stats_embed(self.guild_id, uid),
+      view=view,
+    )
+
+
+class MemberStatsPickerView(discord.ui.View):
+  def __init__(
+    self,
+    guild_id: int,
+    page: int,
+    total_pages: int,
+    user_ids: list[int],
+    labels: dict[int, str],
+  ):
+    super().__init__(timeout=300)
+    self.guild_id = guild_id
+    self.page = page
+    self.total_pages = total_pages
+
+    self.add_item(
+      MemberStatsSelect(
+        guild_id,
+        page,
+        user_ids,
+        labels,
+      )
+    )
+
+    self.previous.disabled = page <= 0
+    self.page_label.label = f"{page + 1}/{total_pages}"
+    self.next_page.disabled = page >= total_pages - 1
+
+  @discord.ui.button(
+    label="Назад",
+    emoji="◀️",
+    style=discord.ButtonStyle.secondary,
+    row=1,
+  )
+  async def previous(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    view = await build_member_stats_picker_view(
+      interaction.guild,
+      self.guild_id,
+      self.page - 1,
+    )
+    await interaction.response.edit_message(
+      embed=build_member_stats_embed(self.guild_id),
+      view=view,
+    )
+
+  @discord.ui.button(
+    label="1/1",
+    style=discord.ButtonStyle.secondary,
+    disabled=True,
+    row=1,
+  )
+  async def page_label(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    pass
+
+  @discord.ui.button(
+    label="Далі",
+    emoji="▶️",
+    style=discord.ButtonStyle.secondary,
+    row=1,
+  )
+  async def next_page(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    view = await build_member_stats_picker_view(
+      interaction.guild,
+      self.guild_id,
+      self.page + 1,
+    )
+    await interaction.response.edit_message(
+      embed=build_member_stats_embed(self.guild_id),
+      view=view,
+    )
+
+  @discord.ui.button(
+    label="До статистики",
+    emoji="↩️",
+    style=discord.ButtonStyle.secondary,
+    row=2,
+  )
+  async def back(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      embed=build_admin_general_stats_embed(self.guild_id),
+      view=AdminStatsView(self.guild_id, "general"),
+    )
+
+
+async def build_member_stats_picker_view(
+  guild: Optional[discord.Guild],
+  guild_id: int,
+  page: int = 0,
+):
+  user_ids, page, total_pages = member_stats_page(guild_id, page)
+
+  if guild is not None:
+    labels = await member_labels(guild, user_ids)
+  else:
+    labels = {uid: f"ID {uid}" for uid in user_ids}
+
+  return MemberStatsPickerView(
+    guild_id,
+    page,
+    total_pages,
+    user_ids,
+    labels,
+  )
 
 
 class AdminStatsView(discord.ui.View):
@@ -3934,9 +4571,14 @@ class AdminStatsView(discord.ui.View):
     interaction: discord.Interaction,
     button: discord.ui.Button,
   ):
+    view = await build_member_stats_picker_view(
+      interaction.guild,
+      self.guild_id,
+      0,
+    )
     await interaction.response.edit_message(
       embed=build_member_stats_embed(self.guild_id),
-      view=AdminStatsView(self.guild_id, "members"),
+      view=view,
     )
 
   @discord.ui.button(
@@ -4380,6 +5022,282 @@ async def annul_contract(
     ),
     ephemeral=True,
   )
+
+
+
+
+async def debt_user_label(
+  guild: discord.Guild,
+  user_id: int,
+) -> str:
+  member = await fetch_member_safe(guild, user_id)
+  return member.display_name if member else f"ID {user_id}"
+
+
+class DebtUserSelect(discord.ui.Select):
+  def __init__(
+    self,
+    guild_id: int,
+    rows,
+    labels: dict[int, str],
+  ):
+    self.guild_id = guild_id
+
+    options = [
+      discord.SelectOption(
+        label=labels.get(row["user_id"], f"ID {row['user_id']}")[:100],
+        value=str(row["user_id"]),
+        description=(
+          f"Борг: {format_cents(row['total_cents'])} • "
+          f"контрактів: {row['debt_count']}"
+        )[:100],
+      )
+      for row in rows[:25]
+    ]
+
+    super().__init__(
+      placeholder="Оберіть зама",
+      min_values=1,
+      max_values=1,
+      options=options,
+      row=0,
+    )
+
+  async def callback(self, interaction: discord.Interaction):
+    uid = int(self.values[0])
+    await show_debt_user(interaction, uid)
+
+
+class DebtListView(discord.ui.View):
+  def __init__(
+    self,
+    guild_id: int,
+    rows,
+    labels: dict[int, str],
+  ):
+    super().__init__(timeout=300)
+    self.add_item(DebtUserSelect(guild_id, rows, labels))
+
+
+class DebtPayView(discord.ui.View):
+  def __init__(self, user_id: int):
+    super().__init__(timeout=180)
+    self.user_id = user_id
+
+  @discord.ui.button(
+    label="Оплатити борг",
+    emoji="💵",
+    style=discord.ButtonStyle.success,
+  )
+  async def pay(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    if not isinstance(interaction.user, discord.Member) or not leader_member(interaction.user):
+      await interaction.response.send_message(
+        "❌ Закривати борг замам може тільки лідер.",
+        ephemeral=True,
+      )
+      return
+
+    guild = interaction.guild
+    if guild is None:
+      await interaction.response.send_message(
+        "❌ Це працює тільки на сервері.",
+        ephemeral=True,
+      )
+      return
+
+    debts = db.pending_admin_debts_for_user(
+      guild.id,
+      self.user_id,
+    )
+    if not debts:
+      await interaction.response.edit_message(
+        content="✅ Боргу вже немає.",
+        embed=None,
+        view=None,
+      )
+      return
+
+    total = sum(row["amount_cents"] for row in debts)
+
+    await interaction.response.edit_message(
+      content="⏳ Закриваю борг...",
+      embed=None,
+      view=None,
+    )
+
+    settled = db.settle_admin_debts_for_user(
+      guild.id,
+      self.user_id,
+      interaction.user.id,
+    )
+
+    for row in settled:
+      await refresh_completed_message(row["message_id"])
+
+    await audit_log(
+      guild,
+      "💵 Борг заму виплачено",
+      (
+        f"Зам: <@{self.user_id}>\n"
+        f"Сума: **{format_cents(total)}**\n"
+        f"Контрактів: **{len(settled)}**\n"
+        f"Оплатив/ла: <@{interaction.user.id}>"
+      ),
+      discord.Color.green(),
+    )
+
+    await interaction.edit_original_response(
+      content=(
+        f"✅ <@{self.user_id}> виплачено **{format_cents(total)}**.\n"
+        "Борг закрито."
+      ),
+      embed=None,
+      view=None,
+    )
+
+  @discord.ui.button(
+    label="Назад",
+    emoji="↩️",
+    style=discord.ButtonStyle.secondary,
+  )
+  async def back(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await send_debts_list(interaction, edit=True)
+
+
+async def show_debt_user(
+  interaction: discord.Interaction,
+  user_id: int,
+):
+  guild = interaction.guild
+  if guild is None:
+    return
+
+  debts = db.pending_admin_debts_for_user(guild.id, user_id)
+  total = sum(row["amount_cents"] for row in debts)
+  label = await debt_user_label(guild, user_id)
+
+  embed = discord.Embed(
+    title="💰 Борг заму",
+    description=(
+      f"**{label}** • <@{user_id}>\n"
+      f"Загальний борг: **{format_cents(total)}**\n"
+      f"Контрактів у боргу: **{len(debts)}**"
+    ),
+    color=discord.Color.gold(),
+  )
+
+  if debts:
+    lines = [
+      f"#{row['contract_id']} • {row['contract_name']} — **{format_cents(row['amount_cents'])}**"
+      for row in debts[:10]
+    ]
+    if len(debts) > 10:
+      lines.append(f"…і ще {len(debts) - 10}")
+    embed.add_field(
+      name="Контракти",
+      value="\n".join(lines),
+      inline=False,
+    )
+
+  await interaction.response.edit_message(
+    content=None,
+    embed=embed,
+    view=DebtPayView(user_id),
+  )
+
+
+async def send_debts_list(
+  interaction: discord.Interaction,
+  edit: bool = False,
+):
+  guild = interaction.guild
+  if guild is None:
+    return
+
+  rows = db.pending_admin_debt_summary(guild.id)
+
+  if not rows:
+    embed = discord.Embed(
+      title="💰 Борги замам",
+      description="✅ Поточних боргів немає.",
+      color=discord.Color.green(),
+    )
+    if edit:
+      await interaction.response.edit_message(
+        content=None,
+        embed=embed,
+        view=None,
+      )
+    else:
+      await interaction.response.send_message(
+        embed=embed,
+        ephemeral=True,
+      )
+    return
+
+  labels = {}
+  for row in rows[:25]:
+    labels[row["user_id"]] = await debt_user_label(
+      guild,
+      row["user_id"],
+    )
+
+  total = sum(row["total_cents"] for row in rows)
+
+  lines = [
+    (
+      f"<@{row['user_id']}> — **{format_cents(row['total_cents'])}** "
+      f"• {row['debt_count']} контракт(ів)"
+    )
+    for row in rows[:25]
+  ]
+
+  embed = discord.Embed(
+    title="💰 Борги замам",
+    description=(
+      f"Загальний борг: **{format_cents(total)}**\n\n"
+      + "\n".join(lines)
+    ),
+    color=discord.Color.gold(),
+  )
+
+  view = DebtListView(guild.id, rows, labels)
+
+  if edit:
+    await interaction.response.edit_message(
+      content=None,
+      embed=embed,
+      view=view,
+    )
+  else:
+    await interaction.response.send_message(
+      embed=embed,
+      view=view,
+      ephemeral=True,
+    )
+
+
+@bot.tree.command(
+  name="debts",
+  description="Показати борги замам за виконані контракти",
+)
+async def debts(interaction: discord.Interaction):
+  if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
+    await interaction.response.send_message(
+      "❌ Команда доступна тільки керівництву.",
+      ephemeral=True,
+    )
+    return
+
+  await send_debts_list(interaction)
 
 
 @bot.tree.command(name="stats", description="Статистика контрактів для керівництва")

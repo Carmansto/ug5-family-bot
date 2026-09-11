@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from fractions import Fraction
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
@@ -18,6 +19,7 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 GUILD_ID = int(os.getenv("GUILD_ID", "0") or 0)
 CONTRACT_CHANNEL_ID = int(os.getenv("CONTRACT_CHANNEL_ID", "0") or 0)
+LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0") or 0)
 
 # Backward compatible with your current setup.
 ADMIN_ROLE_ID = int(os.getenv("ADMIN_ROLE_ID", "0") or 0)
@@ -33,6 +35,11 @@ if ADMIN_ROLE_ID:
 
 DB_PATH = os.getenv("DB_PATH", "contracts.db").strip()
 FAMILY_PERCENT = Decimal(os.getenv("FAMILY_PERCENT", os.getenv("FOMO_PERCENT", "15")).strip() or "15")
+TIMEZONE_NAME = os.getenv("TIMEZONE", "Europe/Kyiv").strip() or "Europe/Kyiv"
+try:
+  LOCAL_TZ = ZoneInfo(TIMEZONE_NAME)
+except Exception:
+  LOCAL_TZ = timezone.utc
 
 if not TOKEN:
   raise RuntimeError("DISCORD_TOKEN is empty.")
@@ -121,9 +128,51 @@ def ukrainian_sort_key(text: str):
 def format_points(value: Fraction) -> str:
   if value.denominator == 1:
     return str(value.numerator)
-  # 0.5 / 0.333 / etc.
   txt = f"{float(value):.3f}".rstrip("0").rstrip(".")
   return txt
+
+
+def format_points_with_word(value: Fraction) -> str:
+  """1 бал, 2 бали, 10 балів, 1.65 бала."""
+  number = format_points(value)
+
+  if value.denominator != 1:
+    return f"{number} бала"
+
+  n = abs(value.numerator)
+  last_two = n % 100
+  last = n % 10
+
+  if last_two in (11, 12, 13, 14):
+    word = "балів"
+  elif last == 1:
+    word = "бал"
+  elif last in (2, 3, 4):
+    word = "бали"
+  else:
+    word = "балів"
+
+  return f"{number} {word}"
+
+
+def local_date_from_iso(value: Optional[str]):
+  if not value:
+    return None
+
+  try:
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+      dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(LOCAL_TZ).date()
+  except Exception:
+    return None
+
+
+def format_day(day) -> str:
+  weekdays = (
+    "Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"
+  )
+  return f"{weekdays[day.weekday()]}, {day.strftime('%d.%m.%Y')}"
 
 
 def split_payment(gross_dollars: int, member_ids: list[int]) -> tuple[int, int, dict[int, int]]:
@@ -146,6 +195,172 @@ def split_payment(gross_dollars: int, member_ids: list[int]) -> tuple[int, int, 
     payouts[uid] = base + (1 if i < remainder else 0)
 
   return fomo_cents, net_cents, payouts
+
+
+PAYMENT_MODE_NORMAL = "normal"
+PAYMENT_MODE_REDISTRIBUTE = "redistribute"
+PAYMENT_MODE_FAMILY_SHARE = "family_share"
+PAYMENT_MODE_LEGACY_FAMILY = "family"
+
+
+def payment_mode_label(mode: str) -> str:
+  labels = {
+    PAYMENT_MODE_NORMAL: "Звичайна оплата",
+    PAYMENT_MODE_REDISTRIBUTE: "Розділити між рештою",
+    PAYMENT_MODE_FAMILY_SHARE: "Частку винятків у сім'ю",
+    PAYMENT_MODE_LEGACY_FAMILY: "На фаму",
+  }
+  return labels.get(mode, "Оплата")
+
+
+def calculate_payment(
+  gross_dollars: int,
+  participant_ids: list[int],
+  payment_mode: str = PAYMENT_MODE_NORMAL,
+  excluded_payment_ids: Optional[list[int]] = None,
+) -> tuple[int, int, dict[int, int], list[int]]:
+  """
+  Returns:
+    family_cents,
+    participant_pool_cents,
+    payouts_by_user,
+    normalized_excluded_ids
+
+  normal:
+    FAMILY_PERCENT -> family, rest -> all performers.
+
+  redistribute:
+    FAMILY_PERCENT -> family, rest -> performers who were NOT excluded.
+
+  family_share:
+    First calculate normal shares for ALL original performers.
+    Excluded performers' exact shares are moved to family bank.
+    Non-excluded performers keep their original shares.
+
+  legacy family:
+    100% -> family.
+  """
+  if not participant_ids:
+    raise ValueError("No participants")
+
+  participant_ids = list(dict.fromkeys(int(uid) for uid in participant_ids))
+
+  excluded_set = {
+    int(uid)
+    for uid in (excluded_payment_ids or [])
+    if int(uid) in participant_ids
+  }
+  excluded_ids = [
+    uid for uid in participant_ids
+    if uid in excluded_set
+  ]
+
+  if payment_mode == PAYMENT_MODE_LEGACY_FAMILY:
+    return gross_dollars * 100, 0, {}, participant_ids[:]
+
+  if payment_mode == PAYMENT_MODE_NORMAL:
+    family_cents, net_cents, payouts = split_payment(
+      gross_dollars,
+      participant_ids,
+    )
+    return family_cents, net_cents, payouts, []
+
+  if payment_mode == PAYMENT_MODE_REDISTRIBUTE:
+    eligible_ids = [
+      uid for uid in participant_ids
+      if uid not in excluded_set
+    ]
+    if not eligible_ids:
+      raise ValueError("No eligible payout recipients")
+
+    family_cents, net_cents, payouts = split_payment(
+      gross_dollars,
+      eligible_ids,
+    )
+    return family_cents, net_cents, payouts, excluded_ids
+
+  if payment_mode == PAYMENT_MODE_FAMILY_SHARE:
+    base_family_cents, _, original_payouts = split_payment(
+      gross_dollars,
+      participant_ids,
+    )
+
+    family_cents = base_family_cents
+    payouts: dict[int, int] = {}
+
+    for uid in participant_ids:
+      amount = original_payouts[uid]
+      if uid in excluded_set:
+        family_cents += amount
+      else:
+        payouts[uid] = amount
+
+    net_cents = sum(payouts.values())
+    return family_cents, net_cents, payouts, excluded_ids
+
+  raise ValueError("Unknown payment mode")
+
+
+def payment_preview_embed(
+  row: sqlite3.Row,
+  payment_mode: str,
+  excluded_ids: Optional[list[int]] = None,
+) -> discord.Embed:
+  participants = parse_ids(row["participant_ids"])
+
+  family_cents, net_cents, payouts, normalized_excluded = calculate_payment(
+    row["price"],
+    participants,
+    payment_mode,
+    excluded_ids,
+  )
+
+  embed = discord.Embed(
+    title="💵 Перевірка оплати",
+    description=(
+      f"**{row['contract_name']}**\n"
+      f"Сума контракту: **{format_money_dollars(row['price'])} $**"
+    ),
+    color=discord.Color.gold(),
+  )
+
+  embed.add_field(
+    name="Спосіб",
+    value=payment_mode_label(payment_mode),
+    inline=False,
+  )
+  embed.add_field(
+    name="🏦 Банк сім'ї",
+    value=format_cents(family_cents),
+    inline=True,
+  )
+  embed.add_field(
+    name="💸 Учасникам",
+    value=format_cents(net_cents),
+    inline=True,
+  )
+
+  if normalized_excluded and payment_mode != PAYMENT_MODE_LEGACY_FAMILY:
+    embed.add_field(
+      name="🚫 Без виплати",
+      value=" ".join(f"<@{uid}>" for uid in normalized_excluded),
+      inline=False,
+    )
+
+  if payouts:
+    lines = [
+      f"<@{uid}> — **{format_cents(amount)}**"
+      for uid, amount in payouts.items()
+    ]
+    embed.add_field(
+      name="👤 Розподіл",
+      value="\n".join(lines),
+      inline=False,
+    )
+
+  embed.set_footer(text="Перевірте суми перед підтвердженням")
+  return embed
+
 
 
 def management_member(member: discord.Member) -> bool:
@@ -240,6 +455,8 @@ class Database:
       "net_cents": "ALTER TABLE contracts ADD COLUMN net_cents INTEGER",
       "payment_mode": "ALTER TABLE contracts ADD COLUMN payment_mode TEXT NOT NULL DEFAULT 'normal'",
       "excluded_payment_ids": "ALTER TABLE contracts ADD COLUMN excluded_payment_ids TEXT NOT NULL DEFAULT '[]'",
+      "annulled_by": "ALTER TABLE contracts ADD COLUMN annulled_by INTEGER",
+      "annulled_at": "ALTER TABLE contracts ADD COLUMN annulled_at TEXT",
     }
 
     for name, sql in migrations.items():
@@ -272,17 +489,21 @@ class Database:
         (row["id"],),
       ).fetchone()["cnt"]
 
-      payment_mode = row["payment_mode"] or "normal"
+      payment_mode = row["payment_mode"] or PAYMENT_MODE_NORMAL
+      excluded_ids = parse_ids(row["excluded_payment_ids"] or "[]")
       needs_totals = row["fomo_cents"] is None or row["net_cents"] is None
 
-      if payment_mode == "family":
-        needs_payouts = False
-        family_cents = row["price"] * 100
-        net_cents = 0
-        payouts = {}
-      else:
-        needs_payouts = payout_count == 0
-        family_cents, net_cents, payouts = split_payment(row["price"], member_ids)
+      try:
+        family_cents, net_cents, payouts, _ = calculate_payment(
+          row["price"],
+          member_ids,
+          payment_mode,
+          excluded_ids,
+        )
+      except ValueError:
+        continue
+
+      needs_payouts = bool(payouts) and payout_count == 0
 
       if not needs_totals and not needs_payouts:
         continue
@@ -375,7 +596,7 @@ class Database:
     FROM contract_types ct
     LEFT JOIN contracts c
      ON c.contract_type_id = ct.id
-     AND c.status != 'cancelled'
+     AND c.status NOT IN ('cancelled', 'annulled')
     WHERE ct.active = 1
     GROUP BY ct.id
     ORDER BY usage_count DESC, ct.name COLLATE NOCASE ASC
@@ -399,7 +620,7 @@ class Database:
     FROM contract_types ct
     LEFT JOIN contracts c
      ON c.contract_type_id = ct.id
-     AND c.status != 'cancelled'
+     AND c.status NOT IN ('cancelled', 'annulled')
     WHERE ct.active = 1
      AND ct.name LIKE ? COLLATE NOCASE
     GROUP BY ct.id
@@ -463,11 +684,33 @@ class Database:
     self.conn.commit()
     return cur.rowcount > 0
 
+  def annul_paid(self, message_id: int, annulled_by: int) -> bool:
+    """
+    Анулює вже оплачений контракт без фізичного видалення.
+    Старі payout-и залишаються в БД як історичний слід,
+    але через status='annulled' більше не потрапляють у статистику.
+    """
+    cur = self.conn.execute("""
+    UPDATE contracts
+    SET status = 'annulled',
+      annulled_by = ?,
+      annulled_at = ?
+    WHERE message_id = ?
+     AND status = 'paid'
+    """, (
+      annulled_by,
+      utc_now_iso(),
+      message_id,
+    ))
+    self.conn.commit()
+    return cur.rowcount > 0
+
+
   def pay_completed(
     self,
     message_id: int,
     paid_by: int,
-    payment_mode: str = "normal",
+    payment_mode: str = PAYMENT_MODE_NORMAL,
     excluded_payment_ids: Optional[list[int]] = None,
   ):
     row = self.get_completed_by_message(message_id)
@@ -478,40 +721,15 @@ class Database:
     if not participant_ids:
       return None
 
-    payment_mode = "family" if payment_mode == "family" else "normal"
-
-    excluded_set = {
-      int(uid)
-      for uid in (excluded_payment_ids or [])
-      if int(uid) in participant_ids
-    }
-    excluded_ids = [
-      uid for uid in participant_ids
-      if uid in excluded_set
-    ]
-
-    if payment_mode == "family":
-      # 100% у Банк сім'ї. Рейтинг усім виконавцям зберігається.
-      excluded_ids = participant_ids[:]
-      fomo_cents = row["price"] * 100
-      net_cents = 0
-      payouts = {}
-    else:
-      eligible_ids = [
-        uid for uid in participant_ids
-        if uid not in excluded_set
-      ]
-
-      # Якщо не платимо нікому — для цього є "На фаму".
-      if not eligible_ids:
-        return None
-
-      # 15% у Банк сім'ї, 85% діляться тільки між тими,
-      # кого адміністратор не виключив з оплати.
-      fomo_cents, net_cents, payouts = split_payment(
+    try:
+      fomo_cents, net_cents, payouts, excluded_ids = calculate_payment(
         row["price"],
-        eligible_ids,
+        participant_ids,
+        payment_mode,
+        excluded_payment_ids,
       )
+    except ValueError:
+      return None
 
     paid_at = utc_now_iso()
 
@@ -550,13 +768,12 @@ class Database:
         (contract_id,),
       )
 
-      if payment_mode != "family":
-        for uid, amount_cents in payouts.items():
-          self.conn.execute("""
-          INSERT INTO contract_payouts
-          (contract_id, user_id, amount_cents, created_at)
-          VALUES (?, ?, ?, ?)
-          """, (contract_id, uid, amount_cents, paid_at))
+      for uid, amount_cents in payouts.items():
+        self.conn.execute("""
+        INSERT INTO contract_payouts
+        (contract_id, user_id, amount_cents, created_at)
+        VALUES (?, ?, ?, ?)
+        """, (contract_id, uid, amount_cents, paid_at))
 
       self.conn.commit()
     except Exception:
@@ -572,6 +789,57 @@ class Database:
       "paid_at": paid_at,
     }
 
+  def update_completed_participants(
+    self,
+    message_id: int,
+    participant_ids: list[int],
+  ) -> bool:
+    participant_ids = list(dict.fromkeys(int(uid) for uid in participant_ids))
+    if not participant_ids:
+      return False
+
+    cur = self.conn.execute("""
+    UPDATE contracts
+    SET participant_ids = ?
+    WHERE message_id = ?
+     AND status = 'unpaid'
+    """, (
+      json.dumps(participant_ids),
+      message_id,
+    ))
+    self.conn.commit()
+    return cur.rowcount > 0
+
+  def update_completed_contract_type(
+    self,
+    message_id: int,
+    contract_type: sqlite3.Row,
+  ) -> bool:
+    cur = self.conn.execute("""
+    UPDATE contracts
+    SET contract_type_id = ?,
+      contract_name = ?,
+      price = ?,
+      cooldown = ?
+    WHERE message_id = ?
+     AND status = 'unpaid'
+    """, (
+      contract_type["id"],
+      contract_type["name"],
+      contract_type["price"],
+      contract_type["cooldown"],
+      message_id,
+    ))
+    self.conn.commit()
+    return cur.rowcount > 0
+
+  def all_for_guild(self, guild_id: int):
+    return self.conn.execute("""
+    SELECT * FROM contracts
+    WHERE guild_id = ?
+    ORDER BY id DESC
+    """, (guild_id,)).fetchall()
+
 
   def payouts_for_contract(self, contract_id: int):
     return self.conn.execute("""
@@ -584,7 +852,7 @@ class Database:
     return self.conn.execute("""
     SELECT * FROM contracts
     WHERE guild_id = ?
-     AND status != 'cancelled'
+     AND status NOT IN ('cancelled', 'annulled')
     ORDER BY id DESC
     """, (guild_id,)).fetchall()
 
@@ -636,10 +904,13 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
 
   if row["status"] == "paid":
     color = discord.Color.green()
-    if (row["payment_mode"] or "normal") == "family":
+    if (row["payment_mode"] or PAYMENT_MODE_NORMAL) == PAYMENT_MODE_LEGACY_FAMILY:
       status_text = "🏠 **На фаму**"
     else:
       status_text = "🟢 **Оплачено**"
+  elif row["status"] == "annulled":
+    color = discord.Color.dark_red()
+    status_text = "🚫 **Анульовано**"
   elif row["status"] == "cancelled":
     color = discord.Color.dark_grey()
     status_text = "⚫ **Скасовано**"
@@ -647,8 +918,15 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
     color = discord.Color.orange()
     status_text = "🔴 **Не оплачено**"
 
+  if row["status"] == "annulled":
+    title = "🚫 КОНТРАКТ АНУЛЬОВАНО"
+  elif row["status"] == "cancelled":
+    title = "❌ КОНТРАКТ СКАСОВАНО"
+  else:
+    title = "✅ КОНТРАКТ ВИКОНАНО"
+
   embed = discord.Embed(
-    title="✅ КОНТРАКТ ВИКОНАНО" if row["status"] != "cancelled" else "❌ КОНТРАКТ СКАСОВАНО",
+    title=title,
     color=color,
   )
 
@@ -669,16 +947,10 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
 
     fomo_cents = row["fomo_cents"] or 0
     net_cents = row["net_cents"] or 0
-    payment_mode = row["payment_mode"] or "normal"
-
-    bank_label = (
-      "🏦 Банк сім'ї (100%)"
-      if payment_mode == "family"
-      else f"🏦 Банк сім'ї ({FAMILY_PERCENT.normalize()}%)"
-    )
+    payment_mode = row["payment_mode"] or PAYMENT_MODE_NORMAL
 
     embed.add_field(
-      name=bank_label,
+      name="🏦 Банк сім'ї",
       value=format_cents(fomo_cents),
       inline=True,
     )
@@ -689,10 +961,21 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
     )
 
     excluded_payment_ids = parse_ids(row["excluded_payment_ids"] or "[]")
-    if payment_mode == "normal" and excluded_payment_ids:
+    if excluded_payment_ids and payment_mode != PAYMENT_MODE_LEGACY_FAMILY:
       embed.add_field(
         name="🚫 Без виплати",
         value=" ".join(f"<@{uid}>" for uid in excluded_payment_ids),
+        inline=False,
+      )
+
+    if payment_mode in (
+      PAYMENT_MODE_REDISTRIBUTE,
+      PAYMENT_MODE_FAMILY_SHARE,
+      PAYMENT_MODE_LEGACY_FAMILY,
+    ):
+      embed.add_field(
+        name="⚙️ Спосіб оплати",
+        value=payment_mode_label(payment_mode),
         inline=False,
       )
 
@@ -708,6 +991,42 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
         inline=False,
       )
 
+  if row["status"] == "annulled":
+    paid_ts = iso_to_unix(row["paid_at"])
+    annulled_ts = iso_to_unix(row["annulled_at"])
+    annulled_by = row["annulled_by"]
+
+    details = []
+    if annulled_by:
+      details.append(f"Анулював/ла: <@{annulled_by}>")
+    if annulled_ts:
+      details.append(f"<t:{annulled_ts}:f>")
+
+    if paid_ts:
+      embed.add_field(
+        name="Було оплачено",
+        value=f"<t:{paid_ts}:f>",
+        inline=True,
+      )
+
+    embed.add_field(
+      name="Було в Банк сім'ї",
+      value=format_cents(row["fomo_cents"] or 0),
+      inline=True,
+    )
+    embed.add_field(
+      name="Було учасникам",
+      value=format_cents(row["net_cents"] or 0),
+      inline=True,
+    )
+
+    if details:
+      embed.add_field(
+        name="Анулювання",
+        value=" • ".join(details),
+        inline=False,
+      )
+
   if row["status"] == "cancelled":
     cancelled_ts = iso_to_unix(row["cancelled_at"])
     cancelled_by = row["cancelled_by"]
@@ -720,6 +1039,7 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
       embed.add_field(name="Скасування", value=" • ".join(details), inline=False)
 
   embed.set_footer(text=f"Запис #{row['id']}")
+  embed.set_footer(text=f"ID контракту: {row['id']}")
   return embed
 
 
@@ -753,6 +1073,35 @@ async def refresh_completed_message(message_id: int):
     await message.edit(embed=build_completed_embed(row), view=view)
   except discord.DiscordException:
     pass
+
+
+async def audit_log(
+  guild: Optional[discord.Guild],
+  title: str,
+  description: str,
+  color: discord.Color = discord.Color.blurple(),
+):
+  if not LOG_CHANNEL_ID or guild is None:
+    return
+
+  try:
+    channel = guild.get_channel(LOG_CHANNEL_ID) or await bot.fetch_channel(LOG_CHANNEL_ID)
+    if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+      return
+
+    embed = discord.Embed(
+      title=title,
+      description=description,
+      color=color,
+      timestamp=datetime.now(timezone.utc),
+    )
+    await channel.send(embed=embed)
+  except discord.DiscordException:
+    pass
+
+
+def mentions(user_ids: list[int]) -> str:
+  return " ".join(f"<@{uid}>" for uid in user_ids) or "—"
 
 
 # ----------------------------
@@ -1217,8 +1566,12 @@ class ConfirmContractView(discord.ui.View):
       )
       return
 
-    # Відповідаємо Discord одразу, щоб кнопка не "думала" кілька секунд.
-    await interaction.response.defer()
+    # Одразу прибираємо кнопки, щоб подвійний клік не створив дубль.
+    await interaction.response.edit_message(
+      content="⏳ Записую контракт...",
+      embed=None,
+      view=None,
+    )
 
     placeholder = await channel.send("⏳ Записую контракт...")
 
@@ -1236,6 +1589,19 @@ class ConfirmContractView(discord.ui.View):
       content=None,
       embed=build_completed_embed(row),
       view=UnpaidCompletedView(self.bot_instance),
+    )
+
+    await audit_log(
+      guild,
+      "✅ Контракт записано",
+      (
+        f"Запис: **#{row['id']}**\n"
+        f"Контракт: **{row['contract_name']}**\n"
+        f"Сума: **{format_money_dollars(row['price'])} $**\n"
+        f"Виконавці: {mentions(self.participant_ids)}\n"
+        f"Записав/ла: <@{interaction.user.id}>"
+      ),
+      discord.Color.green(),
     )
 
     # Панель завжди переносимо в самий низ каналу.
@@ -1272,7 +1638,7 @@ class ConfirmContractView(discord.ui.View):
 
 
 # ----------------------------
-# Payment / cancel
+# Payment / cancel / correction
 # ----------------------------
 
 class CancelCompletedConfirmView(discord.ui.View):
@@ -1284,22 +1650,39 @@ class CancelCompletedConfirmView(discord.ui.View):
   @discord.ui.button(label="Так, скасувати", style=discord.ButtonStyle.danger, emoji="🗑️")
   async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.edit_message(
-        content="❌ Немає права.",
-        view=None,
-      )
+      await interaction.response.edit_message(content="❌ Немає права.", view=None)
       return
+
+    row_before = db.get_completed_by_message(self.message_id)
+
+    await interaction.response.edit_message(
+      content="⏳ Скасовую запис...",
+      view=None,
+    )
 
     ok = db.cancel_completed(self.message_id, interaction.user.id)
     if not ok:
-      await interaction.response.edit_message(
+      await interaction.edit_original_response(
         content="❌ Скасувати можна тільки неоплачений контракт.",
         view=None,
       )
       return
 
     await refresh_completed_message(self.message_id)
-    await interaction.response.edit_message(
+
+    if row_before:
+      await audit_log(
+        interaction.guild,
+        "🗑️ Контракт скасовано",
+        (
+          f"Запис: **#{row_before['id']}**\n"
+          f"Контракт: **{row_before['contract_name']}**\n"
+          f"Скасував/ла: <@{interaction.user.id}>"
+        ),
+        discord.Color.red(),
+      )
+
+    await interaction.edit_original_response(
       content="✅ Запис скасовано. Він більше не рахується в статистиці.",
       view=None,
     )
@@ -1309,12 +1692,144 @@ class CancelCompletedConfirmView(discord.ui.View):
     await interaction.response.edit_message(content="Скасування відмінено.", view=None)
 
 
-class PaymentExcludeSelect(discord.ui.Select):
+class PaymentConfirmView(discord.ui.View):
+  def __init__(
+    self,
+    bot_instance: "ContractBot",
+    message_id: int,
+    payment_mode: str,
+    excluded_ids: Optional[list[int]] = None,
+    back_to_custom: bool = False,
+  ):
+    super().__init__(timeout=180)
+    self.bot_instance = bot_instance
+    self.message_id = message_id
+    self.payment_mode = payment_mode
+    self.excluded_ids = excluded_ids or []
+    self.back_to_custom = back_to_custom
+
+  @discord.ui.button(
+    label="Підтвердити",
+    style=discord.ButtonStyle.success,
+    emoji="✅",
+  )
+  async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+    if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
+      await interaction.response.edit_message(content="❌ Немає права.", view=None)
+      return
+
+    row_before = db.get_completed_by_message(self.message_id)
+    if not row_before or row_before["status"] != "unpaid":
+      await interaction.response.edit_message(
+        content="❌ Контракт уже оплачений або скасований.",
+        embed=None,
+        view=None,
+      )
+      return
+
+    # Блокуємо повторне натискання одразу.
+    await interaction.response.edit_message(
+      content="⏳ Проводжу оплату...",
+      embed=None,
+      view=None,
+    )
+
+    result = db.pay_completed(
+      self.message_id,
+      interaction.user.id,
+      payment_mode=self.payment_mode,
+      excluded_payment_ids=self.excluded_ids,
+    )
+
+    if not result:
+      await interaction.edit_original_response(
+        content="❌ Не вдалося провести оплату.",
+        embed=None,
+        view=None,
+      )
+      return
+
+    await refresh_completed_message(self.message_id)
+
+    payouts_text = "\n".join(
+      f"<@{uid}> — **{format_cents(amount)}**"
+      for uid, amount in result["payouts"].items()
+    ) or "—"
+
+    excluded_text = (
+      "—"
+      if self.payment_mode == PAYMENT_MODE_LEGACY_FAMILY
+      else mentions(result["excluded_payment_ids"])
+    )
+
+    await audit_log(
+      interaction.guild,
+      "💵 Контракт оплачено",
+      (
+        f"Запис: **#{row_before['id']}**\n"
+        f"Контракт: **{row_before['contract_name']}**\n"
+        f"Спосіб: **{payment_mode_label(self.payment_mode)}**\n"
+        f"Банк сім'ї: **{format_cents(result['fomo_cents'])}**\n"
+        f"Учасникам: **{format_cents(result['net_cents'])}**\n"
+        f"Без виплати: {excluded_text}\n"
+        f"Розподіл:\n{payouts_text}\n"
+        f"Оплатив/ла: <@{interaction.user.id}>"
+      ),
+      discord.Color.green(),
+    )
+
+    await interaction.edit_original_response(
+      content="✅ Оплату проведено.",
+      embed=None,
+      view=None,
+    )
+
+  @discord.ui.button(
+    label="Назад",
+    style=discord.ButtonStyle.secondary,
+    emoji="↩️",
+  )
+  async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+    row = db.get_completed_by_message(self.message_id)
+    if not row or interaction.guild is None:
+      await interaction.response.edit_message(
+        content="❌ Контракт уже недоступний.",
+        embed=None,
+        view=None,
+      )
+      return
+
+    if self.back_to_custom:
+      await interaction.response.edit_message(
+        content=(
+          "⚙️ **Налаштувати оплату**\n"
+          "Оберіть, кого не потрібно оплачувати, а потім спосіб розподілу."
+        ),
+        embed=None,
+        view=CustomPaymentView(
+          self.bot_instance,
+          self.message_id,
+          interaction.guild,
+          parse_ids(row["participant_ids"]),
+          self.excluded_ids,
+        ),
+      )
+    else:
+      await interaction.response.edit_message(
+        content="Оплату не проведено.",
+        embed=None,
+        view=None,
+      )
+
+
+class CustomExcludeSelect(discord.ui.Select):
   def __init__(
     self,
     guild: discord.Guild,
     participant_ids: list[int],
+    selected_ids: Optional[list[int]] = None,
   ):
+    selected = set(selected_ids or [])
     options = []
 
     for uid in participant_ids:
@@ -1325,6 +1840,7 @@ class PaymentExcludeSelect(discord.ui.Select):
           label=label[:100],
           value=str(uid),
           description="Не виплачувати гроші цьому учаснику",
+          default=uid in selected,
         )
       )
 
@@ -1337,152 +1853,117 @@ class PaymentExcludeSelect(discord.ui.Select):
     )
 
   async def callback(self, interaction: discord.Interaction):
-    view: PaymentSetupView = self.view  # type: ignore
+    view: CustomPaymentView = self.view  # type: ignore
     view.excluded_ids = [int(uid) for uid in self.values]
 
-    all_excluded = len(view.excluded_ids) >= len(view.participant_ids)
-    view.confirm_exclusions.disabled = all_excluded
-
-    excluded_text = " ".join(f"<@{uid}>" for uid in view.excluded_ids)
-
-    if all_excluded:
-      content = (
-        f"🚫 **Без виплати:** {excluded_text}\n\n"
-        "Не можна виключити всіх при звичайній оплаті. "
-        "Якщо вся сума має піти сім'ї — використай **🏠 На фаму**."
-      )
-    else:
-      excluded_set = set(view.excluded_ids)
-      paid_ids = [
-        uid for uid in view.participant_ids
-        if uid not in excluded_set
-      ]
-      paid_text = " ".join(f"<@{uid}>" for uid in paid_ids)
-
-      content = (
-        f"💵 **Отримають гроші:** {paid_text}\n"
-        f"🚫 **Без виплати:** {excluded_text}\n\n"
-        "🏆 Рейтинг зараховується всім виконавцям."
-      )
+    view.redistribute.disabled = len(view.excluded_ids) >= len(view.participant_ids)
+    view.family_share.disabled = not bool(view.excluded_ids)
 
     await interaction.response.edit_message(
-      content=content,
+      content=(
+        "⚙️ **Налаштувати оплату**\n"
+        f"🚫 Без виплати: {mentions(view.excluded_ids)}\n\n"
+        "Оберіть спосіб:"
+      ),
       view=view,
     )
 
 
-class PaymentSetupView(discord.ui.View):
+class CustomPaymentView(discord.ui.View):
   def __init__(
     self,
     bot_instance: "ContractBot",
     message_id: int,
     guild: discord.Guild,
     participant_ids: list[int],
+    selected_ids: Optional[list[int]] = None,
   ):
     super().__init__(timeout=300)
     self.bot_instance = bot_instance
     self.message_id = message_id
     self.guild = guild
     self.participant_ids = participant_ids
-    self.excluded_ids: list[int] = []
+    self.excluded_ids = selected_ids or []
 
     self.add_item(
-      PaymentExcludeSelect(
+      CustomExcludeSelect(
         guild,
         participant_ids,
+        self.excluded_ids,
       )
     )
 
-  async def finish_payment(
-    self,
-    interaction: discord.Interaction,
-    excluded_ids: list[int],
-  ):
-    if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.edit_message(
-        content="❌ Немає права.",
-        view=None,
-      )
-      return
-
-    if excluded_ids and len(excluded_ids) >= len(self.participant_ids):
-      await interaction.response.edit_message(
-        content=(
-          "❌ Не можна виключити всіх із звичайної оплати. "
-          "Для цього використай **🏠 На фаму**."
-        ),
-        view=None,
-      )
-      return
-
-    result = db.pay_completed(
-      self.message_id,
-      interaction.user.id,
-      payment_mode="normal",
-      excluded_payment_ids=excluded_ids,
+    self.redistribute.disabled = (
+      not self.excluded_ids
+      or len(self.excluded_ids) >= len(self.participant_ids)
     )
-
-    if not result:
-      await interaction.response.edit_message(
-        content="❌ Контракт уже оплачений/скасований або немає отримувачів.",
-        view=None,
-      )
-      return
-
-    await refresh_completed_message(self.message_id)
-
-    if excluded_ids:
-      excluded_set = set(excluded_ids)
-      excluded_text = " ".join(f"<@{uid}>" for uid in excluded_ids)
-      paid_ids = [
-        uid for uid in self.participant_ids
-        if uid not in excluded_set
-      ]
-      paid_text = " ".join(f"<@{uid}>" for uid in paid_ids)
-
-      await interaction.response.edit_message(
-        content=(
-          "✅ Контракт оплачено.\n"
-          f"💵 Отримали: {paid_text}\n"
-          f"🚫 Без виплати: {excluded_text}\n"
-          "🏆 Рейтинг зарахований усім виконавцям."
-        ),
-        view=None,
-      )
-    else:
-      await interaction.response.edit_message(
-        content="✅ Контракт оплачено всім виконавцям.",
-        view=None,
-      )
+    self.family_share.disabled = not bool(self.excluded_ids)
 
   @discord.ui.button(
-    label="Оплатити всім",
+    label="Розділити між рештою",
     style=discord.ButtonStyle.success,
-    emoji="💵",
+    emoji="💸",
     row=1,
   )
-  async def pay_all(
-    self,
-    interaction: discord.Interaction,
-    button: discord.ui.Button,
-  ):
-    await self.finish_payment(interaction, [])
+  async def redistribute(self, interaction: discord.Interaction, button: discord.ui.Button):
+    row = db.get_completed_by_message(self.message_id)
+    if not row:
+      await interaction.response.edit_message(content="❌ Контракт не знайдено.", view=None)
+      return
+
+    try:
+      embed = payment_preview_embed(
+        row,
+        PAYMENT_MODE_REDISTRIBUTE,
+        self.excluded_ids,
+      )
+    except ValueError:
+      await interaction.response.edit_message(
+        content="❌ Для цього способу має залишитися хоча б один отримувач.",
+        view=self,
+      )
+      return
+
+    await interaction.response.edit_message(
+      content=None,
+      embed=embed,
+      view=PaymentConfirmView(
+        self.bot_instance,
+        self.message_id,
+        PAYMENT_MODE_REDISTRIBUTE,
+        self.excluded_ids,
+        back_to_custom=True,
+      ),
+    )
 
   @discord.ui.button(
-    label="Оплатити без вибраних",
+    label="Частку в сім'ю",
     style=discord.ButtonStyle.primary,
-    emoji="✅",
-    disabled=True,
+    emoji="🏦",
     row=1,
   )
-  async def confirm_exclusions(
-    self,
-    interaction: discord.Interaction,
-    button: discord.ui.Button,
-  ):
-    await self.finish_payment(
-      interaction,
+  async def family_share(self, interaction: discord.Interaction, button: discord.ui.Button):
+    row = db.get_completed_by_message(self.message_id)
+    if not row:
+      await interaction.response.edit_message(content="❌ Контракт не знайдено.", view=None)
+      return
+
+    embed = payment_preview_embed(
+      row,
+      PAYMENT_MODE_FAMILY_SHARE,
       self.excluded_ids,
+    )
+
+    await interaction.response.edit_message(
+      content=None,
+      embed=embed,
+      view=PaymentConfirmView(
+        self.bot_instance,
+        self.message_id,
+        PAYMENT_MODE_FAMILY_SHARE,
+        self.excluded_ids,
+        back_to_custom=True,
+      ),
     )
 
   @discord.ui.button(
@@ -1491,13 +1972,278 @@ class PaymentSetupView(discord.ui.View):
     emoji="↩️",
     row=1,
   )
-  async def cancel_payment(
+  async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+    await interaction.response.edit_message(
+      content="Налаштування оплати закрито.",
+      embed=None,
+      view=None,
+    )
+
+
+class CorrectionPerformerSelect(discord.ui.UserSelect):
+  def __init__(self, bot_instance: "ContractBot", message_id: int):
+    super().__init__(
+      placeholder="Оберіть правильних виконавців",
+      min_values=1,
+      max_values=25,
+    )
+    self.bot_instance = bot_instance
+    self.message_id = message_id
+
+  async def callback(self, interaction: discord.Interaction):
+    if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
+      await interaction.response.edit_message(content="❌ Немає права.", view=None)
+      return
+
+    new_ids = [u.id for u in self.values if not getattr(u, "bot", False)]
+    row_before = db.get_completed_by_message(self.message_id)
+
+    if not row_before or not db.update_completed_participants(self.message_id, new_ids):
+      await interaction.response.edit_message(
+        content="❌ Змінити можна тільки неоплачений контракт.",
+        view=None,
+      )
+      return
+
+    await refresh_completed_message(self.message_id)
+
+    await audit_log(
+      interaction.guild,
+      "✏️ Змінено виконавців",
+      (
+        f"Запис: **#{row_before['id']}**\n"
+        f"Було: {mentions(parse_ids(row_before['participant_ids']))}\n"
+        f"Стало: {mentions(new_ids)}\n"
+        f"Змінив/ла: <@{interaction.user.id}>"
+      ),
+      discord.Color.orange(),
+    )
+
+    await interaction.response.edit_message(
+      content=f"✅ Виконавців оновлено: {mentions(new_ids)}",
+      view=None,
+    )
+
+
+class CorrectionPerformerView(discord.ui.View):
+  def __init__(self, bot_instance: "ContractBot", message_id: int):
+    super().__init__(timeout=180)
+    self.add_item(CorrectionPerformerSelect(bot_instance, message_id))
+
+
+def correction_contract_page(page: int, page_size: int = 25):
+  rows = sorted(
+    db.list_active_contract_types(limit=500),
+    key=lambda row: ukrainian_sort_key(row["name"]),
+  )
+  total_pages = max(1, (len(rows) + page_size - 1) // page_size)
+  page = max(0, min(page, total_pages - 1))
+  return rows[page * page_size:(page + 1) * page_size], page, total_pages
+
+
+class CorrectionContractSelect(discord.ui.Select):
+  def __init__(self, bot_instance: "ContractBot", message_id: int, page: int):
+    self.bot_instance = bot_instance
+    self.message_id = message_id
+    rows, self.page, self.total_pages = correction_contract_page(page)
+
+    options = [
+      discord.SelectOption(
+        label=row["name"][:100],
+        value=str(row["id"]),
+        description=f"{format_money_dollars(row['price'])} $ • КД {row['cooldown']}"[:100],
+      )
+      for row in rows
+    ]
+
+    super().__init__(
+      placeholder=f"Оберіть контракт • {self.page + 1}/{self.total_pages}",
+      min_values=1,
+      max_values=1,
+      options=options,
+      row=0,
+    )
+
+  async def callback(self, interaction: discord.Interaction):
+    if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
+      await interaction.response.edit_message(content="❌ Немає права.", view=None)
+      return
+
+    row_before = db.get_completed_by_message(self.message_id)
+    contract_type = db.get_contract_type(int(self.values[0]))
+
+    if (
+      not row_before
+      or not contract_type
+      or not contract_type["active"]
+      or not db.update_completed_contract_type(self.message_id, contract_type)
+    ):
+      await interaction.response.edit_message(
+        content="❌ Змінити можна тільки неоплачений контракт.",
+        view=None,
+      )
+      return
+
+    await refresh_completed_message(self.message_id)
+
+    await audit_log(
+      interaction.guild,
+      "✏️ Змінено контракт у записі",
+      (
+        f"Запис: **#{row_before['id']}**\n"
+        f"Було: **{row_before['contract_name']}** — "
+        f"{format_money_dollars(row_before['price'])} $\n"
+        f"Стало: **{contract_type['name']}** — "
+        f"{format_money_dollars(contract_type['price'])} $\n"
+        f"Змінив/ла: <@{interaction.user.id}>"
+      ),
+      discord.Color.orange(),
+    )
+
+    await interaction.response.edit_message(
+      content=f"✅ Контракт змінено на **{contract_type['name']}**.",
+      view=None,
+    )
+
+
+class CorrectionContractView(discord.ui.View):
+  def __init__(self, bot_instance: "ContractBot", message_id: int, page: int = 0):
+    super().__init__(timeout=180)
+    self.bot_instance = bot_instance
+    self.message_id = message_id
+    _, self.page, self.total_pages = correction_contract_page(page)
+    self.add_item(CorrectionContractSelect(bot_instance, message_id, self.page))
+    self.previous.disabled = self.page <= 0
+    self.page_label.label = f"{self.page + 1}/{self.total_pages}"
+    self.next_page.disabled = self.page >= self.total_pages - 1
+
+  @discord.ui.button(label="Назад", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+  async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
+    await interaction.response.edit_message(
+      view=CorrectionContractView(self.bot_instance, self.message_id, self.page - 1)
+    )
+
+  @discord.ui.button(label="1/1", style=discord.ButtonStyle.secondary, disabled=True, row=1)
+  async def page_label(self, interaction: discord.Interaction, button: discord.ui.Button):
+    pass
+
+  @discord.ui.button(label="Далі", emoji="▶️", style=discord.ButtonStyle.secondary, row=1)
+  async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+    await interaction.response.edit_message(
+      view=CorrectionContractView(self.bot_instance, self.message_id, self.page + 1)
+    )
+
+
+class CorrectionMenuView(discord.ui.View):
+  def __init__(self, bot_instance: "ContractBot", message_id: int):
+    super().__init__(timeout=180)
+    self.bot_instance = bot_instance
+    self.message_id = message_id
+
+  @discord.ui.button(label="Виконавці", emoji="👥", style=discord.ButtonStyle.primary)
+  async def performers(self, interaction: discord.Interaction, button: discord.ui.Button):
+    await interaction.response.edit_message(
+      content="👥 Оберіть правильний список виконавців:",
+      view=CorrectionPerformerView(self.bot_instance, self.message_id),
+    )
+
+  @discord.ui.button(label="Контракт", emoji="📋", style=discord.ButtonStyle.primary)
+  async def contract(self, interaction: discord.Interaction, button: discord.ui.Button):
+    await interaction.response.edit_message(
+      content="📋 Оберіть правильний контракт:",
+      view=CorrectionContractView(self.bot_instance, self.message_id),
+    )
+
+  @discord.ui.button(label="Назад", emoji="↩️", style=discord.ButtonStyle.secondary)
+  async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+    await interaction.response.edit_message(content="Редагування закрито.", view=None)
+
+
+class AnnulPaidConfirmView(discord.ui.View):
+  def __init__(self, bot_instance: "ContractBot", message_id: int):
+    super().__init__(timeout=60)
+    self.bot_instance = bot_instance
+    self.message_id = message_id
+
+  @discord.ui.button(
+    label="Так, анулювати",
+    style=discord.ButtonStyle.danger,
+    emoji="🚫",
+  )
+  async def confirm(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
+      await interaction.response.edit_message(
+        content="❌ Немає права.",
+        view=None,
+      )
+      return
+
+    row_before = db.get_completed_by_message(self.message_id)
+    if not row_before or row_before["status"] != "paid":
+      await interaction.response.edit_message(
+        content="❌ Анулювати можна тільки оплачений контракт.",
+        view=None,
+      )
+      return
+
+    await interaction.response.edit_message(
+      content="⏳ Анулюю контракт...",
+      view=None,
+    )
+
+    ok = db.annul_paid(
+      self.message_id,
+      interaction.user.id,
+    )
+
+    if not ok:
+      await interaction.edit_original_response(
+        content="❌ Не вдалося анулювати контракт.",
+        view=None,
+      )
+      return
+
+    await refresh_completed_message(self.message_id)
+
+    await audit_log(
+      interaction.guild,
+      "🚫 Оплачений контракт анульовано",
+      (
+        f"Запис: **#{row_before['id']}**\n"
+        f"Контракт: **{row_before['contract_name']}**\n"
+        f"Сума: **{format_money_dollars(row_before['price'])} $**\n"
+        f"Було в Банк сім'ї: **{format_cents(row_before['fomo_cents'] or 0)}**\n"
+        f"Було учасникам: **{format_cents(row_before['net_cents'] or 0)}**\n"
+        f"Анулював/ла: <@{interaction.user.id}>"
+      ),
+      discord.Color.red(),
+    )
+
+    await interaction.edit_original_response(
+      content=(
+        "✅ Контракт анульовано.\n"
+        "Його гроші та бали більше не враховуються у статистиці, "
+        "але запис залишився в історії."
+      ),
+      view=None,
+    )
+
+  @discord.ui.button(
+    label="Назад",
+    style=discord.ButtonStyle.secondary,
+    emoji="↩️",
+  )
+  async def back(
     self,
     interaction: discord.Interaction,
     button: discord.ui.Button,
   ):
     await interaction.response.edit_message(
-      content="Оплату не змінено.",
+      content="Анулювання скасовано.",
       view=None,
     )
 
@@ -1508,15 +2254,113 @@ class UnpaidCompletedView(discord.ui.View):
     self.bot_instance = bot_instance
 
   @discord.ui.button(
-    label="Оплачено",
+    label="Оплата",
     style=discord.ButtonStyle.success,
     emoji="💵",
     custom_id="contract_v3:paid",
+    row=0,
   )
   async def paid(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
       await interaction.response.send_message(
         "❌ Оплачувати контракти може тільки керівництво.",
+        ephemeral=True,
+      )
+      return
+
+    if interaction.message is None:
+      await interaction.response.send_message("❌ Не знайшов запис.", ephemeral=True)
+      return
+
+    row = db.get_completed_by_message(interaction.message.id)
+    if not row or row["status"] != "unpaid":
+      await interaction.response.send_message(
+        "❌ Контракт уже оплачений або скасований.",
+        ephemeral=True,
+      )
+      return
+
+    embed = payment_preview_embed(
+      row,
+      PAYMENT_MODE_NORMAL,
+      [],
+    )
+
+    await interaction.response.send_message(
+      embed=embed,
+      view=PaymentConfirmView(
+        self.bot_instance,
+        interaction.message.id,
+        PAYMENT_MODE_NORMAL,
+      ),
+      ephemeral=True,
+    )
+
+  @discord.ui.button(
+    label="На фаму",
+    style=discord.ButtonStyle.primary,
+    emoji="🏠",
+    custom_id="contract_v3:family",
+    row=0,
+  )
+  async def family_payment(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
+      await interaction.response.send_message(
+        "❌ Оплачувати контракти може тільки керівництво.",
+        ephemeral=True,
+      )
+      return
+
+    if interaction.message is None:
+      await interaction.response.send_message(
+        "❌ Не знайшов запис.",
+        ephemeral=True,
+      )
+      return
+
+    row = db.get_completed_by_message(interaction.message.id)
+    if not row or row["status"] != "unpaid":
+      await interaction.response.send_message(
+        "❌ Контракт уже оплачений або скасований.",
+        ephemeral=True,
+      )
+      return
+
+    embed = payment_preview_embed(
+      row,
+      PAYMENT_MODE_LEGACY_FAMILY,
+      [],
+    )
+
+    await interaction.response.send_message(
+      embed=embed,
+      view=PaymentConfirmView(
+        self.bot_instance,
+        interaction.message.id,
+        PAYMENT_MODE_LEGACY_FAMILY,
+      ),
+      ephemeral=True,
+    )
+
+  @discord.ui.button(
+    label="Налаштувати оплату",
+    style=discord.ButtonStyle.primary,
+    emoji="⚙️",
+    custom_id="contract_v4:custompay",
+    row=1,
+  )
+  async def custom_payment(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
+      await interaction.response.send_message(
+        "❌ Налаштовувати оплату може тільки керівництво.",
         ephemeral=True,
       )
       return
@@ -1528,28 +2372,21 @@ class UnpaidCompletedView(discord.ui.View):
     row = db.get_completed_by_message(interaction.message.id)
     if not row or row["status"] != "unpaid":
       await interaction.response.send_message(
-        "❌ Цей контракт уже оплачений або скасований.",
+        "❌ Контракт уже оплачений або скасований.",
         ephemeral=True,
       )
       return
 
     participant_ids = parse_ids(row["participant_ids"])
-    if not participant_ids:
-      await interaction.response.send_message(
-        "❌ У контракті немає виконавців.",
-        ephemeral=True,
-      )
-      return
 
     await interaction.response.send_message(
       (
-        f"💵 **Оплата: {row['contract_name']}**\n"
-        f"Сума: **{format_money_dollars(row['price'])} $**\n\n"
-        "Якщо платимо всім — натисни **Оплатити всім**.\n"
-        "Якщо когось треба виключити — вибери його нижче.\n\n"
-        "🏆 Рейтинг усе одно рахується всім виконавцям."
+        "⚙️ **Налаштувати оплату**\n"
+        "Оберіть, кого не потрібно оплачувати.\n\n"
+        "**Розділити між рештою** — 85% ділиться між тими, хто залишився.\n"
+        "**Частку в сім'ю** — частка виключених переходить у Банк сім'ї."
       ),
-      view=PaymentSetupView(
+      view=CustomPaymentView(
         self.bot_instance,
         interaction.message.id,
         interaction.guild,
@@ -1559,19 +2396,16 @@ class UnpaidCompletedView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="На фаму",
-    style=discord.ButtonStyle.primary,
-    emoji="🏠",
-    custom_id="contract_v3:family",
+    label="Виправити",
+    style=discord.ButtonStyle.secondary,
+    emoji="✏️",
+    custom_id="contract_v4:edit",
+    row=2,
   )
-  async def family(
-    self,
-    interaction: discord.Interaction,
-    button: discord.ui.Button,
-  ):
+  async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
       await interaction.response.send_message(
-        "❌ Закривати контракт «На фаму» може тільки керівництво.",
+        "❌ Виправляти записи може тільки керівництво.",
         ephemeral=True,
       )
       return
@@ -1580,22 +2414,18 @@ class UnpaidCompletedView(discord.ui.View):
       await interaction.response.send_message("❌ Не знайшов запис.", ephemeral=True)
       return
 
-    result = db.pay_completed(
-      interaction.message.id,
-      interaction.user.id,
-      payment_mode="family",
-    )
-    if not result:
+    row = db.get_completed_by_message(interaction.message.id)
+    if not row or row["status"] != "unpaid":
       await interaction.response.send_message(
-        "❌ Цей контракт уже оплачений або скасований.",
+        "❌ Виправляти можна тільки неоплачений контракт.",
         ephemeral=True,
       )
       return
 
-    row = db.get_completed_by_message(interaction.message.id)
-    await interaction.response.edit_message(
-      embed=build_completed_embed(row),
-      view=None,
+    await interaction.response.send_message(
+      "✏️ Що потрібно виправити?",
+      view=CorrectionMenuView(self.bot_instance, interaction.message.id),
+      ephemeral=True,
     )
 
   @discord.ui.button(
@@ -1603,6 +2433,7 @@ class UnpaidCompletedView(discord.ui.View):
     style=discord.ButtonStyle.danger,
     emoji="🗑️",
     custom_id="contract_v3:cancel",
+    row=2,
   )
   async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
@@ -1682,6 +2513,17 @@ class ContractTypeModal(discord.ui.Modal):
 
     if self.mode == "add":
       row = db.create_contract_type(name, price, cooldown, interaction.user.id)
+      await audit_log(
+        interaction.guild,
+        "➕ Додано тип контракту",
+        (
+          f"**{row['name']}**\n"
+          f"Ціна: **{format_money_dollars(row['price'])} $**\n"
+          f"КД: **{row['cooldown']}**\n"
+          f"Додав/ла: <@{interaction.user.id}>"
+        ),
+        discord.Color.green(),
+      )
       await interaction.response.send_message(
         f"✅ Додано: **{row['name']}** — {format_money_dollars(row['price'])} $ — КД {row['cooldown']}",
         ephemeral=True,
@@ -1697,6 +2539,17 @@ class ContractTypeModal(discord.ui.Modal):
       return
 
     row = db.get_contract_type(self.type_id)
+    await audit_log(
+      interaction.guild,
+      "✏️ Оновлено тип контракту",
+      (
+        f"**{row['name']}**\n"
+        f"Ціна: **{format_money_dollars(row['price'])} $**\n"
+        f"КД: **{row['cooldown']}**\n"
+        f"Змінив/ла: <@{interaction.user.id}>"
+      ),
+      discord.Color.orange(),
+    )
     await interaction.response.send_message(
       f"✅ Оновлено: **{row['name']}** — {format_money_dollars(row['price'])} $ — КД {row['cooldown']}",
       ephemeral=True,
@@ -1859,7 +2712,17 @@ class DeleteTypeConfirmView(discord.ui.View):
       await interaction.response.edit_message(content="❌ Немає права.", view=None)
       return
 
+    row = db.get_contract_type(self.type_id)
     db.archive_contract_type(self.type_id)
+    await audit_log(
+      interaction.guild,
+      "🗑️ Тип контракту прибрано",
+      (
+        f"**{row['name'] if row else self.type_id}**\n"
+        f"Прибрав/ла: <@{interaction.user.id}>"
+      ),
+      discord.Color.red(),
+    )
     await interaction.response.edit_message(
       content="✅ Контракт прибрано з переліку. Старі виконання залишилися в історії.",
       embed=None,
@@ -1935,6 +2798,12 @@ class ResetRatingConfirmView(discord.ui.View):
     reset_ts = iso_to_unix(reset_at)
 
     when = f"<t:{reset_ts}:f>" if reset_ts else "зараз"
+    await audit_log(
+      interaction.guild,
+      "♻️ Рейтинг обнулено",
+      f"Обнулив/ла: <@{interaction.user.id}>",
+      discord.Color.red(),
+    )
     await interaction.response.edit_message(
       content=(
         f"✅ Рейтинг обнулено {when}.\n"
@@ -1974,6 +2843,13 @@ class ResetEarningsConfirmView(discord.ui.View):
     db.set_setting(interaction.guild.id, "earnings_reset_at", reset_at)
     reset_ts = iso_to_unix(reset_at)
     when = f"<t:{reset_ts}:f>" if reset_ts else "зараз"
+
+    await audit_log(
+      interaction.guild,
+      "💸 Заробіток обнулено",
+      f"Обнулив/ла: <@{interaction.user.id}>",
+      discord.Color.red(),
+    )
 
     await interaction.response.edit_message(
       content=(
@@ -2084,7 +2960,7 @@ def build_public_rating_embed(guild_id: int) -> discord.Embed:
     if not members:
       continue
 
-    share = Fraction(1, len(members))
+    share = Fraction(10, len(members))
     for uid in members:
       points[uid] += share
 
@@ -2116,7 +2992,7 @@ def build_public_rating_embed(guild_id: int) -> discord.Embed:
     return embed
 
   lines = [
-    f"**{idx}.** <@{uid}> — **{format_points(points[uid])}**"
+    f"**{idx}.** <@{uid}> — **{format_points_with_word(points[uid])}**"
     for idx, uid in enumerate(ranking[:25], start=1)
   ]
   embed.add_field(
@@ -2128,6 +3004,1019 @@ def build_public_rating_embed(guild_id: int) -> discord.Embed:
   return embed
 
 
+def rating_data_for_guild(guild_id: int):
+  rows = db.all_non_cancelled(guild_id)
+  rating_reset_at = db.get_setting(guild_id, "rating_reset_at")
+
+  rating_rows = [
+    row for row in rows
+    if not rating_reset_at or row["created_at"] >= rating_reset_at
+  ]
+
+  points = defaultdict(lambda: Fraction(0, 1))
+  participations = Counter()
+
+  for row in rating_rows:
+    members = parse_ids(row["participant_ids"])
+    if not members:
+      continue
+
+    share = Fraction(10, len(members))
+    for uid in members:
+      points[uid] += share
+      participations[uid] += 1
+
+  users = sorted(
+    points,
+    key=lambda uid: (points[uid], participations[uid]),
+    reverse=True,
+  )
+  return points, participations, users, rating_reset_at
+
+
+def rating_data_for_guild_all_time(guild_id: int):
+  rows = db.all_non_cancelled(guild_id)
+
+  points = defaultdict(lambda: Fraction(0, 1))
+  participations = Counter()
+
+  for row in rows:
+    members = parse_ids(row["participant_ids"])
+    if not members:
+      continue
+
+    share = Fraction(10, len(members))
+    for uid in members:
+      points[uid] += share
+      participations[uid] += 1
+
+  users = sorted(
+    points,
+    key=lambda uid: (points[uid], participations[uid]),
+    reverse=True,
+  )
+  return points, participations, users
+
+
+
+def earnings_data_for_guild(guild_id: int):
+  rows = db.all_non_cancelled(guild_id)
+  paid_rows_all = [r for r in rows if r["status"] == "paid"]
+  unpaid_rows = [r for r in rows if r["status"] == "unpaid"]
+  payouts_all = db.paid_payouts_for_guild(guild_id)
+
+  reset_at = db.get_setting(guild_id, "earnings_reset_at")
+
+  paid_rows = [
+    row for row in paid_rows_all
+    if not reset_at
+    or (row["paid_at"] and row["paid_at"] >= reset_at)
+  ]
+
+  payouts = [
+    payout for payout in payouts_all
+    if not reset_at or payout["created_at"] >= reset_at
+  ]
+
+  member_earnings = Counter()
+  for payout in payouts:
+    member_earnings[payout["user_id"]] += payout["amount_cents"]
+
+  return {
+    "rows": rows,
+    "paid_rows_all": paid_rows_all,
+    "unpaid_rows": unpaid_rows,
+    "paid_rows": paid_rows,
+    "payouts": payouts,
+    "member_earnings": member_earnings,
+    "reset_at": reset_at,
+  }
+
+
+def earnings_data_for_guild_all_time(guild_id: int):
+  rows = db.all_non_cancelled(guild_id)
+  paid_rows = [r for r in rows if r["status"] == "paid"]
+  unpaid_rows = [r for r in rows if r["status"] == "unpaid"]
+  payouts = db.paid_payouts_for_guild(guild_id)
+
+  member_earnings = Counter()
+  for payout in payouts:
+    member_earnings[payout["user_id"]] += payout["amount_cents"]
+
+  return {
+    "rows": rows,
+    "paid_rows": paid_rows,
+    "unpaid_rows": unpaid_rows,
+    "payouts": payouts,
+    "member_earnings": member_earnings,
+  }
+
+
+
+def build_my_stats_embed(guild_id: int, user_id: int) -> discord.Embed:
+  points, participations, users, rating_reset_at = rating_data_for_guild(guild_id)
+  earnings = earnings_data_for_guild(guild_id)
+
+  position = users.index(user_id) + 1 if user_id in users else None
+  personal_earnings = earnings["member_earnings"].get(user_id, 0)
+
+  paid_period_rows = [
+    row for row in earnings["paid_rows"]
+    if user_id in parse_ids(row["participant_ids"])
+  ]
+  unpaid_now_rows = [
+    row for row in earnings["unpaid_rows"]
+    if user_id in parse_ids(row["participant_ids"])
+  ]
+
+  rating_ts = iso_to_unix(rating_reset_at) if rating_reset_at else None
+  earnings_ts = iso_to_unix(earnings["reset_at"]) if earnings["reset_at"] else None
+
+  period_lines = []
+  period_lines.append(
+    f"🏆 Рейтинг: з <t:{rating_ts}:d>"
+    if rating_ts
+    else "🏆 Рейтинг: від початку"
+  )
+  period_lines.append(
+    f"💵 Фінанси: з <t:{earnings_ts}:d>"
+    if earnings_ts
+    else "💵 Фінанси: від початку"
+  )
+
+  embed = discord.Embed(
+    title="👤 Моя статистика • Поточний період",
+    description="\n".join(period_lines),
+    color=discord.Color.blurple(),
+  )
+
+  embed.add_field(
+    name="🏆 Рейтинг",
+    value=(
+      (f"Місце: **#{position}**\n" if position else "Місце: **—**\n")
+      + f"Бали: **{format_points_with_word(points[user_id])}**\n"
+      + f"Участей: **{participations[user_id]}**"
+    ),
+    inline=True,
+  )
+
+  embed.add_field(
+    name="💵 Заробіток",
+    value=(
+      f"Отримано: **{format_cents(personal_earnings)}**\n"
+      f"Оплачених контрактів: **{len(paid_period_rows)}**"
+    ),
+    inline=True,
+  )
+
+  embed.add_field(
+    name="⏳ Зараз",
+    value=(
+      f"Очікують оплати: **{len(unpaid_now_rows)}**"
+    ),
+    inline=False,
+  )
+
+  return embed
+
+
+def build_my_history_embed(guild_id: int, user_id: int) -> discord.Embed:
+  points, participations, users = rating_data_for_guild_all_time(guild_id)
+  earnings = earnings_data_for_guild_all_time(guild_id)
+
+  position = users.index(user_id) + 1 if user_id in users else None
+
+  involved_rows = [
+    row for row in earnings["rows"]
+    if user_id in parse_ids(row["participant_ids"])
+  ]
+  paid_rows = [row for row in involved_rows if row["status"] == "paid"]
+  unpaid_rows = [row for row in involved_rows if row["status"] == "unpaid"]
+
+  full_family_count = sum(
+    1
+    for row in paid_rows
+    if (row["payment_mode"] or PAYMENT_MODE_NORMAL) == PAYMENT_MODE_LEGACY_FAMILY
+  )
+
+  personal_earnings = earnings["member_earnings"].get(user_id, 0)
+
+  embed = discord.Embed(
+    title="🗂️ Моя статистика • Історія",
+    description="За весь час. Обнулення рейтингу або грошей на цю вкладку не впливають.",
+    color=discord.Color.dark_teal(),
+  )
+
+  embed.add_field(
+    name="🏆 Рейтинг за весь час",
+    value=(
+      (f"Місце: **#{position}**\n" if position else "Місце: **—**\n")
+      + f"Бали: **{format_points_with_word(points[user_id])}**\n"
+      + f"Участей: **{participations[user_id]}**"
+    ),
+    inline=True,
+  )
+
+  embed.add_field(
+    name="💵 Заробіток за весь час",
+    value=(
+      f"Отримано: **{format_cents(personal_earnings)}**\n"
+      f"Контрактів повністю на фаму: **{full_family_count}**"
+    ),
+    inline=True,
+  )
+
+  embed.add_field(
+    name="📋 Контракти за весь час",
+    value=(
+      f"Участей: **{len(involved_rows)}**\n"
+      f"Оплачено: **{len(paid_rows)}**\n"
+      f"Не оплачено зараз: **{len(unpaid_rows)}**"
+    ),
+    inline=False,
+  )
+
+  return embed
+
+
+def personal_daily_rows(guild_id: int, user_id: int):
+  earnings = earnings_data_for_guild(guild_id)
+  grouped = {}
+
+  for payout in earnings["payouts"]:
+    if payout["user_id"] != user_id:
+      continue
+
+    day = local_date_from_iso(payout["created_at"])
+    if day is None:
+      continue
+
+    stat = grouped.setdefault(
+      day,
+      {
+        "day": day,
+        "amount": 0,
+        "payments": 0,
+      },
+    )
+    stat["amount"] += payout["amount_cents"]
+    stat["payments"] += 1
+
+  return sorted(
+    grouped.values(),
+    key=lambda stat: stat["day"],
+    reverse=True,
+  )
+
+
+def build_my_daily_stats_embed(guild_id: int, user_id: int, page: int = 0):
+  stats = personal_daily_rows(guild_id, user_id)
+  page_size = 7
+  total_pages = max(1, (len(stats) + page_size - 1) // page_size)
+  page = max(0, min(page, total_pages - 1))
+  slice_rows = stats[page * page_size:(page + 1) * page_size]
+
+  embed = discord.Embed(
+    title="📅 Мій заробіток • По днях",
+    color=discord.Color.blurple(),
+  )
+
+  if not slice_rows:
+    embed.description = "Поки немає виплат."
+  else:
+    lines = [
+      f"**{format_day(stat['day'])}** — {format_cents(stat['amount'])} • виплат: {stat['payments']}"
+      for stat in slice_rows
+    ]
+    embed.description = "\n".join(lines)
+
+  embed.set_footer(
+    text=f"Часова зона: {TIMEZONE_NAME} • Сторінка {page + 1}/{total_pages}"
+  )
+  return embed, page, total_pages
+
+
+class MyStatsView(discord.ui.View):
+  def __init__(
+    self,
+    guild_id: int,
+    user_id: int,
+    mode: str = "general",
+    page: int = 0,
+  ):
+    super().__init__(timeout=300)
+    self.guild_id = guild_id
+    self.user_id = user_id
+    self.mode = mode
+
+    if mode == "daily":
+      _, self.page, self.total_pages = build_my_daily_stats_embed(
+        guild_id,
+        user_id,
+        page,
+      )
+    else:
+      self.page = 0
+      self.total_pages = 1
+
+    self.previous.disabled = self.mode != "daily" or self.page <= 0
+    self.next_page.disabled = self.mode != "daily" or self.page >= self.total_pages - 1
+
+  @discord.ui.button(
+    label="Поточна",
+    emoji="👤",
+    style=discord.ButtonStyle.primary,
+    row=0,
+  )
+  async def general(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      embed=build_my_stats_embed(self.guild_id, self.user_id),
+      view=MyStatsView(self.guild_id, self.user_id, "general"),
+    )
+
+  @discord.ui.button(
+    label="По днях",
+    emoji="📅",
+    style=discord.ButtonStyle.primary,
+    row=0,
+  )
+  async def daily(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    embed, page, _ = build_my_daily_stats_embed(
+      self.guild_id,
+      self.user_id,
+      0,
+    )
+    await interaction.response.edit_message(
+      embed=embed,
+      view=MyStatsView(self.guild_id, self.user_id, "daily", page),
+    )
+
+  @discord.ui.button(
+    label="Історія",
+    emoji="🗂️",
+    style=discord.ButtonStyle.secondary,
+    row=0,
+  )
+  async def history(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      embed=build_my_history_embed(self.guild_id, self.user_id),
+      view=MyStatsView(self.guild_id, self.user_id, "history"),
+    )
+
+  @discord.ui.button(
+    label="Назад",
+    emoji="◀️",
+    style=discord.ButtonStyle.secondary,
+    row=1,
+  )
+  async def previous(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    embed, page, _ = build_my_daily_stats_embed(
+      self.guild_id,
+      self.user_id,
+      self.page - 1,
+    )
+    await interaction.response.edit_message(
+      embed=embed,
+      view=MyStatsView(self.guild_id, self.user_id, "daily", page),
+    )
+
+  @discord.ui.button(
+    label="Далі",
+    emoji="▶️",
+    style=discord.ButtonStyle.secondary,
+    row=1,
+  )
+  async def next_page(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    embed, page, _ = build_my_daily_stats_embed(
+      self.guild_id,
+      self.user_id,
+      self.page + 1,
+    )
+    await interaction.response.edit_message(
+      embed=embed,
+      view=MyStatsView(self.guild_id, self.user_id, "daily", page),
+    )
+
+
+def build_admin_general_stats_embed(guild_id: int) -> discord.Embed:
+  earnings = earnings_data_for_guild(guild_id)
+  points, participations, rating_users, rating_reset_at = rating_data_for_guild(guild_id)
+
+  paid_rows = earnings["paid_rows"]
+  unpaid_rows = earnings["unpaid_rows"]
+
+  gross = sum(row["price"] * 100 for row in paid_rows)
+  family = sum((row["fomo_cents"] or 0) for row in paid_rows)
+  members = sum((row["net_cents"] or 0) for row in paid_rows)
+  unpaid = sum(row["price"] * 100 for row in unpaid_rows)
+
+  custom_count = sum(
+    1 for row in paid_rows
+    if (row["payment_mode"] or PAYMENT_MODE_NORMAL) in (
+      PAYMENT_MODE_REDISTRIBUTE,
+      PAYMENT_MODE_FAMILY_SHARE,
+    )
+  )
+  exception_count = sum(
+    1 for row in paid_rows
+    if parse_ids(row["excluded_payment_ids"] or "[]")
+    and (row["payment_mode"] or PAYMENT_MODE_NORMAL) != PAYMENT_MODE_LEGACY_FAMILY
+  )
+  full_family_count = sum(
+    1 for row in paid_rows
+    if (row["payment_mode"] or PAYMENT_MODE_NORMAL) == PAYMENT_MODE_LEGACY_FAMILY
+  )
+
+  avg_contract = gross // len(paid_rows) if paid_rows else 0
+
+  rating_rows = [
+    row for row in earnings["rows"]
+    if not rating_reset_at or row["created_at"] >= rating_reset_at
+  ]
+  avg_team = (
+    sum(len(parse_ids(row["participant_ids"])) for row in rating_rows) / len(rating_rows)
+    if rating_rows else 0
+  )
+
+  active_users = set(rating_users)
+
+  rating_ts = iso_to_unix(rating_reset_at) if rating_reset_at else None
+  earnings_ts = iso_to_unix(earnings["reset_at"]) if earnings["reset_at"] else None
+
+  description_lines = [
+    (
+      f"🏆 Рейтинг: з <t:{rating_ts}:d>"
+      if rating_ts
+      else "🏆 Рейтинг: від початку"
+    ),
+    (
+      f"💵 Фінанси: з <t:{earnings_ts}:d>"
+      if earnings_ts
+      else "💵 Фінанси: від початку"
+    ),
+  ]
+
+  embed = discord.Embed(
+    title="📊 Статистика • Поточний період",
+    description="\n".join(description_lines),
+    color=discord.Color.blurple(),
+  )
+
+  embed.add_field(
+    name="📋 Контракти",
+    value=(
+      f"Оплачено в періоді: **{len(paid_rows)}**\n"
+      f"Не оплачено зараз: **{len(unpaid_rows)}**\n"
+      f"Повністю на фаму: **{full_family_count}**"
+    ),
+    inline=True,
+  )
+
+  embed.add_field(
+    name="👥 Активність",
+    value=(
+      f"Учасників у рейтингу: **{len(active_users)}**\n"
+      f"Участей у рейтингу: **{sum(participations.values())}**\n"
+      f"Середня команда: **{avg_team:.1f}**\n"
+      f"Оплат з винятками: **{exception_count}**\n"
+      f"Налаштованих оплат: **{custom_count}**"
+    ),
+    inline=True,
+  )
+
+  embed.add_field(
+    name="💰 Фінанси",
+    value=(
+      f"Загалом по контрактах: **{format_cents(gross)}**\n"
+      f"На фаму: **{format_cents(family)}**\n"
+      f"Учасникам: **{format_cents(members)}**\n"
+      f"Очікує оплати: **{format_cents(unpaid)}**\n"
+      f"Середній оплачений контракт: **{format_cents(avg_contract)}**"
+    ),
+    inline=False,
+  )
+
+  return embed
+
+
+def build_admin_history_embed(guild_id: int) -> discord.Embed:
+  all_rows = db.all_for_guild(guild_id)
+  valid_rows = [
+    row for row in all_rows
+    if row["status"] not in ("cancelled", "annulled")
+  ]
+  cancelled = [row for row in all_rows if row["status"] == "cancelled"]
+  annulled = [row for row in all_rows if row["status"] == "annulled"]
+
+  earnings = earnings_data_for_guild_all_time(guild_id)
+  points, participations, rating_users = rating_data_for_guild_all_time(guild_id)
+
+  paid_rows = earnings["paid_rows"]
+  unpaid_rows = earnings["unpaid_rows"]
+
+  gross = sum(row["price"] * 100 for row in paid_rows)
+  family = sum((row["fomo_cents"] or 0) for row in paid_rows)
+  members = sum((row["net_cents"] or 0) for row in paid_rows)
+  unpaid = sum(row["price"] * 100 for row in unpaid_rows)
+
+  exception_count = sum(
+    1 for row in paid_rows
+    if parse_ids(row["excluded_payment_ids"] or "[]")
+    and (row["payment_mode"] or PAYMENT_MODE_NORMAL) != PAYMENT_MODE_LEGACY_FAMILY
+  )
+  full_family_count = sum(
+    1 for row in paid_rows
+    if (row["payment_mode"] or PAYMENT_MODE_NORMAL) == PAYMENT_MODE_LEGACY_FAMILY
+  )
+
+  active_users = {
+    uid
+    for row in valid_rows
+    for uid in parse_ids(row["participant_ids"])
+  }
+
+  avg_team = (
+    sum(len(parse_ids(row["participant_ids"])) for row in valid_rows) / len(valid_rows)
+    if valid_rows else 0
+  )
+
+  # Top contracts by all-time gross.
+  contract_grouped = {}
+  for row in paid_rows:
+    stat = contract_grouped.setdefault(
+      row["contract_name"],
+      {"gross": 0, "count": 0},
+    )
+    stat["gross"] += row["price"] * 100
+    stat["count"] += 1
+
+  top_contracts = sorted(
+    contract_grouped.items(),
+    key=lambda item: item[1]["gross"],
+    reverse=True,
+  )[:5]
+
+  embed = discord.Embed(
+    title="🗂️ Статистика • Історія",
+    description="За весь час. Обнулення рейтингу та грошей ці дані не стирають.",
+    color=discord.Color.dark_teal(),
+  )
+
+  embed.add_field(
+    name="📋 Контракти за весь час",
+    value=(
+      f"Всього дійсних: **{len(valid_rows)}**\n"
+      f"Оплачено: **{len(paid_rows)}**\n"
+      f"Не оплачено зараз: **{len(unpaid_rows)}**\n"
+      f"Скасовано: **{len(cancelled)}**\n"
+      f"Анульовано після оплати: **{len(annulled)}**"
+    ),
+    inline=True,
+  )
+
+  embed.add_field(
+    name="👥 Активність за весь час",
+    value=(
+      f"Учасників: **{len(active_users)}**\n"
+      f"Участей: **{sum(participations.values())}**\n"
+      f"Середня команда: **{avg_team:.1f}**\n"
+      f"Оплат з винятками: **{exception_count}**\n"
+      f"Повністю на фаму: **{full_family_count}**"
+    ),
+    inline=True,
+  )
+
+  embed.add_field(
+    name="💰 Фінанси за весь час",
+    value=(
+      f"Загалом по контрактах: **{format_cents(gross)}**\n"
+      f"На фаму: **{format_cents(family)}**\n"
+      f"Учасникам: **{format_cents(members)}**\n"
+      f"Не оплачено зараз: **{format_cents(unpaid)}**"
+    ),
+    inline=False,
+  )
+
+  if rating_users:
+    rating_lines = [
+      f"**{idx}.** <@{uid}> — **{format_points_with_word(points[uid])}**"
+      for idx, uid in enumerate(rating_users[:5], start=1)
+    ]
+    embed.add_field(
+      name="🏆 Топ рейтингу за весь час",
+      value="\n".join(rating_lines),
+      inline=False,
+    )
+
+  if top_contracts:
+    contract_lines = [
+      (
+        f"**{idx}. {name}** — {format_cents(stat['gross'])} "
+        f"• {stat['count']} раз(и)"
+      )
+      for idx, (name, stat) in enumerate(top_contracts, start=1)
+    ]
+    embed.add_field(
+      name="📋 Топ контрактів за весь час",
+      value="\n".join(contract_lines),
+      inline=False,
+    )
+
+  return embed
+
+
+def contract_stats_rows(guild_id: int):
+  earnings = earnings_data_for_guild(guild_id)
+  grouped = {}
+
+  for row in earnings["paid_rows"]:
+    key = row["contract_name"]
+    stat = grouped.setdefault(
+      key,
+      {
+        "name": key,
+        "count": 0,
+        "gross": 0,
+        "family": 0,
+        "members": 0,
+        "exceptions": 0,
+      },
+    )
+    stat["count"] += 1
+    stat["gross"] += row["price"] * 100
+    stat["family"] += row["fomo_cents"] or 0
+    stat["members"] += row["net_cents"] or 0
+    if parse_ids(row["excluded_payment_ids"] or "[]"):
+      stat["exceptions"] += 1
+
+  return sorted(
+    grouped.values(),
+    key=lambda x: (-x["gross"], ukrainian_sort_key(x["name"])),
+  )
+
+
+def build_contract_stats_embed(guild_id: int, page: int = 0):
+  stats = contract_stats_rows(guild_id)
+  page_size = 6
+  total_pages = max(1, (len(stats) + page_size - 1) // page_size)
+  page = max(0, min(page, total_pages - 1))
+  slice_rows = stats[page * page_size:(page + 1) * page_size]
+
+  embed = discord.Embed(
+    title="📋 Статистика • По контрактах",
+    description=(
+      "Для кожного типу: загальний оборот і скільки з нього пішло на фаму."
+    ),
+    color=discord.Color.blurple(),
+  )
+
+  if not slice_rows:
+    embed.description = "Ще немає оплачених контрактів."
+  else:
+    for stat in slice_rows:
+      embed.add_field(
+        name=stat["name"],
+        value=(
+          f"Оплачено: **{stat['count']}**\\n"
+          f"Загалом: **{format_cents(stat['gross'])}**\\n"
+          f"На фаму: **{format_cents(stat['family'])}**\\n"
+          f"Учасникам: **{format_cents(stat['members'])}**\\n"
+          f"З винятками: **{stat['exceptions']}**"
+        ),
+        inline=True,
+      )
+
+  embed.set_footer(text=f"Сторінка {page + 1}/{total_pages}")
+  return embed, page, total_pages
+
+
+
+def daily_stats_rows(guild_id: int):
+  earnings = earnings_data_for_guild(guild_id)
+  grouped = {}
+
+  for row in earnings["paid_rows"]:
+    day = local_date_from_iso(row["paid_at"])
+    if day is None:
+      continue
+
+    stat = grouped.setdefault(
+      day,
+      {
+        "day": day,
+        "count": 0,
+        "gross": 0,
+        "family": 0,
+        "members": 0,
+        "exceptions": 0,
+        "full_family": 0,
+      },
+    )
+
+    stat["count"] += 1
+    stat["gross"] += row["price"] * 100
+    stat["family"] += row["fomo_cents"] or 0
+    stat["members"] += row["net_cents"] or 0
+
+    if parse_ids(row["excluded_payment_ids"] or "[]") and (
+      (row["payment_mode"] or PAYMENT_MODE_NORMAL) != PAYMENT_MODE_LEGACY_FAMILY
+    ):
+      stat["exceptions"] += 1
+
+    if (row["payment_mode"] or PAYMENT_MODE_NORMAL) == PAYMENT_MODE_LEGACY_FAMILY:
+      stat["full_family"] += 1
+
+  return sorted(
+    grouped.values(),
+    key=lambda stat: stat["day"],
+    reverse=True,
+  )
+
+
+def build_daily_stats_embed(guild_id: int, page: int = 0):
+  stats = daily_stats_rows(guild_id)
+  page_size = 5
+  total_pages = max(1, (len(stats) + page_size - 1) // page_size)
+  page = max(0, min(page, total_pages - 1))
+  slice_rows = stats[page * page_size:(page + 1) * page_size]
+
+  earnings = earnings_data_for_guild(guild_id)
+  reset_at = earnings["reset_at"]
+  reset_ts = iso_to_unix(reset_at) if reset_at else None
+
+  description = (
+    f"Заробіток по днях • з <t:{reset_ts}:d>"
+    if reset_ts
+    else "Заробіток по днях • від початку"
+  )
+
+  embed = discord.Embed(
+    title="📅 Статистика • По днях",
+    description=description,
+    color=discord.Color.blurple(),
+  )
+
+  if not slice_rows:
+    embed.add_field(
+      name="Немає даних",
+      value="Ще немає оплачених контрактів.",
+      inline=False,
+    )
+  else:
+    for stat in slice_rows:
+      embed.add_field(
+        name=format_day(stat["day"]),
+        value=(
+          f"Контрактів: **{stat['count']}**\n"
+          f"Загалом: **{format_cents(stat['gross'])}**\n"
+          f"На фаму: **{format_cents(stat['family'])}**\n"
+          f"Учасникам: **{format_cents(stat['members'])}**\n"
+          f"Повністю на фаму: **{stat['full_family']}**"
+        ),
+        inline=False,
+      )
+
+  embed.set_footer(
+    text=f"Часова зона: {TIMEZONE_NAME} • Сторінка {page + 1}/{total_pages}"
+  )
+  return embed, page, total_pages
+
+
+def build_member_stats_embed(guild_id: int) -> discord.Embed:
+  points, participations, rating_users, _ = rating_data_for_guild(guild_id)
+  earnings = earnings_data_for_guild(guild_id)
+
+  money_users = sorted(
+    earnings["member_earnings"],
+    key=lambda uid: earnings["member_earnings"][uid],
+    reverse=True,
+  )
+
+  embed = discord.Embed(
+    title="👥 Статистика • Учасники • Поточний період",
+    color=discord.Color.blurple(),
+  )
+
+  if rating_users:
+    rating_lines = [
+      f"**{idx}.** <@{uid}> — **{format_points_with_word(points[uid])}** • {participations[uid]} участей"
+      for idx, uid in enumerate(rating_users[:10], start=1)
+    ]
+    embed.add_field(
+      name="🏆 Рейтинг",
+      value="\n".join(rating_lines),
+      inline=False,
+    )
+
+  if money_users:
+    money_lines = [
+      f"**{idx}.** <@{uid}> — **{format_cents(earnings['member_earnings'][uid])}**"
+      for idx, uid in enumerate(money_users[:10], start=1)
+    ]
+    embed.add_field(
+      name="💵 Заробіток",
+      value="\n".join(money_lines),
+      inline=False,
+    )
+
+  if not rating_users and not money_users:
+    embed.description = "Поки немає статистики."
+
+  return embed
+
+
+class AdminStatsView(discord.ui.View):
+  def __init__(
+    self,
+    guild_id: int,
+    mode: str = "general",
+    page: int = 0,
+  ):
+    super().__init__(timeout=300)
+    self.guild_id = guild_id
+    self.mode = mode
+
+    if mode == "contracts":
+      _, self.page, self.total_pages = build_contract_stats_embed(
+        guild_id,
+        page,
+      )
+    elif mode == "daily":
+      _, self.page, self.total_pages = build_daily_stats_embed(
+        guild_id,
+        page,
+      )
+    else:
+      self.page = 0
+      self.total_pages = 1
+
+    self.previous.disabled = self.total_pages <= 1 or self.page <= 0
+    self.next_page.disabled = self.total_pages <= 1 or self.page >= self.total_pages - 1
+
+  @discord.ui.button(
+    label="Поточна",
+    emoji="📊",
+    style=discord.ButtonStyle.primary,
+    row=0,
+  )
+  async def general(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      embed=build_admin_general_stats_embed(self.guild_id),
+      view=AdminStatsView(self.guild_id, "general"),
+    )
+
+  @discord.ui.button(
+    label="По контрактах",
+    emoji="📋",
+    style=discord.ButtonStyle.primary,
+    row=0,
+  )
+  async def contracts(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    embed, page, _ = build_contract_stats_embed(self.guild_id, 0)
+    await interaction.response.edit_message(
+      embed=embed,
+      view=AdminStatsView(self.guild_id, "contracts", page),
+    )
+
+  @discord.ui.button(
+    label="По днях",
+    emoji="📅",
+    style=discord.ButtonStyle.primary,
+    row=0,
+  )
+  async def daily(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    embed, page, _ = build_daily_stats_embed(self.guild_id, 0)
+    await interaction.response.edit_message(
+      embed=embed,
+      view=AdminStatsView(self.guild_id, "daily", page),
+    )
+
+  @discord.ui.button(
+    label="Учасники",
+    emoji="👥",
+    style=discord.ButtonStyle.primary,
+    row=0,
+  )
+  async def members(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      embed=build_member_stats_embed(self.guild_id),
+      view=AdminStatsView(self.guild_id, "members"),
+    )
+
+  @discord.ui.button(
+    label="Історія",
+    emoji="🗂️",
+    style=discord.ButtonStyle.secondary,
+    row=0,
+  )
+  async def history(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      embed=build_admin_history_embed(self.guild_id),
+      view=AdminStatsView(self.guild_id, "history"),
+    )
+
+  @discord.ui.button(
+    label="Назад",
+    emoji="◀️",
+    style=discord.ButtonStyle.secondary,
+    row=1,
+  )
+  async def previous(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    if self.mode == "contracts":
+      embed, page, _ = build_contract_stats_embed(
+        self.guild_id,
+        self.page - 1,
+      )
+    elif self.mode == "daily":
+      embed, page, _ = build_daily_stats_embed(
+        self.guild_id,
+        self.page - 1,
+      )
+    else:
+      await interaction.response.defer()
+      return
+
+    await interaction.response.edit_message(
+      embed=embed,
+      view=AdminStatsView(self.guild_id, self.mode, page),
+    )
+
+  @discord.ui.button(
+    label="Далі",
+    emoji="▶️",
+    style=discord.ButtonStyle.secondary,
+    row=1,
+  )
+  async def next_page(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    if self.mode == "contracts":
+      embed, page, _ = build_contract_stats_embed(
+        self.guild_id,
+        self.page + 1,
+      )
+    elif self.mode == "daily":
+      embed, page, _ = build_daily_stats_embed(
+        self.guild_id,
+        self.page + 1,
+      )
+    else:
+      await interaction.response.defer()
+      return
+
+    await interaction.response.edit_message(
+      embed=embed,
+      view=AdminStatsView(self.guild_id, self.mode, page),
+    )
+
+
+
 def build_main_panel_embed() -> discord.Embed:
   return discord.Embed(
     title="📋 КОНТРАКТИ СІМ’Ї",
@@ -2136,6 +4025,7 @@ def build_main_panel_embed() -> discord.Embed:
       "👤 **Я виконав/ла** — якщо виконував/ла сам/а.\n"
       "👥 **Кілька виконавців** — якщо контракт робили разом.\n"
       "🏆 **Рейтинг** — поточний рейтинг учасників.\n"
+      "👤 **Моя статистика** — мої бали, участі та заробіток.\n"
       "🔎 **Пошук** — доступний прямо всередині списку контрактів.\n\n"
       "Назва, ціна та КД підтягуються автоматично."
     ),
@@ -2254,6 +4144,31 @@ class MainContractPanelView(discord.ui.View):
 
 
 
+  @discord.ui.button(
+    label="Моя статистика",
+    style=discord.ButtonStyle.secondary,
+    emoji="👤",
+    custom_id="contract_v4:mystats",
+  )
+  async def my_stats(self, interaction: discord.Interaction, button: discord.ui.Button):
+    if interaction.guild is None:
+      await interaction.response.send_message(
+        "❌ Це працює тільки на сервері.",
+        ephemeral=True,
+      )
+      return
+
+    await interaction.response.send_message(
+      embed=build_my_stats_embed(interaction.guild.id, interaction.user.id),
+      view=MyStatsView(
+        interaction.guild.id,
+        interaction.user.id,
+        "general",
+      ),
+      ephemeral=True,
+    )
+
+
 
 # ----------------------------
 # Bot + commands
@@ -2263,6 +4178,7 @@ class ContractBot(commands.Bot):
   def __init__(self):
     intents = discord.Intents.default()
     super().__init__(command_prefix="!", intents=intents)
+    self._unpaid_refreshed = False
 
   async def setup_hook(self):
     self.add_view(MainContractPanelView(self))
@@ -2279,6 +4195,19 @@ class ContractBot(commands.Bot):
 
   async def on_ready(self):
     print(f"[READY] Logged in as {self.user} ({self.user.id})")
+
+    if not self._unpaid_refreshed and GUILD_ID:
+      self._unpaid_refreshed = True
+      try:
+        unpaid_rows = db.unpaid_for_guild(GUILD_ID, limit=100)
+
+        for row in unpaid_rows:
+          await refresh_completed_message(row["message_id"])
+
+        if unpaid_rows:
+          print(f"[UI] Refreshed {len(unpaid_rows)} unpaid contract message(s)")
+      except Exception as exc:
+        print(f"[UI] Could not refresh unpaid messages: {exc}")
 
 
 bot = ContractBot()
@@ -2320,11 +4249,18 @@ async def setup_panel(interaction: discord.Interaction):
     )
     return
 
+  log_note = (
+    ""
+    if LOG_CHANNEL_ID
+    else "\n⚠️ LOG_CHANNEL_ID не задано — журнал дій поки вимкнений."
+  )
+
   await interaction.followup.send(
     (
       f"✅ Панель готова: {panel.jump_url}\n"
       "Її більше не треба шукати в закріплених — після кожного нового контракту "
       "бот автоматично переносить панель у самий низ каналу."
+      f"{log_note}"
     ),
     ephemeral=True,
   )
@@ -2357,6 +4293,95 @@ async def contracts_admin(interaction: discord.Interaction):
   )
 
 
+
+
+@bot.tree.command(
+  name="annul",
+  description="Анулювати вже оплачений контракт за його ID",
+)
+@app_commands.describe(
+  contract_id="ID контракту, вказаний внизу його картки",
+)
+async def annul_contract(
+  interaction: discord.Interaction,
+  contract_id: int,
+):
+  if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
+    await interaction.response.send_message(
+      "❌ Анулювати оплачений контракт може тільки керівництво.",
+      ephemeral=True,
+    )
+    return
+
+  guild = interaction.guild
+  if guild is None:
+    await interaction.response.send_message(
+      "❌ Це працює тільки на сервері.",
+      ephemeral=True,
+    )
+    return
+
+  row = db.get_completed_by_id(contract_id)
+
+  if not row or row["guild_id"] != guild.id:
+    await interaction.response.send_message(
+      f"❌ Контракт з ID **{contract_id}** не знайдено на цьому сервері.",
+      ephemeral=True,
+    )
+    return
+
+  if row["status"] == "annulled":
+    await interaction.response.send_message(
+      f"ℹ️ Контракт **#{contract_id}** уже анульований.",
+      ephemeral=True,
+    )
+    return
+
+  if row["status"] != "paid":
+    status_names = {
+      "unpaid": "не оплачений",
+      "cancelled": "скасований",
+    }
+    status_name = status_names.get(row["status"], row["status"])
+    await interaction.response.send_message(
+      (
+        f"❌ Контракт **#{contract_id}** зараз **{status_name}**.\\n"
+        "Анулювати цією командою можна тільки вже оплачений контракт."
+      ),
+      ephemeral=True,
+    )
+    return
+
+  participant_text = mentions(parse_ids(row["participant_ids"]))
+  jump_url = (
+    f"https://discord.com/channels/{guild.id}/"
+    f"{row['channel_id']}/{row['message_id']}"
+  )
+
+  embed = discord.Embed(
+    title=f"🚫 Анулювання контракту #{contract_id}",
+    description=(
+      "Перевір контракт перед підтвердженням.\\n\\n"
+      f"📋 **{row['contract_name']}**\\n"
+      f"💰 Сума: **{format_money_dollars(row['price'])} $**\\n"
+      f"👥 Виконавці: {participant_text}\\n"
+      f"🏦 Було в Банк сім'ї: **{format_cents(row['fomo_cents'] or 0)}**\\n"
+      f"💸 Було учасникам: **{format_cents(row['net_cents'] or 0)}**\\n\\n"
+      f"[Відкрити повідомлення контракту]({jump_url})"
+    ),
+    color=discord.Color.red(),
+  )
+
+  await interaction.response.send_message(
+    embed=embed,
+    view=AnnulPaidConfirmView(
+      bot,
+      row["message_id"],
+    ),
+    ephemeral=True,
+  )
+
+
 @bot.tree.command(name="stats", description="Статистика контрактів для керівництва")
 async def stats(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
@@ -2374,159 +4399,11 @@ async def stats(interaction: discord.Interaction):
     )
     return
 
-  rows = db.all_non_cancelled(guild.id)
-  payout_rows = db.paid_payouts_for_guild(guild.id)
-
-  total_contracts = len(rows)
-  paid_rows_all = [r for r in rows if r["status"] == "paid"]
-  unpaid_rows = [r for r in rows if r["status"] == "unpaid"]
-
-  # РЕЙТИНГ: reset впливає тільки на бали й кількість участей у поточному рейтингу.
-  rating_reset_at = db.get_setting(guild.id, "rating_reset_at")
-  rating_rows = [
-    row for row in rows
-    if not rating_reset_at or row["created_at"] >= rating_reset_at
-  ]
-
-  rating_points = defaultdict(lambda: Fraction(0, 1))
-  rating_participations = Counter()
-
-  for row in rating_rows:
-    members = parse_ids(row["participant_ids"])
-    if not members:
-      continue
-
-    share = Fraction(1, len(members))
-    for uid in members:
-      rating_points[uid] += share
-      rating_participations[uid] += 1
-
-  rating_users = sorted(
-    rating_points,
-    key=lambda uid: (rating_points[uid], rating_participations[uid]),
-    reverse=True,
+  await interaction.response.send_message(
+    embed=build_admin_general_stats_embed(guild.id),
+    view=AdminStatsView(guild.id, "general"),
+    ephemeral=True,
   )
-
-  # ЗАРОБІТОК: окремий reset. Фільтруємо за моментом оплати.
-  earnings_reset_at = db.get_setting(guild.id, "earnings_reset_at")
-
-  paid_rows_period = [
-    row for row in paid_rows_all
-    if not earnings_reset_at
-    or (row["paid_at"] and row["paid_at"] >= earnings_reset_at)
-  ]
-
-  payout_rows_period = [
-    payout for payout in payout_rows
-    if not earnings_reset_at
-    or payout["created_at"] >= earnings_reset_at
-  ]
-
-  total_paid_gross_cents = sum(row["price"] * 100 for row in paid_rows_period)
-  total_family_bank_cents = sum((row["fomo_cents"] or 0) for row in paid_rows_period)
-  total_members_cents = sum((row["net_cents"] or 0) for row in paid_rows_period)
-  unpaid_gross_cents = sum(row["price"] * 100 for row in unpaid_rows)
-
-  member_earnings = Counter()
-  for payout in payout_rows_period:
-    member_earnings[payout["user_id"]] += payout["amount_cents"]
-
-  earning_users = sorted(
-    member_earnings,
-    key=lambda uid: member_earnings[uid],
-    reverse=True,
-  )
-
-  embed = discord.Embed(
-    title="📊 Статистика контрактів",
-    color=discord.Color.blurple(),
-  )
-
-  embed.add_field(
-    name="📋 Контракти",
-    value=(
-      f"Всього: **{total_contracts}**\n"
-      f"Оплачено: **{len(paid_rows_all)}**\n"
-      f"Не оплачено: **{len(unpaid_rows)}**"
-    ),
-    inline=True,
-  )
-
-  earnings_reset_ts = iso_to_unix(earnings_reset_at) if earnings_reset_at else None
-  finance_title = (
-    f"💰 Заробіток • з <t:{earnings_reset_ts}:d>"
-    if earnings_reset_ts
-    else "💰 Заробіток • від початку"
-  )
-
-  embed.add_field(
-    name=finance_title,
-    value=(
-      f"Сума оплачених контрактів: **{format_cents(total_paid_gross_cents)}**\n"
-      f"Банк сім'ї: "
-      f"**{format_cents(total_family_bank_cents)}**\n"
-      f"Учасникам: **{format_cents(total_members_cents)}**"
-    ),
-    inline=False,
-  )
-
-  embed.add_field(
-    name="⏳ Не оплачено зараз",
-    value=f"На суму: **{format_cents(unpaid_gross_cents)}**",
-    inline=False,
-  )
-
-  rating_reset_ts = iso_to_unix(rating_reset_at) if rating_reset_at else None
-  rating_title = (
-    f"🏆 Рейтинг • з <t:{rating_reset_ts}:d>"
-    if rating_reset_ts
-    else "🏆 Рейтинг • від початку"
-  )
-
-  if rating_users:
-    rating_lines = []
-    for idx, uid in enumerate(rating_users[:15], start=1):
-      rating_lines.append(
-        f"**{idx}.** <@{uid}> — "
-        f"**{format_points(rating_points[uid])}** бала • "
-        f"участей **{rating_participations[uid]}**"
-      )
-    embed.add_field(
-      name=rating_title,
-      value="\n".join(rating_lines),
-      inline=False,
-    )
-  else:
-    embed.add_field(
-      name=rating_title,
-      value="Після обнулення ще немає виконаних контрактів.",
-      inline=False,
-    )
-
-  earnings_people_title = (
-    f"💵 Заробіток учасників • з <t:{earnings_reset_ts}:d>"
-    if earnings_reset_ts
-    else "💵 Заробіток учасників • від початку"
-  )
-
-  if earning_users:
-    earning_lines = [
-      f"**{idx}.** <@{uid}> — **{format_cents(member_earnings[uid])}**"
-      for idx, uid in enumerate(earning_users[:15], start=1)
-    ]
-    embed.add_field(
-      name=earnings_people_title,
-      value="\n".join(earning_lines),
-      inline=False,
-    )
-  else:
-    embed.add_field(
-      name=earnings_people_title,
-      value="Поки немає оплачених контрактів.",
-      inline=False,
-    )
-
-  await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="unpaid", description="Неоплачені контракти")

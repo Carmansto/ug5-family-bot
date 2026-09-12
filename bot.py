@@ -1,9 +1,10 @@
 import os
 import re
+import asyncio
 import json
 import sqlite3
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from fractions import Fraction
 from typing import Optional
@@ -21,6 +22,14 @@ GUILD_ID = int(os.getenv("GUILD_ID", "0") or 0)
 CONTRACT_CHANNEL_ID = int(os.getenv("CONTRACT_CHANNEL_ID", "0") or 0)
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0") or 0)
 
+# Automatic reporting channels.
+RATING_CHANNEL_ID = int(os.getenv("RATING_CHANNEL_ID", "0") or 0)
+FAMILY_STATS_CHANNEL_ID = int(os.getenv("FAMILY_STATS_CHANNEL_ID", "0") or 0)
+
+RATING_MORNING_HOUR = int(os.getenv("RATING_MORNING_HOUR", "9") or 9)
+RATING_EVENING_HOUR = int(os.getenv("RATING_EVENING_HOUR", "21") or 21)
+FAMILY_STATS_HOUR = int(os.getenv("FAMILY_STATS_HOUR", "0") or 0)
+
 # Backward compatible with your current setup.
 ADMIN_ROLE_ID = int(os.getenv("ADMIN_ROLE_ID", "0") or 0)
 
@@ -33,8 +42,8 @@ MANAGER_ROLE_IDS = {
 if ADMIN_ROLE_ID:
   MANAGER_ROLE_IDS.add(ADMIN_ROLE_ID)
 
-# Роль лідера. Якщо окремо не задана — використовуємо ADMIN_ROLE_ID.
-# MANAGER_ROLE_IDS = ролі замів/керівництва, яким виплата може накопичуватися боргом.
+# Ð Ð¾Ð»Ñ Ð»ÑÐ´ÐµÑÐ°. Ð¯ÐºÑÐ¾ Ð¾ÐºÑÐµÐ¼Ð¾ Ð½Ðµ Ð·Ð°Ð´Ð°Ð½Ð° â Ð²Ð¸ÐºÐ¾ÑÐ¸ÑÑÐ¾Ð²ÑÑÐ¼Ð¾ ADMIN_ROLE_ID.
+# MANAGER_ROLE_IDS = ÑÐ¾Ð»Ñ Ð·Ð°Ð¼ÑÐ²/ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð°, ÑÐºÐ¸Ð¼ Ð²Ð¸Ð¿Ð»Ð°ÑÐ° Ð¼Ð¾Ð¶Ðµ Ð½Ð°ÐºÐ¾Ð¿Ð¸ÑÑÐ²Ð°ÑÐ¸ÑÑ Ð±Ð¾ÑÐ³Ð¾Ð¼.
 LEADER_ROLE_ID = int(os.getenv("LEADER_ROLE_ID", str(ADMIN_ROLE_ID or 0)) or 0)
 
 DB_PATH = os.getenv("DB_PATH", "contracts.db").strip()
@@ -78,27 +87,27 @@ def parse_money(raw: str) -> int:
   Examples:
   110000
   110 000
-  110к / 110k
-  1.2м / 1.2m
+  110Ðº / 110k
+  1.2Ð¼ / 1.2m
   """
   s = raw.strip().lower()
-  s = s.replace("$", "").replace("₴", "").replace(" ", "").replace("_", "")
+  s = s.replace("$", "").replace("â´", "").replace(" ", "").replace("_", "")
   s = s.replace(",", ".")
 
   multiplier = 1
-  if s.endswith(("к", "k")):
+  if s.endswith(("Ðº", "k")):
     multiplier = 1_000
     s = s[:-1]
-  elif s.endswith(("м", "m")):
+  elif s.endswith(("Ð¼", "m")):
     multiplier = 1_000_000
     s = s[:-1]
 
   if not re.fullmatch(r"\d+(\.\d+)?", s):
-    raise ValueError("Некоректна сума")
+    raise ValueError("ÐÐµÐºÐ¾ÑÐµÐºÑÐ½Ð° ÑÑÐ¼Ð°")
 
   value = int(Decimal(s) * multiplier)
   if value <= 0:
-    raise ValueError("Сума має бути більшою за 0")
+    raise ValueError("Ð¡ÑÐ¼Ð° Ð¼Ð°Ñ Ð±ÑÑÐ¸ Ð±ÑÐ»ÑÑÐ¾Ñ Ð·Ð° 0")
   return value
 
 
@@ -116,7 +125,7 @@ def format_cents(cents: int) -> str:
   return f"{sign}{whole_text}.{rem:02d} $"
 
 
-UA_ALPHABET = "абвгґдеєжзиіїйклмнопрстуфхцчшщьюя"
+UA_ALPHABET = "Ð°Ð±Ð²Ð³ÒÐ´ÐµÑÐ¶Ð·Ð¸ÑÑÐ¹ÐºÐ»Ð¼Ð½Ð¾Ð¿ÑÑÑÑÑÑÑÑÑÑÑÑÑ"
 UA_ORDER = {char: idx for idx, char in enumerate(UA_ALPHABET)}
 
 
@@ -137,24 +146,24 @@ def format_points(value: Fraction) -> str:
 
 
 def format_points_with_word(value: Fraction) -> str:
-  """1 бал, 2 бали, 10 балів, 1.65 бала."""
+  """1 Ð±Ð°Ð», 2 Ð±Ð°Ð»Ð¸, 10 Ð±Ð°Ð»ÑÐ², 1.65 Ð±Ð°Ð»Ð°."""
   number = format_points(value)
 
   if value.denominator != 1:
-    return f"{number} бала"
+    return f"{number} Ð±Ð°Ð»Ð°"
 
   n = abs(value.numerator)
   last_two = n % 100
   last = n % 10
 
   if last_two in (11, 12, 13, 14):
-    word = "балів"
+    word = "Ð±Ð°Ð»ÑÐ²"
   elif last == 1:
-    word = "бал"
+    word = "Ð±Ð°Ð»"
   elif last in (2, 3, 4):
-    word = "бали"
+    word = "Ð±Ð°Ð»Ð¸"
   else:
-    word = "балів"
+    word = "Ð±Ð°Ð»ÑÐ²"
 
   return f"{number} {word}"
 
@@ -174,7 +183,7 @@ def local_date_from_iso(value: Optional[str]):
 
 def format_day(day) -> str:
   weekdays = (
-    "Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"
+    "ÐÐ½", "ÐÑ", "Ð¡Ñ", "Ð§Ñ", "ÐÑ", "Ð¡Ð±", "ÐÐ´"
   )
   return f"{weekdays[day.weekday()]}, {day.strftime('%d.%m.%Y')}"
 
@@ -209,12 +218,12 @@ PAYMENT_MODE_LEGACY_FAMILY = "family"
 
 def payment_mode_label(mode: str) -> str:
   labels = {
-    PAYMENT_MODE_NORMAL: "Звичайна оплата",
-    PAYMENT_MODE_REDISTRIBUTE: "Розділити між рештою",
-    PAYMENT_MODE_FAMILY_SHARE: "Частку винятків у сім'ю",
-    PAYMENT_MODE_LEGACY_FAMILY: "На фаму",
+    PAYMENT_MODE_NORMAL: "ÐÐ²Ð¸ÑÐ°Ð¹Ð½Ð° Ð¾Ð¿Ð»Ð°ÑÐ°",
+    PAYMENT_MODE_REDISTRIBUTE: "Ð Ð¾Ð·Ð´ÑÐ»Ð¸ÑÐ¸ Ð¼ÑÐ¶ ÑÐµÑÑÐ¾Ñ",
+    PAYMENT_MODE_FAMILY_SHARE: "Ð§Ð°ÑÑÐºÑ Ð²Ð¸Ð½ÑÑÐºÑÐ² Ñ ÑÑÐ¼'Ñ",
+    PAYMENT_MODE_LEGACY_FAMILY: "ÐÐ° ÑÐ°Ð¼Ñ",
   }
-  return labels.get(mode, "Оплата")
+  return labels.get(mode, "ÐÐ¿Ð»Ð°ÑÐ°")
 
 
 def calculate_payment(
@@ -312,17 +321,17 @@ def calculate_personal_family_contributions(
   excluded_payment_ids: Optional[list[int]] = None,
 ) -> dict[int, int]:
   """
-  Рахує тільки ОСОБИСТІ гроші учасника, які пішли в Банк сім'ї.
-  Стандартні FAMILY_PERCENT не приписуються конкретній людині.
+  Ð Ð°ÑÑÑ ÑÑÐ»ÑÐºÐ¸ ÐÐ¡ÐÐÐÐ¡Ð¢Ð Ð³ÑÐ¾ÑÑ ÑÑÐ°ÑÐ½Ð¸ÐºÐ°, ÑÐºÑ Ð¿ÑÑÐ»Ð¸ Ð² ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ.
+  Ð¡ÑÐ°Ð½Ð´Ð°ÑÑÐ½Ñ FAMILY_PERCENT Ð½Ðµ Ð¿ÑÐ¸Ð¿Ð¸ÑÑÑÑÑÑÑ ÐºÐ¾Ð½ÐºÑÐµÑÐ½ÑÐ¹ Ð»ÑÐ´Ð¸Ð½Ñ.
 
-  На фаму:
-    кожному зараховується його нормальна частка з participant pool.
+  ÐÐ° ÑÐ°Ð¼Ñ:
+    ÐºÐ¾Ð¶Ð½Ð¾Ð¼Ñ Ð·Ð°ÑÐ°ÑÐ¾Ð²ÑÑÑÑÑÑ Ð¹Ð¾Ð³Ð¾ Ð½Ð¾ÑÐ¼Ð°Ð»ÑÐ½Ð° ÑÐ°ÑÑÐºÐ° Ð· participant pool.
 
-  Частку в сім'ю:
-    особистим внеском є нормальна частка саме виключених людей.
+  Ð§Ð°ÑÑÐºÑ Ð² ÑÑÐ¼'Ñ:
+    Ð¾ÑÐ¾Ð±Ð¸ÑÑÐ¸Ð¼ Ð²Ð½ÐµÑÐºÐ¾Ð¼ Ñ Ð½Ð¾ÑÐ¼Ð°Ð»ÑÐ½Ð° ÑÐ°ÑÑÐºÐ° ÑÐ°Ð¼Ðµ Ð²Ð¸ÐºÐ»ÑÑÐµÐ½Ð¸Ñ Ð»ÑÐ´ÐµÐ¹.
 
-  Звичайна / Розділити між рештою:
-    особистий внесок = 0.
+  ÐÐ²Ð¸ÑÐ°Ð¹Ð½Ð° / Ð Ð¾Ð·Ð´ÑÐ»Ð¸ÑÐ¸ Ð¼ÑÐ¶ ÑÐµÑÑÐ¾Ñ:
+    Ð¾ÑÐ¾Ð±Ð¸ÑÑÐ¸Ð¹ Ð²Ð½ÐµÑÐ¾Ðº = 0.
   """
   if not participant_ids:
     return {}
@@ -360,33 +369,33 @@ def payment_preview_embed(
   )
 
   embed = discord.Embed(
-    title="💵 Перевірка оплати",
+    title="ðµ ÐÐµÑÐµÐ²ÑÑÐºÐ° Ð¾Ð¿Ð»Ð°ÑÐ¸",
     description=(
       f"**{row['contract_name']}**\n"
-      f"Сума контракту: **{format_money_dollars(row['price'])} $**"
+      f"Ð¡ÑÐ¼Ð° ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ: **{format_money_dollars(row['price'])} $**"
     ),
     color=discord.Color.gold(),
   )
 
   embed.add_field(
-    name="Спосіб",
+    name="Ð¡Ð¿Ð¾ÑÑÐ±",
     value=payment_mode_label(payment_mode),
     inline=False,
   )
   embed.add_field(
-    name="🏦 Банк сім'ї",
+    name="ð¦ ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ",
     value=format_cents(family_cents),
     inline=True,
   )
   embed.add_field(
-    name="💸 Учасникам",
+    name="ð¸ Ð£ÑÐ°ÑÐ½Ð¸ÐºÐ°Ð¼",
     value=format_cents(net_cents),
     inline=True,
   )
 
   if normalized_excluded and payment_mode != PAYMENT_MODE_LEGACY_FAMILY:
     embed.add_field(
-      name="🚫 Без виплати",
+      name="ð« ÐÐµÐ· Ð²Ð¸Ð¿Ð»Ð°ÑÐ¸",
       value=" ".join(f"<@{uid}>" for uid in normalized_excluded),
       inline=False,
     )
@@ -397,20 +406,20 @@ def payment_preview_embed(
     for uid, amount in payouts.items():
       if uid in deferred_set:
         lines.append(
-          f"⏳ <@{uid}> — **{format_cents(amount)}** • відкладена оплата"
+          f"â³ <@{uid}> â **{format_cents(amount)}** â¢ Ð²ÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð° Ð¾Ð¿Ð»Ð°ÑÐ°"
         )
       else:
         lines.append(
-          f"<@{uid}> — **{format_cents(amount)}**"
+          f"<@{uid}> â **{format_cents(amount)}**"
         )
 
     embed.add_field(
-      name="👤 Розподіл",
+      name="ð¤ Ð Ð¾Ð·Ð¿Ð¾Ð´ÑÐ»",
       value="\n".join(lines),
       inline=False,
     )
 
-  embed.set_footer(text="Перевірте суми перед підтвердженням")
+  embed.set_footer(text="ÐÐµÑÐµÐ²ÑÑÑÐµ ÑÑÐ¼Ð¸ Ð¿ÐµÑÐµÐ´ Ð¿ÑÐ´ÑÐ²ÐµÑÐ´Ð¶ÐµÐ½Ð½ÑÐ¼")
   return embed
 
 
@@ -430,7 +439,7 @@ def leader_member(member: discord.Member) -> bool:
 
 
 def deferred_payout_member(member: discord.Member) -> bool:
-  """Зам/керівник, виплата якому накопичується боргом лідера."""
+  """ÐÐ°Ð¼/ÐºÐµÑÑÐ²Ð½Ð¸Ðº, Ð²Ð¸Ð¿Ð»Ð°ÑÐ° ÑÐºÐ¾Ð¼Ñ Ð½Ð°ÐºÐ¾Ð¿Ð¸ÑÑÑÑÑÑÑ Ð±Ð¾ÑÐ³Ð¾Ð¼ Ð»ÑÐ´ÐµÑÐ°."""
   if LEADER_ROLE_ID and any(role.id == LEADER_ROLE_ID for role in member.roles):
     return False
   return any(role.id in MANAGER_ROLE_IDS for role in member.roles)
@@ -587,8 +596,8 @@ class Database:
 
   def backfill_legacy_paid_contracts(self):
     """
-    Старі MVP/V2 записи могли бути позначені як paid ще до появи
-    Банку сім'ї та персональних payout-ів. Дораховуємо їх один раз.
+    Ð¡ÑÐ°ÑÑ MVP/V2 Ð·Ð°Ð¿Ð¸ÑÐ¸ Ð¼Ð¾Ð³Ð»Ð¸ Ð±ÑÑÐ¸ Ð¿Ð¾Ð·Ð½Ð°ÑÐµÐ½Ñ ÑÐº paid ÑÐµ Ð´Ð¾ Ð¿Ð¾ÑÐ²Ð¸
+    ÐÐ°Ð½ÐºÑ ÑÑÐ¼'Ñ ÑÐ° Ð¿ÐµÑÑÐ¾Ð½Ð°Ð»ÑÐ½Ð¸Ñ payout-ÑÐ². ÐÐ¾ÑÐ°ÑÐ¾Ð²ÑÑÐ¼Ð¾ ÑÑ Ð¾Ð´Ð¸Ð½ ÑÐ°Ð·.
     """
     rows = self.conn.execute("""
     SELECT *
@@ -659,8 +668,8 @@ class Database:
 
   def backfill_family_contributions(self):
     """
-    Старі оплачені контракти вже містять payment_mode / excluded ids,
-    тому особистий внесок у Банк сім'ї можна відновити заднім числом.
+    Ð¡ÑÐ°ÑÑ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ¸ Ð²Ð¶Ðµ Ð¼ÑÑÑÑÑÑ payment_mode / excluded ids,
+    ÑÐ¾Ð¼Ñ Ð¾ÑÐ¾Ð±Ð¸ÑÑÐ¸Ð¹ Ð²Ð½ÐµÑÐ¾Ðº Ñ ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ Ð¼Ð¾Ð¶Ð½Ð° Ð²ÑÐ´Ð½Ð¾Ð²Ð¸ÑÐ¸ Ð·Ð°Ð´Ð½ÑÐ¼ ÑÐ¸ÑÐ»Ð¾Ð¼.
     """
     rows = self.conn.execute("""
     SELECT *
@@ -855,9 +864,9 @@ class Database:
 
   def annul_paid(self, message_id: int, annulled_by: int) -> bool:
     """
-    Анулює вже оплачений контракт без фізичного видалення.
-    Старі payout-и залишаються в БД як історичний слід,
-    але через status='annulled' більше не потрапляють у статистику.
+    ÐÐ½ÑÐ»ÑÑ Ð²Ð¶Ðµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ Ð±ÐµÐ· ÑÑÐ·Ð¸ÑÐ½Ð¾Ð³Ð¾ Ð²Ð¸Ð´Ð°Ð»ÐµÐ½Ð½Ñ.
+    Ð¡ÑÐ°ÑÑ payout-Ð¸ Ð·Ð°Ð»Ð¸ÑÐ°ÑÑÑÑÑ Ð² ÐÐ ÑÐº ÑÑÑÐ¾ÑÐ¸ÑÐ½Ð¸Ð¹ ÑÐ»ÑÐ´,
+    Ð°Ð»Ðµ ÑÐµÑÐµÐ· status='annulled' Ð±ÑÐ»ÑÑÐµ Ð½Ðµ Ð¿Ð¾ÑÑÐ°Ð¿Ð»ÑÑÑÑ Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÑ.
     """
     cur = self.conn.execute("""
     UPDATE contracts
@@ -1221,6 +1230,26 @@ class Database:
     }
     return sorted(user_ids)
 
+  def admin_debts_for_guild(self, guild_id: int):
+    return self.conn.execute("""
+    SELECT d.*
+    FROM admin_debts d
+    JOIN contracts c ON c.id = d.contract_id
+    WHERE c.guild_id = ?
+     AND c.status = 'paid'
+    ORDER BY d.id ASC
+    """, (guild_id,)).fetchall()
+
+  def family_contributions_for_guild(self, guild_id: int):
+    return self.conn.execute("""
+    SELECT fc.*
+    FROM family_contributions fc
+    JOIN contracts c ON c.id = fc.contract_id
+    WHERE c.guild_id = ?
+     AND c.status = 'paid'
+    ORDER BY fc.id ASC
+    """, (guild_id,)).fetchall()
+
   def get_setting(self, guild_id: int, key: str) -> Optional[str]:
     row = self.conn.execute("""
     SELECT value FROM bot_settings
@@ -1253,25 +1282,25 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
   if row["status"] == "paid":
     color = discord.Color.green()
     if (row["payment_mode"] or PAYMENT_MODE_NORMAL) == PAYMENT_MODE_LEGACY_FAMILY:
-      status_text = "🏠 **На фаму**"
+      status_text = "ð  **ÐÐ° ÑÐ°Ð¼Ñ**"
     else:
-      status_text = "🟢 **Оплачено**"
+      status_text = "ð¢ **ÐÐ¿Ð»Ð°ÑÐµÐ½Ð¾**"
   elif row["status"] == "annulled":
     color = discord.Color.dark_red()
-    status_text = "🚫 **Анульовано**"
+    status_text = "ð« **ÐÐ½ÑÐ»ÑÐ¾Ð²Ð°Ð½Ð¾**"
   elif row["status"] == "cancelled":
     color = discord.Color.dark_grey()
-    status_text = "⚫ **Скасовано**"
+    status_text = "â« **Ð¡ÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¾**"
   else:
     color = discord.Color.orange()
-    status_text = "🔴 **Не оплачено**"
+    status_text = "ð´ **ÐÐµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¾**"
 
   if row["status"] == "annulled":
-    title = "🚫 КОНТРАКТ АНУЛЬОВАНО"
+    title = "ð« ÐÐÐÐ¢Ð ÐÐÐ¢ ÐÐÐ£ÐÐ¬ÐÐÐÐÐ"
   elif row["status"] == "cancelled":
-    title = "❌ КОНТРАКТ СКАСОВАНО"
+    title = "â ÐÐÐÐ¢Ð ÐÐÐ¢ Ð¡ÐÐÐ¡ÐÐÐÐÐ"
   else:
-    title = "✅ КОНТРАКТ ВИКОНАНО"
+    title = "â ÐÐÐÐ¢Ð ÐÐÐ¢ ÐÐÐÐÐÐÐÐ"
 
   embed = discord.Embed(
     title=title,
@@ -1279,31 +1308,31 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
   )
 
   embed.add_field(
-    name="👥 Виконували",
-    value=" ".join(f"<@{uid}>" for uid in participants) or "—",
+    name="ð¥ ÐÐ¸ÐºÐ¾Ð½ÑÐ²Ð°Ð»Ð¸",
+    value=" ".join(f"<@{uid}>" for uid in participants) or "â",
     inline=False,
   )
-  embed.add_field(name="📋 Контракт", value=row["contract_name"], inline=True)
-  embed.add_field(name="💰 Сума", value=f"{format_money_dollars(row['price'])} $", inline=True)
-  embed.add_field(name="⏳ КД", value=row["cooldown"], inline=True)
-  embed.add_field(name="💳 Статус", value=status_text, inline=False)
+  embed.add_field(name="ð ÐÐ¾Ð½ÑÑÐ°ÐºÑ", value=row["contract_name"], inline=True)
+  embed.add_field(name="ð° Ð¡ÑÐ¼Ð°", value=f"{format_money_dollars(row['price'])} $", inline=True)
+  embed.add_field(name="â³ ÐÐ", value=row["cooldown"], inline=True)
+  embed.add_field(name="ð³ Ð¡ÑÐ°ÑÑÑ", value=status_text, inline=False)
 
   if row["status"] == "paid":
     paid_ts = iso_to_unix(row["paid_at"])
     if paid_ts:
-      embed.add_field(name="✅ Оплачено", value=f"<t:{paid_ts}:f>", inline=True)
+      embed.add_field(name="â ÐÐ¿Ð»Ð°ÑÐµÐ½Ð¾", value=f"<t:{paid_ts}:f>", inline=True)
 
     fomo_cents = row["fomo_cents"] or 0
     net_cents = row["net_cents"] or 0
     payment_mode = row["payment_mode"] or PAYMENT_MODE_NORMAL
 
     embed.add_field(
-      name="🏦 Банк сім'ї",
+      name="ð¦ ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ",
       value=format_cents(fomo_cents),
       inline=True,
     )
     embed.add_field(
-      name="💸 Учасникам",
+      name="ð¸ Ð£ÑÐ°ÑÐ½Ð¸ÐºÐ°Ð¼",
       value=format_cents(net_cents),
       inline=True,
     )
@@ -1311,7 +1340,7 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
     excluded_payment_ids = parse_ids(row["excluded_payment_ids"] or "[]")
     if excluded_payment_ids and payment_mode != PAYMENT_MODE_LEGACY_FAMILY:
       embed.add_field(
-        name="🚫 Без виплати",
+        name="ð« ÐÐµÐ· Ð²Ð¸Ð¿Ð»Ð°ÑÐ¸",
         value=" ".join(f"<@{uid}>" for uid in excluded_payment_ids),
         inline=False,
       )
@@ -1322,7 +1351,7 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
       PAYMENT_MODE_LEGACY_FAMILY,
     ):
       embed.add_field(
-        name="⚙️ Спосіб оплати",
+        name="âï¸ Ð¡Ð¿Ð¾ÑÑÐ± Ð¾Ð¿Ð»Ð°ÑÐ¸",
         value=payment_mode_label(payment_mode),
         inline=False,
       )
@@ -1331,23 +1360,23 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
     debts = db.admin_debts_for_contract(row["id"])
 
     payout_lines = [
-      f"<@{p['user_id']}> — **{format_cents(p['amount_cents'])}**"
+      f"<@{p['user_id']}> â **{format_cents(p['amount_cents'])}**"
       for p in payouts
     ]
 
     for debt in debts:
       if debt["status"] == "paid":
         payout_lines.append(
-          f"✅ <@{debt['user_id']}> — **{format_cents(debt['amount_cents'])}** • виплачено лідером"
+          f"â <@{debt['user_id']}> â **{format_cents(debt['amount_cents'])}** â¢ Ð²Ð¸Ð¿Ð»Ð°ÑÐµÐ½Ð¾ Ð»ÑÐ´ÐµÑÐ¾Ð¼"
         )
       else:
         payout_lines.append(
-          f"⏳ <@{debt['user_id']}> — **{format_cents(debt['amount_cents'])}** • відкладена оплата"
+          f"â³ <@{debt['user_id']}> â **{format_cents(debt['amount_cents'])}** â¢ Ð²ÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð° Ð¾Ð¿Ð»Ð°ÑÐ°"
         )
 
     if payout_lines:
       embed.add_field(
-        name="👤 Розподіл виплати",
+        name="ð¤ Ð Ð¾Ð·Ð¿Ð¾Ð´ÑÐ» Ð²Ð¸Ð¿Ð»Ð°ÑÐ¸",
         value="\n".join(payout_lines),
         inline=False,
       )
@@ -1359,32 +1388,32 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
 
     details = []
     if annulled_by:
-      details.append(f"Анулював/ла: <@{annulled_by}>")
+      details.append(f"ÐÐ½ÑÐ»ÑÐ²Ð°Ð²/Ð»Ð°: <@{annulled_by}>")
     if annulled_ts:
       details.append(f"<t:{annulled_ts}:f>")
 
     if paid_ts:
       embed.add_field(
-        name="Було оплачено",
+        name="ÐÑÐ»Ð¾ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¾",
         value=f"<t:{paid_ts}:f>",
         inline=True,
       )
 
     embed.add_field(
-      name="Було в Банк сім'ї",
+      name="ÐÑÐ»Ð¾ Ð² ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ",
       value=format_cents(row["fomo_cents"] or 0),
       inline=True,
     )
     embed.add_field(
-      name="Було учасникам",
+      name="ÐÑÐ»Ð¾ ÑÑÐ°ÑÐ½Ð¸ÐºÐ°Ð¼",
       value=format_cents(row["net_cents"] or 0),
       inline=True,
     )
 
     if details:
       embed.add_field(
-        name="Анулювання",
-        value=" • ".join(details),
+        name="ÐÐ½ÑÐ»ÑÐ²Ð°Ð½Ð½Ñ",
+        value=" â¢ ".join(details),
         inline=False,
       )
 
@@ -1393,14 +1422,14 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
     cancelled_by = row["cancelled_by"]
     details = []
     if cancelled_by:
-      details.append(f"Скасував: <@{cancelled_by}>")
+      details.append(f"Ð¡ÐºÐ°ÑÑÐ²Ð°Ð²: <@{cancelled_by}>")
     if cancelled_ts:
       details.append(f"<t:{cancelled_ts}:f>")
     if details:
-      embed.add_field(name="Скасування", value=" • ".join(details), inline=False)
+      embed.add_field(name="Ð¡ÐºÐ°ÑÑÐ²Ð°Ð½Ð½Ñ", value=" â¢ ".join(details), inline=False)
 
-  embed.set_footer(text=f"Запис #{row['id']}")
-  embed.set_footer(text=f"ID контракту: {row['id']}")
+  embed.set_footer(text=f"ÐÐ°Ð¿Ð¸Ñ #{row['id']}")
+  embed.set_footer(text=f"ID ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ: {row['id']}")
   return embed
 
 
@@ -1462,7 +1491,7 @@ async def audit_log(
 
 
 def mentions(user_ids: list[int]) -> str:
-  return " ".join(f"<@{uid}>" for uid in user_ids) or "—"
+  return " ".join(f"<@{uid}>" for uid in user_ids) or "â"
 
 
 # ----------------------------
@@ -1472,7 +1501,7 @@ def mentions(user_ids: list[int]) -> str:
 class PerformerSelect(discord.ui.UserSelect):
   def __init__(self):
     super().__init__(
-      placeholder="Оберіть виконавців контракту",
+      placeholder="ÐÐ±ÐµÑÑÑÑ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²ÑÑÐ² ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ",
       min_values=1,
       max_values=25,
     )
@@ -1483,7 +1512,7 @@ class PerformerSelect(discord.ui.UserSelect):
 
     if not ids:
       await interaction.response.send_message(
-        "❌ Оберіть хоча б одного звичайного учасника.",
+        "â ÐÐ±ÐµÑÑÑÑ ÑÐ¾ÑÐ° Ð± Ð¾Ð´Ð½Ð¾Ð³Ð¾ Ð·Ð²Ð¸ÑÐ°Ð¹Ð½Ð¾Ð³Ð¾ ÑÑÐ°ÑÐ½Ð¸ÐºÐ°.",
         ephemeral=True,
       )
       return
@@ -1505,13 +1534,13 @@ class PerformerStepView(discord.ui.View):
       self.remove_item(self.myself)
 
   @discord.ui.button(
-    label="Я виконав/ла сам/а",
+    label="Ð¯ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²/Ð»Ð° ÑÐ°Ð¼/Ð°",
     style=discord.ButtonStyle.primary,
-    emoji="👤",
+    emoji="ð¤",
   )
   async def myself(self, interaction: discord.Interaction, button: discord.ui.Button):
     if getattr(interaction.user, "bot", False):
-      await interaction.response.send_message("❌ Бот не може бути виконавцем.", ephemeral=True)
+      await interaction.response.send_message("â ÐÐ¾Ñ Ð½Ðµ Ð¼Ð¾Ð¶Ðµ Ð±ÑÑÐ¸ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²ÑÐµÐ¼.", ephemeral=True)
       return
 
     participant_ids = [interaction.user.id]
@@ -1559,14 +1588,14 @@ def picker_content(
   mentions = " ".join(f"<@{uid}>" for uid in participant_ids)
 
   if query:
-    title = f"🔎 Пошук: **{query}**"
+    title = f"ð ÐÐ¾ÑÑÐº: **{query}**"
   else:
-    title = "📋 Контракти"
+    title = "ð ÐÐ¾Ð½ÑÑÐ°ÐºÑÐ¸"
 
   return (
-    f"👥 Виконавці: {mentions}\n\n"
-    f"{title} • сторінка **{page + 1}/{total_pages}**\n"
-    "Оберіть контракт зі списку."
+    f"ð¥ ÐÐ¸ÐºÐ¾Ð½Ð°Ð²ÑÑ: {mentions}\n\n"
+    f"{title} â¢ ÑÑÐ¾ÑÑÐ½ÐºÐ° **{page + 1}/{total_pages}**\n"
+    "ÐÐ±ÐµÑÑÑÑ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ Ð·Ñ ÑÐ¿Ð¸ÑÐºÑ."
   )
 
 
@@ -1594,7 +1623,7 @@ class ContractPageSelect(discord.ui.Select):
         label=row["name"][:100],
         value=str(row["id"]),
         description=(
-          f"{format_money_dollars(row['price'])} $ • КД {row['cooldown']}"
+          f"{format_money_dollars(row['price'])} $ â¢ ÐÐ {row['cooldown']}"
         )[:100],
       )
       for row in rows
@@ -1603,16 +1632,16 @@ class ContractPageSelect(discord.ui.Select):
     if not options:
       options = [
         discord.SelectOption(
-          label="Нічого не знайдено",
+          label="ÐÑÑÐ¾Ð³Ð¾ Ð½Ðµ Ð·Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾",
           value="none",
-          description="Змініть пошук або покажіть усі контракти",
+          description="ÐÐ¼ÑÐ½ÑÑÑ Ð¿Ð¾ÑÑÐº Ð°Ð±Ð¾ Ð¿Ð¾ÐºÐ°Ð¶ÑÑÑ ÑÑÑ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ¸",
         )
       ]
 
     placeholder = (
-      f"Результати: {query} • {page + 1}/{total_pages}"
+      f"Ð ÐµÐ·ÑÐ»ÑÑÐ°ÑÐ¸: {query} â¢ {page + 1}/{total_pages}"
       if query
-      else f"Контракти • {page + 1}/{total_pages}"
+      else f"ÐÐ¾Ð½ÑÑÐ°ÐºÑÐ¸ â¢ {page + 1}/{total_pages}"
     )
 
     super().__init__(
@@ -1630,13 +1659,13 @@ class ContractPageSelect(discord.ui.Select):
 
     if not row or not row["active"]:
       await interaction.response.send_message(
-        "❌ Цей контракт уже недоступний.",
+        "â Ð¦ÐµÐ¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ ÑÐ¶Ðµ Ð½ÐµÐ´Ð¾ÑÑÑÐ¿Ð½Ð¸Ð¹.",
         ephemeral=True,
       )
       return
 
     await interaction.response.edit_message(
-      content="Перевірте дані й підтвердьте.",
+      content="ÐÐµÑÐµÐ²ÑÑÑÐµ Ð´Ð°Ð½Ñ Ð¹ Ð¿ÑÐ´ÑÐ²ÐµÑÐ´ÑÑÐµ.",
       embed=build_confirmation_embed(row, self.participant_ids),
       view=ConfirmContractView(
         self.bot_instance,
@@ -1648,7 +1677,7 @@ class ContractPageSelect(discord.ui.Select):
     )
 
 
-class ContractSearchModal(discord.ui.Modal, title="Пошук контракту"):
+class ContractSearchModal(discord.ui.Modal, title="ÐÐ¾ÑÑÐº ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ"):
   def __init__(
     self,
     bot_instance: "ContractBot",
@@ -1660,8 +1689,8 @@ class ContractSearchModal(discord.ui.Modal, title="Пошук контракту
     self.participant_ids = participant_ids
 
     self.search_input = discord.ui.TextInput(
-      label="Назва контракту",
-      placeholder="Наприклад: балони, дрова, переробка...",
+      label="ÐÐ°Ð·Ð²Ð° ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ",
+      placeholder="ÐÐ°Ð¿ÑÐ¸ÐºÐ»Ð°Ð´: Ð±Ð°Ð»Ð¾Ð½Ð¸, Ð´ÑÐ¾Ð²Ð°, Ð¿ÐµÑÐµÑÐ¾Ð±ÐºÐ°...",
       default=current_query or None,
       required=True,
       max_length=80,
@@ -1683,8 +1712,8 @@ class ContractSearchModal(discord.ui.Modal, title="Пошук контракту
       query,
     )
 
-    # Modal був відкритий кнопкою з цього ж ephemeral-повідомлення,
-    # тому редагуємо його, а не створюємо ще одне.
+    # Modal Ð±ÑÐ² Ð²ÑÐ´ÐºÑÐ¸ÑÐ¸Ð¹ ÐºÐ½Ð¾Ð¿ÐºÐ¾Ñ Ð· ÑÑÐ¾Ð³Ð¾ Ð¶ ephemeral-Ð¿Ð¾Ð²ÑÐ´Ð¾Ð¼Ð»ÐµÐ½Ð½Ñ,
+    # ÑÐ¾Ð¼Ñ ÑÐµÐ´Ð°Ð³ÑÑÐ¼Ð¾ Ð¹Ð¾Ð³Ð¾, Ð° Ð½Ðµ ÑÑÐ²Ð¾ÑÑÑÐ¼Ð¾ ÑÐµ Ð¾Ð´Ð½Ðµ.
     try:
       await interaction.response.edit_message(
         content=content,
@@ -1742,9 +1771,9 @@ class ContractPickerView(discord.ui.View):
     self.clear_search.disabled = not bool(query)
 
   @discord.ui.button(
-    label="Назад",
+    label="ÐÐ°Ð·Ð°Ð´",
     style=discord.ButtonStyle.secondary,
-    emoji="◀️",
+    emoji="âï¸",
     row=1,
   )
   async def previous(
@@ -1788,9 +1817,9 @@ class ContractPickerView(discord.ui.View):
     pass
 
   @discord.ui.button(
-    label="Далі",
+    label="ÐÐ°Ð»Ñ",
     style=discord.ButtonStyle.secondary,
-    emoji="▶️",
+    emoji="â¶ï¸",
     row=1,
   )
   async def next_page(
@@ -1821,9 +1850,9 @@ class ContractPickerView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="Пошук",
+    label="ÐÐ¾ÑÑÐº",
     style=discord.ButtonStyle.primary,
-    emoji="🔎",
+    emoji="ð",
     row=2,
   )
   async def search(
@@ -1840,9 +1869,9 @@ class ContractPickerView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="Показати всі",
+    label="ÐÐ¾ÐºÐ°Ð·Ð°ÑÐ¸ Ð²ÑÑ",
     style=discord.ButtonStyle.secondary,
-    emoji="📋",
+    emoji="ð",
     row=2,
   )
   async def clear_search(
@@ -1870,21 +1899,21 @@ class ContractPickerView(discord.ui.View):
 
 def build_confirmation_embed(contract_type: sqlite3.Row, participant_ids: list[int]) -> discord.Embed:
   embed = discord.Embed(
-    title="Підтвердити виконання контракту",
+    title="ÐÑÐ´ÑÐ²ÐµÑÐ´Ð¸ÑÐ¸ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð½Ð½Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ",
     color=discord.Color.blurple(),
   )
   embed.add_field(
-    name="👥 Виконавці",
+    name="ð¥ ÐÐ¸ÐºÐ¾Ð½Ð°Ð²ÑÑ",
     value=" ".join(f"<@{uid}>" for uid in participant_ids),
     inline=False,
   )
-  embed.add_field(name="📋 Контракт", value=contract_type["name"], inline=True)
+  embed.add_field(name="ð ÐÐ¾Ð½ÑÑÐ°ÐºÑ", value=contract_type["name"], inline=True)
   embed.add_field(
-    name="💰 Сума",
+    name="ð° Ð¡ÑÐ¼Ð°",
     value=f"{format_money_dollars(contract_type['price'])} $",
     inline=True,
   )
-  embed.add_field(name="⏳ КД", value=contract_type["cooldown"], inline=True)
+  embed.add_field(name="â³ ÐÐ", value=contract_type["cooldown"], inline=True)
   return embed
 
 
@@ -1904,17 +1933,17 @@ class ConfirmContractView(discord.ui.View):
     self.return_page = return_page
     self.return_query = return_query
 
-  @discord.ui.button(label="Підтвердити", style=discord.ButtonStyle.success, emoji="✅")
+  @discord.ui.button(label="ÐÑÐ´ÑÐ²ÐµÑÐ´Ð¸ÑÐ¸", style=discord.ButtonStyle.success, emoji="â")
   async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
     guild = interaction.guild
     if guild is None:
-      await interaction.response.send_message("❌ Це працює тільки на сервері.", ephemeral=True)
+      await interaction.response.send_message("â Ð¦Ðµ Ð¿ÑÐ°ÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð½Ð° ÑÐµÑÐ²ÐµÑÑ.", ephemeral=True)
       return
 
     contract_type = db.get_contract_type(self.type_id)
     if not contract_type or not contract_type["active"]:
       await interaction.response.send_message(
-        "❌ Контракт уже видалений із переліку.",
+        "â ÐÐ¾Ð½ÑÑÐ°ÐºÑ ÑÐ¶Ðµ Ð²Ð¸Ð´Ð°Ð»ÐµÐ½Ð¸Ð¹ ÑÐ· Ð¿ÐµÑÐµÐ»ÑÐºÑ.",
         ephemeral=True,
       )
       return
@@ -1922,19 +1951,19 @@ class ConfirmContractView(discord.ui.View):
     channel = await get_target_channel(guild, interaction.channel_id)
     if not isinstance(channel, (discord.TextChannel, discord.Thread)):
       await interaction.response.send_message(
-        "❌ Не знайшов канал контрактів.",
+        "â ÐÐµ Ð·Ð½Ð°Ð¹ÑÐ¾Ð² ÐºÐ°Ð½Ð°Ð» ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ².",
         ephemeral=True,
       )
       return
 
-    # Одразу прибираємо кнопки, щоб подвійний клік не створив дубль.
+    # ÐÐ´ÑÐ°Ð·Ñ Ð¿ÑÐ¸Ð±Ð¸ÑÐ°ÑÐ¼Ð¾ ÐºÐ½Ð¾Ð¿ÐºÐ¸, ÑÐ¾Ð± Ð¿Ð¾Ð´Ð²ÑÐ¹Ð½Ð¸Ð¹ ÐºÐ»ÑÐº Ð½Ðµ ÑÑÐ²Ð¾ÑÐ¸Ð² Ð´ÑÐ±Ð»Ñ.
     await interaction.response.edit_message(
-      content="⏳ Записую контракт...",
+      content="â³ ÐÐ°Ð¿Ð¸ÑÑÑ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ...",
       embed=None,
       view=None,
     )
 
-    placeholder = await channel.send("⏳ Записую контракт...")
+    placeholder = await channel.send("â³ ÐÐ°Ð¿Ð¸ÑÑÑ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ...")
 
     db.add_completed_contract(
       message_id=placeholder.id,
@@ -1954,28 +1983,28 @@ class ConfirmContractView(discord.ui.View):
 
     await audit_log(
       guild,
-      "✅ Контракт записано",
+      "â ÐÐ¾Ð½ÑÑÐ°ÐºÑ Ð·Ð°Ð¿Ð¸ÑÐ°Ð½Ð¾",
       (
-        f"Запис: **#{row['id']}**\n"
-        f"Контракт: **{row['contract_name']}**\n"
-        f"Сума: **{format_money_dollars(row['price'])} $**\n"
-        f"Виконавці: {mentions(self.participant_ids)}\n"
-        f"Записав/ла: <@{interaction.user.id}>"
+        f"ÐÐ°Ð¿Ð¸Ñ: **#{row['id']}**\n"
+        f"ÐÐ¾Ð½ÑÑÐ°ÐºÑ: **{row['contract_name']}**\n"
+        f"Ð¡ÑÐ¼Ð°: **{format_money_dollars(row['price'])} $**\n"
+        f"ÐÐ¸ÐºÐ¾Ð½Ð°Ð²ÑÑ: {mentions(self.participant_ids)}\n"
+        f"ÐÐ°Ð¿Ð¸ÑÐ°Ð²/Ð»Ð°: <@{interaction.user.id}>"
       ),
       discord.Color.green(),
     )
 
-    # Панель завжди переносимо в самий низ каналу.
+    # ÐÐ°Ð½ÐµÐ»Ñ Ð·Ð°Ð²Ð¶Ð´Ð¸ Ð¿ÐµÑÐµÐ½Ð¾ÑÐ¸Ð¼Ð¾ Ð² ÑÐ°Ð¼Ð¸Ð¹ Ð½Ð¸Ð· ÐºÐ°Ð½Ð°Ð»Ñ.
     if isinstance(channel, discord.TextChannel):
       await move_main_panel_to_bottom(guild, channel)
 
     await interaction.edit_original_response(
-      content=f"✅ Контракт записано: {placeholder.jump_url}",
+      content=f"â ÐÐ¾Ð½ÑÑÐ°ÐºÑ Ð·Ð°Ð¿Ð¸ÑÐ°Ð½Ð¾: {placeholder.jump_url}",
       embed=None,
       view=None,
     )
 
-  @discord.ui.button(label="Назад", style=discord.ButtonStyle.secondary, emoji="↩️")
+  @discord.ui.button(label="ÐÐ°Ð·Ð°Ð´", style=discord.ButtonStyle.secondary, emoji="â©ï¸")
   async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
     _, page, total_pages = picker_page_data(
       self.return_page,
@@ -2008,23 +2037,23 @@ class CancelCompletedConfirmView(discord.ui.View):
     self.bot_instance = bot_instance
     self.message_id = message_id
 
-  @discord.ui.button(label="Так, скасувати", style=discord.ButtonStyle.danger, emoji="🗑️")
+  @discord.ui.button(label="Ð¢Ð°Ðº, ÑÐºÐ°ÑÑÐ²Ð°ÑÐ¸", style=discord.ButtonStyle.danger, emoji="ðï¸")
   async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.edit_message(content="❌ Немає права.", view=None)
+      await interaction.response.edit_message(content="â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", view=None)
       return
 
     row_before = db.get_completed_by_message(self.message_id)
 
     await interaction.response.edit_message(
-      content="⏳ Скасовую запис...",
+      content="â³ Ð¡ÐºÐ°ÑÐ¾Ð²ÑÑ Ð·Ð°Ð¿Ð¸Ñ...",
       view=None,
     )
 
     ok = db.cancel_completed(self.message_id, interaction.user.id)
     if not ok:
       await interaction.edit_original_response(
-        content="❌ Скасувати можна тільки неоплачений контракт.",
+        content="â Ð¡ÐºÐ°ÑÑÐ²Ð°ÑÐ¸ Ð¼Ð¾Ð¶Ð½Ð° ÑÑÐ»ÑÐºÐ¸ Ð½ÐµÐ¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ.",
         view=None,
       )
       return
@@ -2034,23 +2063,23 @@ class CancelCompletedConfirmView(discord.ui.View):
     if row_before:
       await audit_log(
         interaction.guild,
-        "🗑️ Контракт скасовано",
+        "ðï¸ ÐÐ¾Ð½ÑÑÐ°ÐºÑ ÑÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¾",
         (
-          f"Запис: **#{row_before['id']}**\n"
-          f"Контракт: **{row_before['contract_name']}**\n"
-          f"Скасував/ла: <@{interaction.user.id}>"
+          f"ÐÐ°Ð¿Ð¸Ñ: **#{row_before['id']}**\n"
+          f"ÐÐ¾Ð½ÑÑÐ°ÐºÑ: **{row_before['contract_name']}**\n"
+          f"Ð¡ÐºÐ°ÑÑÐ²Ð°Ð²/Ð»Ð°: <@{interaction.user.id}>"
         ),
         discord.Color.red(),
       )
 
     await interaction.edit_original_response(
-      content="✅ Запис скасовано. Він більше не рахується в статистиці.",
+      content="â ÐÐ°Ð¿Ð¸Ñ ÑÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¾. ÐÑÐ½ Ð±ÑÐ»ÑÑÐµ Ð½Ðµ ÑÐ°ÑÑÑÑÑÑÑ Ð² ÑÑÐ°ÑÐ¸ÑÑÐ¸ÑÑ.",
       view=None,
     )
 
-  @discord.ui.button(label="Ні", style=discord.ButtonStyle.secondary)
+  @discord.ui.button(label="ÐÑ", style=discord.ButtonStyle.secondary)
   async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
-    await interaction.response.edit_message(content="Скасування відмінено.", view=None)
+    await interaction.response.edit_message(content="Ð¡ÐºÐ°ÑÑÐ²Ð°Ð½Ð½Ñ Ð²ÑÐ´Ð¼ÑÐ½ÐµÐ½Ð¾.", view=None)
 
 
 async def payment_preview_with_debts(
@@ -2109,27 +2138,27 @@ class PaymentConfirmView(discord.ui.View):
     self.deferred_ids = deferred_ids or []
 
   @discord.ui.button(
-    label="Підтвердити",
+    label="ÐÑÐ´ÑÐ²ÐµÑÐ´Ð¸ÑÐ¸",
     style=discord.ButtonStyle.success,
-    emoji="✅",
+    emoji="â",
   )
   async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.edit_message(content="❌ Немає права.", view=None)
+      await interaction.response.edit_message(content="â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", view=None)
       return
 
     row_before = db.get_completed_by_message(self.message_id)
     if not row_before or row_before["status"] != "unpaid":
       await interaction.response.edit_message(
-        content="❌ Контракт уже оплачений або скасований.",
+        content="â ÐÐ¾Ð½ÑÑÐ°ÐºÑ ÑÐ¶Ðµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ Ð°Ð±Ð¾ ÑÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¸Ð¹.",
         embed=None,
         view=None,
       )
       return
 
-    # Блокуємо повторне натискання одразу.
+    # ÐÐ»Ð¾ÐºÑÑÐ¼Ð¾ Ð¿Ð¾Ð²ÑÐ¾ÑÐ½Ðµ Ð½Ð°ÑÐ¸ÑÐºÐ°Ð½Ð½Ñ Ð¾Ð´ÑÐ°Ð·Ñ.
     await interaction.response.edit_message(
-      content="⏳ Проводжу оплату...",
+      content="â³ ÐÑÐ¾Ð²Ð¾Ð´Ð¶Ñ Ð¾Ð¿Ð»Ð°ÑÑ...",
       embed=None,
       view=None,
     )
@@ -2144,7 +2173,7 @@ class PaymentConfirmView(discord.ui.View):
 
     if not result:
       await interaction.edit_original_response(
-        content="❌ Не вдалося провести оплату.",
+        content="â ÐÐµ Ð²Ð´Ð°Ð»Ð¾ÑÑ Ð¿ÑÐ¾Ð²ÐµÑÑÐ¸ Ð¾Ð¿Ð»Ð°ÑÑ.",
         embed=None,
         view=None,
       )
@@ -2153,54 +2182,54 @@ class PaymentConfirmView(discord.ui.View):
     await refresh_completed_message(self.message_id)
 
     payout_lines = [
-      f"<@{uid}> — **{format_cents(amount)}**"
+      f"<@{uid}> â **{format_cents(amount)}**"
       for uid, amount in result["payouts"].items()
     ]
     payout_lines.extend(
-      f"⏳ <@{uid}> — **{format_cents(amount)}** • відкладена оплата"
+      f"â³ <@{uid}> â **{format_cents(amount)}** â¢ Ð²ÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð° Ð¾Ð¿Ð»Ð°ÑÐ°"
       for uid, amount in result["deferred_payouts"].items()
     )
-    payouts_text = "\n".join(payout_lines) or "—"
+    payouts_text = "\n".join(payout_lines) or "â"
 
     excluded_text = (
-      "—"
+      "â"
       if self.payment_mode == PAYMENT_MODE_LEGACY_FAMILY
       else mentions(result["excluded_payment_ids"])
     )
 
     await audit_log(
       interaction.guild,
-      "💵 Контракт оплачено",
+      "ðµ ÐÐ¾Ð½ÑÑÐ°ÐºÑ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¾",
       (
-        f"Запис: **#{row_before['id']}**\n"
-        f"Контракт: **{row_before['contract_name']}**\n"
-        f"Спосіб: **{payment_mode_label(self.payment_mode)}**\n"
-        f"Банк сім'ї: **{format_cents(result['fomo_cents'])}**\n"
-        f"Учасникам: **{format_cents(result['net_cents'])}**\n"
-        f"Без виплати: {excluded_text}\n"
-        f"Розподіл:\n{payouts_text}\n"
-        f"Відкладено після цього контракту: **{format_cents(sum(result['deferred_payouts'].values()))}**\n"
-        f"Оплатив/ла: <@{interaction.user.id}>"
+        f"ÐÐ°Ð¿Ð¸Ñ: **#{row_before['id']}**\n"
+        f"ÐÐ¾Ð½ÑÑÐ°ÐºÑ: **{row_before['contract_name']}**\n"
+        f"Ð¡Ð¿Ð¾ÑÑÐ±: **{payment_mode_label(self.payment_mode)}**\n"
+        f"ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ: **{format_cents(result['fomo_cents'])}**\n"
+        f"Ð£ÑÐ°ÑÐ½Ð¸ÐºÐ°Ð¼: **{format_cents(result['net_cents'])}**\n"
+        f"ÐÐµÐ· Ð²Ð¸Ð¿Ð»Ð°ÑÐ¸: {excluded_text}\n"
+        f"Ð Ð¾Ð·Ð¿Ð¾Ð´ÑÐ»:\n{payouts_text}\n"
+        f"ÐÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð¾ Ð¿ÑÑÐ»Ñ ÑÑÐ¾Ð³Ð¾ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ: **{format_cents(sum(result['deferred_payouts'].values()))}**\n"
+        f"ÐÐ¿Ð»Ð°ÑÐ¸Ð²/Ð»Ð°: <@{interaction.user.id}>"
       ),
       discord.Color.green(),
     )
 
     await interaction.edit_original_response(
-      content="✅ Оплату проведено.",
+      content="â ÐÐ¿Ð»Ð°ÑÑ Ð¿ÑÐ¾Ð²ÐµÐ´ÐµÐ½Ð¾.",
       embed=None,
       view=None,
     )
 
   @discord.ui.button(
-    label="Назад",
+    label="ÐÐ°Ð·Ð°Ð´",
     style=discord.ButtonStyle.secondary,
-    emoji="↩️",
+    emoji="â©ï¸",
   )
   async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
     row = db.get_completed_by_message(self.message_id)
     if not row or interaction.guild is None:
       await interaction.response.edit_message(
-        content="❌ Контракт уже недоступний.",
+        content="â ÐÐ¾Ð½ÑÑÐ°ÐºÑ ÑÐ¶Ðµ Ð½ÐµÐ´Ð¾ÑÑÑÐ¿Ð½Ð¸Ð¹.",
         embed=None,
         view=None,
       )
@@ -2209,8 +2238,8 @@ class PaymentConfirmView(discord.ui.View):
     if self.back_to_custom:
       await interaction.response.edit_message(
         content=(
-          "⚙️ **Налаштувати оплату**\n"
-          "Оберіть, кого не потрібно оплачувати, а потім спосіб розподілу."
+          "âï¸ **ÐÐ°Ð»Ð°ÑÑÑÐ²Ð°ÑÐ¸ Ð¾Ð¿Ð»Ð°ÑÑ**\n"
+          "ÐÐ±ÐµÑÑÑÑ, ÐºÐ¾Ð³Ð¾ Ð½Ðµ Ð¿Ð¾ÑÑÑÐ±Ð½Ð¾ Ð¾Ð¿Ð»Ð°ÑÑÐ²Ð°ÑÐ¸, Ð° Ð¿Ð¾ÑÑÐ¼ ÑÐ¿Ð¾ÑÑÐ± ÑÐ¾Ð·Ð¿Ð¾Ð´ÑÐ»Ñ."
         ),
         embed=None,
         view=CustomPaymentView(
@@ -2223,7 +2252,7 @@ class PaymentConfirmView(discord.ui.View):
       )
     else:
       await interaction.response.edit_message(
-        content="Оплату не проведено.",
+        content="ÐÐ¿Ð»Ð°ÑÑ Ð½Ðµ Ð¿ÑÐ¾Ð²ÐµÐ´ÐµÐ½Ð¾.",
         embed=None,
         view=None,
       )
@@ -2246,13 +2275,13 @@ class CustomExcludeSelect(discord.ui.Select):
         discord.SelectOption(
           label=label[:100],
           value=str(uid),
-          description="Не виплачувати гроші цьому учаснику",
+          description="ÐÐµ Ð²Ð¸Ð¿Ð»Ð°ÑÑÐ²Ð°ÑÐ¸ Ð³ÑÐ¾ÑÑ ÑÑÐ¾Ð¼Ñ ÑÑÐ°ÑÐ½Ð¸ÐºÑ",
           default=uid in selected,
         )
       )
 
     super().__init__(
-      placeholder="Кого виключити з оплати?",
+      placeholder="ÐÐ¾Ð³Ð¾ Ð²Ð¸ÐºÐ»ÑÑÐ¸ÑÐ¸ Ð· Ð¾Ð¿Ð»Ð°ÑÐ¸?",
       min_values=1,
       max_values=len(options),
       options=options,
@@ -2268,9 +2297,9 @@ class CustomExcludeSelect(discord.ui.Select):
 
     await interaction.response.edit_message(
       content=(
-        "⚙️ **Налаштувати оплату**\n"
-        f"🚫 Без виплати: {mentions(view.excluded_ids)}\n\n"
-        "Оберіть спосіб:"
+        "âï¸ **ÐÐ°Ð»Ð°ÑÑÑÐ²Ð°ÑÐ¸ Ð¾Ð¿Ð»Ð°ÑÑ**\n"
+        f"ð« ÐÐµÐ· Ð²Ð¸Ð¿Ð»Ð°ÑÐ¸: {mentions(view.excluded_ids)}\n\n"
+        "ÐÐ±ÐµÑÑÑÑ ÑÐ¿Ð¾ÑÑÐ±:"
       ),
       view=view,
     )
@@ -2307,15 +2336,15 @@ class CustomPaymentView(discord.ui.View):
     self.family_share.disabled = not bool(self.excluded_ids)
 
   @discord.ui.button(
-    label="Розділити між рештою",
+    label="Ð Ð¾Ð·Ð´ÑÐ»Ð¸ÑÐ¸ Ð¼ÑÐ¶ ÑÐµÑÑÐ¾Ñ",
     style=discord.ButtonStyle.success,
-    emoji="💸",
+    emoji="ð¸",
     row=1,
   )
   async def redistribute(self, interaction: discord.Interaction, button: discord.ui.Button):
     row = db.get_completed_by_message(self.message_id)
     if not row:
-      await interaction.response.edit_message(content="❌ Контракт не знайдено.", view=None)
+      await interaction.response.edit_message(content="â ÐÐ¾Ð½ÑÑÐ°ÐºÑ Ð½Ðµ Ð·Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾.", view=None)
       return
 
     try:
@@ -2329,7 +2358,7 @@ class CustomPaymentView(discord.ui.View):
       )
     except ValueError:
       await interaction.response.edit_message(
-        content="❌ Для цього способу має залишитися хоча б один отримувач.",
+        content="â ÐÐ»Ñ ÑÑÐ¾Ð³Ð¾ ÑÐ¿Ð¾ÑÐ¾Ð±Ñ Ð¼Ð°Ñ Ð·Ð°Ð»Ð¸ÑÐ¸ÑÐ¸ÑÑ ÑÐ¾ÑÐ° Ð± Ð¾Ð´Ð¸Ð½ Ð¾ÑÑÐ¸Ð¼ÑÐ²Ð°Ñ.",
         view=self,
       )
       return
@@ -2341,15 +2370,15 @@ class CustomPaymentView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="Частку в сім'ю",
+    label="Ð§Ð°ÑÑÐºÑ Ð² ÑÑÐ¼'Ñ",
     style=discord.ButtonStyle.primary,
-    emoji="🏦",
+    emoji="ð¦",
     row=1,
   )
   async def family_share(self, interaction: discord.Interaction, button: discord.ui.Button):
     row = db.get_completed_by_message(self.message_id)
     if not row:
-      await interaction.response.edit_message(content="❌ Контракт не знайдено.", view=None)
+      await interaction.response.edit_message(content="â ÐÐ¾Ð½ÑÑÐ°ÐºÑ Ð½Ðµ Ð·Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾.", view=None)
       return
 
     embed, confirm_view = await payment_preview_with_debts(
@@ -2368,14 +2397,14 @@ class CustomPaymentView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="Назад",
+    label="ÐÐ°Ð·Ð°Ð´",
     style=discord.ButtonStyle.secondary,
-    emoji="↩️",
+    emoji="â©ï¸",
     row=1,
   )
   async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
     await interaction.response.edit_message(
-      content="Налаштування оплати закрито.",
+      content="ÐÐ°Ð»Ð°ÑÑÑÐ²Ð°Ð½Ð½Ñ Ð¾Ð¿Ð»Ð°ÑÐ¸ Ð·Ð°ÐºÑÐ¸ÑÐ¾.",
       embed=None,
       view=None,
     )
@@ -2384,7 +2413,7 @@ class CustomPaymentView(discord.ui.View):
 class CorrectionPerformerSelect(discord.ui.UserSelect):
   def __init__(self, bot_instance: "ContractBot", message_id: int):
     super().__init__(
-      placeholder="Оберіть правильних виконавців",
+      placeholder="ÐÐ±ÐµÑÑÑÑ Ð¿ÑÐ°Ð²Ð¸Ð»ÑÐ½Ð¸Ñ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²ÑÑÐ²",
       min_values=1,
       max_values=25,
     )
@@ -2393,7 +2422,7 @@ class CorrectionPerformerSelect(discord.ui.UserSelect):
 
   async def callback(self, interaction: discord.Interaction):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.edit_message(content="❌ Немає права.", view=None)
+      await interaction.response.edit_message(content="â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", view=None)
       return
 
     new_ids = [u.id for u in self.values if not getattr(u, "bot", False)]
@@ -2401,7 +2430,7 @@ class CorrectionPerformerSelect(discord.ui.UserSelect):
 
     if not row_before or not db.update_completed_participants(self.message_id, new_ids):
       await interaction.response.edit_message(
-        content="❌ Змінити можна тільки неоплачений контракт.",
+        content="â ÐÐ¼ÑÐ½Ð¸ÑÐ¸ Ð¼Ð¾Ð¶Ð½Ð° ÑÑÐ»ÑÐºÐ¸ Ð½ÐµÐ¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ.",
         view=None,
       )
       return
@@ -2410,18 +2439,18 @@ class CorrectionPerformerSelect(discord.ui.UserSelect):
 
     await audit_log(
       interaction.guild,
-      "✏️ Змінено виконавців",
+      "âï¸ ÐÐ¼ÑÐ½ÐµÐ½Ð¾ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²ÑÑÐ²",
       (
-        f"Запис: **#{row_before['id']}**\n"
-        f"Було: {mentions(parse_ids(row_before['participant_ids']))}\n"
-        f"Стало: {mentions(new_ids)}\n"
-        f"Змінив/ла: <@{interaction.user.id}>"
+        f"ÐÐ°Ð¿Ð¸Ñ: **#{row_before['id']}**\n"
+        f"ÐÑÐ»Ð¾: {mentions(parse_ids(row_before['participant_ids']))}\n"
+        f"Ð¡ÑÐ°Ð»Ð¾: {mentions(new_ids)}\n"
+        f"ÐÐ¼ÑÐ½Ð¸Ð²/Ð»Ð°: <@{interaction.user.id}>"
       ),
       discord.Color.orange(),
     )
 
     await interaction.response.edit_message(
-      content=f"✅ Виконавців оновлено: {mentions(new_ids)}",
+      content=f"â ÐÐ¸ÐºÐ¾Ð½Ð°Ð²ÑÑÐ² Ð¾Ð½Ð¾Ð²Ð»ÐµÐ½Ð¾: {mentions(new_ids)}",
       view=None,
     )
 
@@ -2452,13 +2481,13 @@ class CorrectionContractSelect(discord.ui.Select):
       discord.SelectOption(
         label=row["name"][:100],
         value=str(row["id"]),
-        description=f"{format_money_dollars(row['price'])} $ • КД {row['cooldown']}"[:100],
+        description=f"{format_money_dollars(row['price'])} $ â¢ ÐÐ {row['cooldown']}"[:100],
       )
       for row in rows
     ]
 
     super().__init__(
-      placeholder=f"Оберіть контракт • {self.page + 1}/{self.total_pages}",
+      placeholder=f"ÐÐ±ÐµÑÑÑÑ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ â¢ {self.page + 1}/{self.total_pages}",
       min_values=1,
       max_values=1,
       options=options,
@@ -2467,7 +2496,7 @@ class CorrectionContractSelect(discord.ui.Select):
 
   async def callback(self, interaction: discord.Interaction):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.edit_message(content="❌ Немає права.", view=None)
+      await interaction.response.edit_message(content="â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", view=None)
       return
 
     row_before = db.get_completed_by_message(self.message_id)
@@ -2480,7 +2509,7 @@ class CorrectionContractSelect(discord.ui.Select):
       or not db.update_completed_contract_type(self.message_id, contract_type)
     ):
       await interaction.response.edit_message(
-        content="❌ Змінити можна тільки неоплачений контракт.",
+        content="â ÐÐ¼ÑÐ½Ð¸ÑÐ¸ Ð¼Ð¾Ð¶Ð½Ð° ÑÑÐ»ÑÐºÐ¸ Ð½ÐµÐ¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ.",
         view=None,
       )
       return
@@ -2489,20 +2518,20 @@ class CorrectionContractSelect(discord.ui.Select):
 
     await audit_log(
       interaction.guild,
-      "✏️ Змінено контракт у записі",
+      "âï¸ ÐÐ¼ÑÐ½ÐµÐ½Ð¾ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ Ñ Ð·Ð°Ð¿Ð¸ÑÑ",
       (
-        f"Запис: **#{row_before['id']}**\n"
-        f"Було: **{row_before['contract_name']}** — "
+        f"ÐÐ°Ð¿Ð¸Ñ: **#{row_before['id']}**\n"
+        f"ÐÑÐ»Ð¾: **{row_before['contract_name']}** â "
         f"{format_money_dollars(row_before['price'])} $\n"
-        f"Стало: **{contract_type['name']}** — "
+        f"Ð¡ÑÐ°Ð»Ð¾: **{contract_type['name']}** â "
         f"{format_money_dollars(contract_type['price'])} $\n"
-        f"Змінив/ла: <@{interaction.user.id}>"
+        f"ÐÐ¼ÑÐ½Ð¸Ð²/Ð»Ð°: <@{interaction.user.id}>"
       ),
       discord.Color.orange(),
     )
 
     await interaction.response.edit_message(
-      content=f"✅ Контракт змінено на **{contract_type['name']}**.",
+      content=f"â ÐÐ¾Ð½ÑÑÐ°ÐºÑ Ð·Ð¼ÑÐ½ÐµÐ½Ð¾ Ð½Ð° **{contract_type['name']}**.",
       view=None,
     )
 
@@ -2518,7 +2547,7 @@ class CorrectionContractView(discord.ui.View):
     self.page_label.label = f"{self.page + 1}/{self.total_pages}"
     self.next_page.disabled = self.page >= self.total_pages - 1
 
-  @discord.ui.button(label="Назад", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+  @discord.ui.button(label="ÐÐ°Ð·Ð°Ð´", emoji="âï¸", style=discord.ButtonStyle.secondary, row=1)
   async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
     await interaction.response.edit_message(
       view=CorrectionContractView(self.bot_instance, self.message_id, self.page - 1)
@@ -2528,7 +2557,7 @@ class CorrectionContractView(discord.ui.View):
   async def page_label(self, interaction: discord.Interaction, button: discord.ui.Button):
     pass
 
-  @discord.ui.button(label="Далі", emoji="▶️", style=discord.ButtonStyle.secondary, row=1)
+  @discord.ui.button(label="ÐÐ°Ð»Ñ", emoji="â¶ï¸", style=discord.ButtonStyle.secondary, row=1)
   async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
     await interaction.response.edit_message(
       view=CorrectionContractView(self.bot_instance, self.message_id, self.page + 1)
@@ -2541,23 +2570,23 @@ class CorrectionMenuView(discord.ui.View):
     self.bot_instance = bot_instance
     self.message_id = message_id
 
-  @discord.ui.button(label="Виконавці", emoji="👥", style=discord.ButtonStyle.primary)
+  @discord.ui.button(label="ÐÐ¸ÐºÐ¾Ð½Ð°Ð²ÑÑ", emoji="ð¥", style=discord.ButtonStyle.primary)
   async def performers(self, interaction: discord.Interaction, button: discord.ui.Button):
     await interaction.response.edit_message(
-      content="👥 Оберіть правильний список виконавців:",
+      content="ð¥ ÐÐ±ÐµÑÑÑÑ Ð¿ÑÐ°Ð²Ð¸Ð»ÑÐ½Ð¸Ð¹ ÑÐ¿Ð¸ÑÐ¾Ðº Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²ÑÑÐ²:",
       view=CorrectionPerformerView(self.bot_instance, self.message_id),
     )
 
-  @discord.ui.button(label="Контракт", emoji="📋", style=discord.ButtonStyle.primary)
+  @discord.ui.button(label="ÐÐ¾Ð½ÑÑÐ°ÐºÑ", emoji="ð", style=discord.ButtonStyle.primary)
   async def contract(self, interaction: discord.Interaction, button: discord.ui.Button):
     await interaction.response.edit_message(
-      content="📋 Оберіть правильний контракт:",
+      content="ð ÐÐ±ÐµÑÑÑÑ Ð¿ÑÐ°Ð²Ð¸Ð»ÑÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ:",
       view=CorrectionContractView(self.bot_instance, self.message_id),
     )
 
-  @discord.ui.button(label="Назад", emoji="↩️", style=discord.ButtonStyle.secondary)
+  @discord.ui.button(label="ÐÐ°Ð·Ð°Ð´", emoji="â©ï¸", style=discord.ButtonStyle.secondary)
   async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
-    await interaction.response.edit_message(content="Редагування закрито.", view=None)
+    await interaction.response.edit_message(content="Ð ÐµÐ´Ð°Ð³ÑÐ²Ð°Ð½Ð½Ñ Ð·Ð°ÐºÑÐ¸ÑÐ¾.", view=None)
 
 
 class AnnulPaidConfirmView(discord.ui.View):
@@ -2567,9 +2596,9 @@ class AnnulPaidConfirmView(discord.ui.View):
     self.message_id = message_id
 
   @discord.ui.button(
-    label="Так, анулювати",
+    label="Ð¢Ð°Ðº, Ð°Ð½ÑÐ»ÑÐ²Ð°ÑÐ¸",
     style=discord.ButtonStyle.danger,
-    emoji="🚫",
+    emoji="ð«",
   )
   async def confirm(
     self,
@@ -2578,7 +2607,7 @@ class AnnulPaidConfirmView(discord.ui.View):
   ):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
       await interaction.response.edit_message(
-        content="❌ Немає права.",
+        content="â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.",
         view=None,
       )
       return
@@ -2586,13 +2615,13 @@ class AnnulPaidConfirmView(discord.ui.View):
     row_before = db.get_completed_by_message(self.message_id)
     if not row_before or row_before["status"] != "paid":
       await interaction.response.edit_message(
-        content="❌ Анулювати можна тільки оплачений контракт.",
+        content="â ÐÐ½ÑÐ»ÑÐ²Ð°ÑÐ¸ Ð¼Ð¾Ð¶Ð½Ð° ÑÑÐ»ÑÐºÐ¸ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ.",
         view=None,
       )
       return
 
     await interaction.response.edit_message(
-      content="⏳ Анулюю контракт...",
+      content="â³ ÐÐ½ÑÐ»ÑÑ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ...",
       view=None,
     )
 
@@ -2603,7 +2632,7 @@ class AnnulPaidConfirmView(discord.ui.View):
 
     if not ok:
       await interaction.edit_original_response(
-        content="❌ Не вдалося анулювати контракт.",
+        content="â ÐÐµ Ð²Ð´Ð°Ð»Ð¾ÑÑ Ð°Ð½ÑÐ»ÑÐ²Ð°ÑÐ¸ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ.",
         view=None,
       )
       return
@@ -2612,31 +2641,31 @@ class AnnulPaidConfirmView(discord.ui.View):
 
     await audit_log(
       interaction.guild,
-      "🚫 Оплачений контракт анульовано",
+      "ð« ÐÐ¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ Ð°Ð½ÑÐ»ÑÐ¾Ð²Ð°Ð½Ð¾",
       (
-        f"Запис: **#{row_before['id']}**\n"
-        f"Контракт: **{row_before['contract_name']}**\n"
-        f"Сума: **{format_money_dollars(row_before['price'])} $**\n"
-        f"Було в Банк сім'ї: **{format_cents(row_before['fomo_cents'] or 0)}**\n"
-        f"Було учасникам: **{format_cents(row_before['net_cents'] or 0)}**\n"
-        f"Анулював/ла: <@{interaction.user.id}>"
+        f"ÐÐ°Ð¿Ð¸Ñ: **#{row_before['id']}**\n"
+        f"ÐÐ¾Ð½ÑÑÐ°ÐºÑ: **{row_before['contract_name']}**\n"
+        f"Ð¡ÑÐ¼Ð°: **{format_money_dollars(row_before['price'])} $**\n"
+        f"ÐÑÐ»Ð¾ Ð² ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ: **{format_cents(row_before['fomo_cents'] or 0)}**\n"
+        f"ÐÑÐ»Ð¾ ÑÑÐ°ÑÐ½Ð¸ÐºÐ°Ð¼: **{format_cents(row_before['net_cents'] or 0)}**\n"
+        f"ÐÐ½ÑÐ»ÑÐ²Ð°Ð²/Ð»Ð°: <@{interaction.user.id}>"
       ),
       discord.Color.red(),
     )
 
     await interaction.edit_original_response(
       content=(
-        "✅ Контракт анульовано.\n"
-        "Його гроші та бали більше не враховуються у статистиці, "
-        "але запис залишився в історії."
+        "â ÐÐ¾Ð½ÑÑÐ°ÐºÑ Ð°Ð½ÑÐ»ÑÐ¾Ð²Ð°Ð½Ð¾.\n"
+        "ÐÐ¾Ð³Ð¾ Ð³ÑÐ¾ÑÑ ÑÐ° Ð±Ð°Ð»Ð¸ Ð±ÑÐ»ÑÑÐµ Ð½Ðµ Ð²ÑÐ°ÑÐ¾Ð²ÑÑÑÑÑÑ Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÑÑ, "
+        "Ð°Ð»Ðµ Ð·Ð°Ð¿Ð¸Ñ Ð·Ð°Ð»Ð¸ÑÐ¸Ð²ÑÑ Ð² ÑÑÑÐ¾ÑÑÑ."
       ),
       view=None,
     )
 
   @discord.ui.button(
-    label="Назад",
+    label="ÐÐ°Ð·Ð°Ð´",
     style=discord.ButtonStyle.secondary,
-    emoji="↩️",
+    emoji="â©ï¸",
   )
   async def back(
     self,
@@ -2644,7 +2673,7 @@ class AnnulPaidConfirmView(discord.ui.View):
     button: discord.ui.Button,
   ):
     await interaction.response.edit_message(
-      content="Анулювання скасовано.",
+      content="ÐÐ½ÑÐ»ÑÐ²Ð°Ð½Ð½Ñ ÑÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¾.",
       view=None,
     )
 
@@ -2655,28 +2684,28 @@ class UnpaidCompletedView(discord.ui.View):
     self.bot_instance = bot_instance
 
   @discord.ui.button(
-    label="Оплата",
+    label="ÐÐ¿Ð»Ð°ÑÐ°",
     style=discord.ButtonStyle.success,
-    emoji="💵",
+    emoji="ðµ",
     custom_id="contract_v3:paid",
     row=0,
   )
   async def paid(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
       await interaction.response.send_message(
-        "❌ Оплачувати контракти може тільки керівництво.",
+        "â ÐÐ¿Ð»Ð°ÑÑÐ²Ð°ÑÐ¸ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ¸ Ð¼Ð¾Ð¶Ðµ ÑÑÐ»ÑÐºÐ¸ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð¾.",
         ephemeral=True,
       )
       return
 
     if interaction.message is None:
-      await interaction.response.send_message("❌ Не знайшов запис.", ephemeral=True)
+      await interaction.response.send_message("â ÐÐµ Ð·Ð½Ð°Ð¹ÑÐ¾Ð² Ð·Ð°Ð¿Ð¸Ñ.", ephemeral=True)
       return
 
     row = db.get_completed_by_message(interaction.message.id)
     if not row or row["status"] != "unpaid":
       await interaction.response.send_message(
-        "❌ Контракт уже оплачений або скасований.",
+        "â ÐÐ¾Ð½ÑÑÐ°ÐºÑ ÑÐ¶Ðµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ Ð°Ð±Ð¾ ÑÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¸Ð¹.",
         ephemeral=True,
       )
       return
@@ -2696,9 +2725,9 @@ class UnpaidCompletedView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="На фаму",
+    label="ÐÐ° ÑÐ°Ð¼Ñ",
     style=discord.ButtonStyle.primary,
-    emoji="🏠",
+    emoji="ð ",
     custom_id="contract_v3:family",
     row=0,
   )
@@ -2709,14 +2738,14 @@ class UnpaidCompletedView(discord.ui.View):
   ):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
       await interaction.response.send_message(
-        "❌ Оплачувати контракти може тільки керівництво.",
+        "â ÐÐ¿Ð»Ð°ÑÑÐ²Ð°ÑÐ¸ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ¸ Ð¼Ð¾Ð¶Ðµ ÑÑÐ»ÑÐºÐ¸ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð¾.",
         ephemeral=True,
       )
       return
 
     if interaction.message is None:
       await interaction.response.send_message(
-        "❌ Не знайшов запис.",
+        "â ÐÐµ Ð·Ð½Ð°Ð¹ÑÐ¾Ð² Ð·Ð°Ð¿Ð¸Ñ.",
         ephemeral=True,
       )
       return
@@ -2724,7 +2753,7 @@ class UnpaidCompletedView(discord.ui.View):
     row = db.get_completed_by_message(interaction.message.id)
     if not row or row["status"] != "unpaid":
       await interaction.response.send_message(
-        "❌ Контракт уже оплачений або скасований.",
+        "â ÐÐ¾Ð½ÑÑÐ°ÐºÑ ÑÐ¶Ðµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ Ð°Ð±Ð¾ ÑÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¸Ð¹.",
         ephemeral=True,
       )
       return
@@ -2744,9 +2773,9 @@ class UnpaidCompletedView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="Налаштувати оплату",
+    label="ÐÐ°Ð»Ð°ÑÑÑÐ²Ð°ÑÐ¸ Ð¾Ð¿Ð»Ð°ÑÑ",
     style=discord.ButtonStyle.primary,
-    emoji="⚙️",
+    emoji="âï¸",
     custom_id="contract_v4:custompay",
     row=0,
   )
@@ -2757,19 +2786,19 @@ class UnpaidCompletedView(discord.ui.View):
   ):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
       await interaction.response.send_message(
-        "❌ Налаштовувати оплату може тільки керівництво.",
+        "â ÐÐ°Ð»Ð°ÑÑÐ¾Ð²ÑÐ²Ð°ÑÐ¸ Ð¾Ð¿Ð»Ð°ÑÑ Ð¼Ð¾Ð¶Ðµ ÑÑÐ»ÑÐºÐ¸ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð¾.",
         ephemeral=True,
       )
       return
 
     if interaction.message is None or interaction.guild is None:
-      await interaction.response.send_message("❌ Не знайшов запис.", ephemeral=True)
+      await interaction.response.send_message("â ÐÐµ Ð·Ð½Ð°Ð¹ÑÐ¾Ð² Ð·Ð°Ð¿Ð¸Ñ.", ephemeral=True)
       return
 
     row = db.get_completed_by_message(interaction.message.id)
     if not row or row["status"] != "unpaid":
       await interaction.response.send_message(
-        "❌ Контракт уже оплачений або скасований.",
+        "â ÐÐ¾Ð½ÑÑÐ°ÐºÑ ÑÐ¶Ðµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ Ð°Ð±Ð¾ ÑÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¸Ð¹.",
         ephemeral=True,
       )
       return
@@ -2778,10 +2807,10 @@ class UnpaidCompletedView(discord.ui.View):
 
     await interaction.response.send_message(
       (
-        "⚙️ **Налаштувати оплату**\n"
-        "Оберіть, кого не потрібно оплачувати.\n\n"
-        "**Розділити між рештою** — 85% ділиться між тими, хто залишився.\n"
-        "**Частку в сім'ю** — частка виключених переходить у Банк сім'ї."
+        "âï¸ **ÐÐ°Ð»Ð°ÑÑÑÐ²Ð°ÑÐ¸ Ð¾Ð¿Ð»Ð°ÑÑ**\n"
+        "ÐÐ±ÐµÑÑÑÑ, ÐºÐ¾Ð³Ð¾ Ð½Ðµ Ð¿Ð¾ÑÑÑÐ±Ð½Ð¾ Ð¾Ð¿Ð»Ð°ÑÑÐ²Ð°ÑÐ¸.\n\n"
+        "**Ð Ð¾Ð·Ð´ÑÐ»Ð¸ÑÐ¸ Ð¼ÑÐ¶ ÑÐµÑÑÐ¾Ñ** â 85% Ð´ÑÐ»Ð¸ÑÑÑÑ Ð¼ÑÐ¶ ÑÐ¸Ð¼Ð¸, ÑÑÐ¾ Ð·Ð°Ð»Ð¸ÑÐ¸Ð²ÑÑ.\n"
+        "**Ð§Ð°ÑÑÐºÑ Ð² ÑÑÐ¼'Ñ** â ÑÐ°ÑÑÐºÐ° Ð²Ð¸ÐºÐ»ÑÑÐµÐ½Ð¸Ñ Ð¿ÐµÑÐµÑÐ¾Ð´Ð¸ÑÑ Ñ ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ."
       ),
       view=CustomPaymentView(
         self.bot_instance,
@@ -2793,59 +2822,59 @@ class UnpaidCompletedView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="Виправити",
+    label="ÐÐ¸Ð¿ÑÐ°Ð²Ð¸ÑÐ¸",
     style=discord.ButtonStyle.secondary,
-    emoji="✏️",
+    emoji="âï¸",
     custom_id="contract_v4:edit",
     row=1,
   )
   async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
       await interaction.response.send_message(
-        "❌ Виправляти записи може тільки керівництво.",
+        "â ÐÐ¸Ð¿ÑÐ°Ð²Ð»ÑÑÐ¸ Ð·Ð°Ð¿Ð¸ÑÐ¸ Ð¼Ð¾Ð¶Ðµ ÑÑÐ»ÑÐºÐ¸ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð¾.",
         ephemeral=True,
       )
       return
 
     if interaction.message is None:
-      await interaction.response.send_message("❌ Не знайшов запис.", ephemeral=True)
+      await interaction.response.send_message("â ÐÐµ Ð·Ð½Ð°Ð¹ÑÐ¾Ð² Ð·Ð°Ð¿Ð¸Ñ.", ephemeral=True)
       return
 
     row = db.get_completed_by_message(interaction.message.id)
     if not row or row["status"] != "unpaid":
       await interaction.response.send_message(
-        "❌ Виправляти можна тільки неоплачений контракт.",
+        "â ÐÐ¸Ð¿ÑÐ°Ð²Ð»ÑÑÐ¸ Ð¼Ð¾Ð¶Ð½Ð° ÑÑÐ»ÑÐºÐ¸ Ð½ÐµÐ¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ.",
         ephemeral=True,
       )
       return
 
     await interaction.response.send_message(
-      "✏️ Що потрібно виправити?",
+      "âï¸ Ð©Ð¾ Ð¿Ð¾ÑÑÑÐ±Ð½Ð¾ Ð²Ð¸Ð¿ÑÐ°Ð²Ð¸ÑÐ¸?",
       view=CorrectionMenuView(self.bot_instance, interaction.message.id),
       ephemeral=True,
     )
 
   @discord.ui.button(
-    label="Скасувати",
+    label="Ð¡ÐºÐ°ÑÑÐ²Ð°ÑÐ¸",
     style=discord.ButtonStyle.danger,
-    emoji="🗑️",
+    emoji="ðï¸",
     custom_id="contract_v3:cancel",
     row=1,
   )
   async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
       await interaction.response.send_message(
-        "❌ Скасовувати записи може тільки керівництво.",
+        "â Ð¡ÐºÐ°ÑÐ¾Ð²ÑÐ²Ð°ÑÐ¸ Ð·Ð°Ð¿Ð¸ÑÐ¸ Ð¼Ð¾Ð¶Ðµ ÑÑÐ»ÑÐºÐ¸ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð¾.",
         ephemeral=True,
       )
       return
 
     if interaction.message is None:
-      await interaction.response.send_message("❌ Не знайшов запис.", ephemeral=True)
+      await interaction.response.send_message("â ÐÐµ Ð·Ð½Ð°Ð¹ÑÐ¾Ð² Ð·Ð°Ð¿Ð¸Ñ.", ephemeral=True)
       return
 
     await interaction.response.send_message(
-      "⚠️ Скасувати цей запис? Він буде виключений зі статистики.",
+      "â ï¸ Ð¡ÐºÐ°ÑÑÐ²Ð°ÑÐ¸ ÑÐµÐ¹ Ð·Ð°Ð¿Ð¸Ñ? ÐÑÐ½ Ð±ÑÐ´Ðµ Ð²Ð¸ÐºÐ»ÑÑÐµÐ½Ð¸Ð¹ Ð·Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ¸.",
       view=CancelCompletedConfirmView(self.bot_instance, interaction.message.id),
       ephemeral=True,
     )
@@ -2864,25 +2893,25 @@ class ContractTypeModal(discord.ui.Modal):
     row = db.get_contract_type(type_id) if type_id else None
 
     super().__init__(
-      title="Додати контракт" if mode == "add" else "Редагувати контракт",
+      title="ÐÐ¾Ð´Ð°ÑÐ¸ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ" if mode == "add" else "Ð ÐµÐ´Ð°Ð³ÑÐ²Ð°ÑÐ¸ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ",
       timeout=300,
     )
 
     self.name_input = discord.ui.TextInput(
-      label="Назва контракту",
-      placeholder="Наприклад: Майстри баків",
+      label="ÐÐ°Ð·Ð²Ð° ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ",
+      placeholder="ÐÐ°Ð¿ÑÐ¸ÐºÐ»Ð°Ð´: ÐÐ°Ð¹ÑÑÑÐ¸ Ð±Ð°ÐºÑÐ²",
       default=row["name"] if row else None,
       max_length=100,
     )
     self.price_input = discord.ui.TextInput(
-      label="Ціна контракту",
-      placeholder="Наприклад: 100000 або 100к",
+      label="Ð¦ÑÐ½Ð° ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ",
+      placeholder="ÐÐ°Ð¿ÑÐ¸ÐºÐ»Ð°Ð´: 100000 Ð°Ð±Ð¾ 100Ðº",
       default=str(row["price"]) if row else None,
       max_length=20,
     )
     self.cooldown_input = discord.ui.TextInput(
-      label="КД контракту",
-      placeholder="Наприклад: 4 год",
+      label="ÐÐ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ",
+      placeholder="ÐÐ°Ð¿ÑÐ¸ÐºÐ»Ð°Ð´: 4 Ð³Ð¾Ð´",
       default=row["cooldown"] if row else None,
       max_length=50,
     )
@@ -2893,14 +2922,14 @@ class ContractTypeModal(discord.ui.Modal):
 
   async def on_submit(self, interaction: discord.Interaction):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.send_message("❌ Немає права.", ephemeral=True)
+      await interaction.response.send_message("â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", ephemeral=True)
       return
 
     try:
       price = parse_money(str(self.price_input))
     except ValueError:
       await interaction.response.send_message(
-        "❌ Некоректна ціна. Приклади: `100000`, `100к`, `1.2м`.",
+        "â ÐÐµÐºÐ¾ÑÐµÐºÑÐ½Ð° ÑÑÐ½Ð°. ÐÑÐ¸ÐºÐ»Ð°Ð´Ð¸: `100000`, `100Ðº`, `1.2Ð¼`.",
         ephemeral=True,
       )
       return
@@ -2912,17 +2941,17 @@ class ContractTypeModal(discord.ui.Modal):
       row = db.create_contract_type(name, price, cooldown, interaction.user.id)
       await audit_log(
         interaction.guild,
-        "➕ Додано тип контракту",
+        "â ÐÐ¾Ð´Ð°Ð½Ð¾ ÑÐ¸Ð¿ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ",
         (
           f"**{row['name']}**\n"
-          f"Ціна: **{format_money_dollars(row['price'])} $**\n"
-          f"КД: **{row['cooldown']}**\n"
-          f"Додав/ла: <@{interaction.user.id}>"
+          f"Ð¦ÑÐ½Ð°: **{format_money_dollars(row['price'])} $**\n"
+          f"ÐÐ: **{row['cooldown']}**\n"
+          f"ÐÐ¾Ð´Ð°Ð²/Ð»Ð°: <@{interaction.user.id}>"
         ),
         discord.Color.green(),
       )
       await interaction.response.send_message(
-        f"✅ Додано: **{row['name']}** — {format_money_dollars(row['price'])} $ — КД {row['cooldown']}",
+        f"â ÐÐ¾Ð´Ð°Ð½Ð¾: **{row['name']}** â {format_money_dollars(row['price'])} $ â ÐÐ {row['cooldown']}",
         ephemeral=True,
       )
       return
@@ -2930,7 +2959,7 @@ class ContractTypeModal(discord.ui.Modal):
     ok = db.update_contract_type(self.type_id, name, price, cooldown)
     if not ok:
       await interaction.response.send_message(
-        "❌ Не вдалося зберегти. Можливо, контракт з такою назвою вже існує.",
+        "â ÐÐµ Ð²Ð´Ð°Ð»Ð¾ÑÑ Ð·Ð±ÐµÑÐµÐ³ÑÐ¸. ÐÐ¾Ð¶Ð»Ð¸Ð²Ð¾, ÐºÐ¾Ð½ÑÑÐ°ÐºÑ Ð· ÑÐ°ÐºÐ¾Ñ Ð½Ð°Ð·Ð²Ð¾Ñ Ð²Ð¶Ðµ ÑÑÐ½ÑÑ.",
         ephemeral=True,
       )
       return
@@ -2938,17 +2967,17 @@ class ContractTypeModal(discord.ui.Modal):
     row = db.get_contract_type(self.type_id)
     await audit_log(
       interaction.guild,
-      "✏️ Оновлено тип контракту",
+      "âï¸ ÐÐ½Ð¾Ð²Ð»ÐµÐ½Ð¾ ÑÐ¸Ð¿ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ",
       (
         f"**{row['name']}**\n"
-        f"Ціна: **{format_money_dollars(row['price'])} $**\n"
-        f"КД: **{row['cooldown']}**\n"
-        f"Змінив/ла: <@{interaction.user.id}>"
+        f"Ð¦ÑÐ½Ð°: **{format_money_dollars(row['price'])} $**\n"
+        f"ÐÐ: **{row['cooldown']}**\n"
+        f"ÐÐ¼ÑÐ½Ð¸Ð²/Ð»Ð°: <@{interaction.user.id}>"
       ),
       discord.Color.orange(),
     )
     await interaction.response.send_message(
-      f"✅ Оновлено: **{row['name']}** — {format_money_dollars(row['price'])} $ — КД {row['cooldown']}",
+      f"â ÐÐ½Ð¾Ð²Ð»ÐµÐ½Ð¾: **{row['name']}** â {format_money_dollars(row['price'])} $ â ÐÐ {row['cooldown']}",
       ephemeral=True,
     )
 
@@ -2967,8 +2996,8 @@ def admin_picker_page_data(page: int, page_size: int = 25):
 
 def admin_picker_text(page: int, total_pages: int) -> str:
   return (
-    "📋 **Керування контрактами**\n"
-    f"Оберіть контракт зі списку • сторінка **{page + 1}/{total_pages}**"
+    "ð **ÐÐµÑÑÐ²Ð°Ð½Ð½Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ°Ð¼Ð¸**\n"
+    f"ÐÐ±ÐµÑÑÑÑ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ Ð·Ñ ÑÐ¿Ð¸ÑÐºÑ â¢ ÑÑÐ¾ÑÑÐ½ÐºÐ° **{page + 1}/{total_pages}**"
   )
 
 
@@ -2983,7 +3012,7 @@ class AdminManageSelect(discord.ui.Select):
         label=row["name"][:100],
         value=str(row["id"]),
         description=(
-          f"{format_money_dollars(row['price'])} $ • КД {row['cooldown']}"
+          f"{format_money_dollars(row['price'])} $ â¢ ÐÐ {row['cooldown']}"
         )[:100],
       )
       for row in rows
@@ -2992,14 +3021,14 @@ class AdminManageSelect(discord.ui.Select):
     if not options:
       options = [
         discord.SelectOption(
-          label="Контрактів ще немає",
+          label="ÐÐ¾Ð½ÑÑÐ°ÐºÑÑÐ² ÑÐµ Ð½ÐµÐ¼Ð°Ñ",
           value="none",
-          description="Спочатку натисніть «Додати»",
+          description="Ð¡Ð¿Ð¾ÑÐ°ÑÐºÑ Ð½Ð°ÑÐ¸ÑÐ½ÑÑÑ Â«ÐÐ¾Ð´Ð°ÑÐ¸Â»",
         )
       ]
 
     super().__init__(
-      placeholder=f"Контракти • {page + 1}/{total_pages}",
+      placeholder=f"ÐÐ¾Ð½ÑÑÐ°ÐºÑÐ¸ â¢ {page + 1}/{total_pages}",
       options=options,
       min_values=1,
       max_values=1,
@@ -3009,7 +3038,7 @@ class AdminManageSelect(discord.ui.Select):
 
   async def callback(self, interaction: discord.Interaction):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.send_message("❌ Немає права.", ephemeral=True)
+      await interaction.response.send_message("â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", ephemeral=True)
       return
 
     type_id = int(self.values[0])
@@ -3017,23 +3046,23 @@ class AdminManageSelect(discord.ui.Select):
 
     if not row or not row["active"]:
       await interaction.response.edit_message(
-        content="❌ Цей контракт уже недоступний.",
+        content="â Ð¦ÐµÐ¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ ÑÐ¶Ðµ Ð½ÐµÐ´Ð¾ÑÑÑÐ¿Ð½Ð¸Ð¹.",
         embed=None,
         view=AdminManagePickerView(self.page),
       )
       return
 
     embed = discord.Embed(
-      title=f"⚙️ {row['name']}",
+      title=f"âï¸ {row['name']}",
       color=discord.Color.blurple(),
     )
     embed.add_field(
-      name="💰 Ціна",
+      name="ð° Ð¦ÑÐ½Ð°",
       value=f"{format_money_dollars(row['price'])} $",
       inline=True,
     )
     embed.add_field(
-      name="⏳ КД",
+      name="â³ ÐÐ",
       value=row["cooldown"],
       inline=True,
     )
@@ -3057,9 +3086,9 @@ class AdminManagePickerView(discord.ui.View):
     self.next_page.disabled = self.page >= self.total_pages - 1
 
   @discord.ui.button(
-    label="Назад",
+    label="ÐÐ°Ð·Ð°Ð´",
     style=discord.ButtonStyle.secondary,
-    emoji="◀️",
+    emoji="âï¸",
     row=1,
   )
   async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -3082,9 +3111,9 @@ class AdminManagePickerView(discord.ui.View):
     pass
 
   @discord.ui.button(
-    label="Далі",
+    label="ÐÐ°Ð»Ñ",
     style=discord.ButtonStyle.secondary,
-    emoji="▶️",
+    emoji="â¶ï¸",
     row=1,
   )
   async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -3103,32 +3132,32 @@ class DeleteTypeConfirmView(discord.ui.View):
     super().__init__(timeout=60)
     self.type_id = type_id
 
-  @discord.ui.button(label="Так, видалити", style=discord.ButtonStyle.danger, emoji="🗑️")
+  @discord.ui.button(label="Ð¢Ð°Ðº, Ð²Ð¸Ð´Ð°Ð»Ð¸ÑÐ¸", style=discord.ButtonStyle.danger, emoji="ðï¸")
   async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.edit_message(content="❌ Немає права.", view=None)
+      await interaction.response.edit_message(content="â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", view=None)
       return
 
     row = db.get_contract_type(self.type_id)
     db.archive_contract_type(self.type_id)
     await audit_log(
       interaction.guild,
-      "🗑️ Тип контракту прибрано",
+      "ðï¸ Ð¢Ð¸Ð¿ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ Ð¿ÑÐ¸Ð±ÑÐ°Ð½Ð¾",
       (
         f"**{row['name'] if row else self.type_id}**\n"
-        f"Прибрав/ла: <@{interaction.user.id}>"
+        f"ÐÑÐ¸Ð±ÑÐ°Ð²/Ð»Ð°: <@{interaction.user.id}>"
       ),
       discord.Color.red(),
     )
     await interaction.response.edit_message(
-      content="✅ Контракт прибрано з переліку. Старі виконання залишилися в історії.",
+      content="â ÐÐ¾Ð½ÑÑÐ°ÐºÑ Ð¿ÑÐ¸Ð±ÑÐ°Ð½Ð¾ Ð· Ð¿ÐµÑÐµÐ»ÑÐºÑ. Ð¡ÑÐ°ÑÑ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð½Ð½Ñ Ð·Ð°Ð»Ð¸ÑÐ¸Ð»Ð¸ÑÑ Ð² ÑÑÑÐ¾ÑÑÑ.",
       embed=None,
       view=None,
     )
 
-  @discord.ui.button(label="Ні", style=discord.ButtonStyle.secondary)
+  @discord.ui.button(label="ÐÑ", style=discord.ButtonStyle.secondary)
   async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
-    await interaction.response.edit_message(content="Видалення відмінено.", embed=None, view=None)
+    await interaction.response.edit_message(content="ÐÐ¸Ð´Ð°Ð»ÐµÐ½Ð½Ñ Ð²ÑÐ´Ð¼ÑÐ½ÐµÐ½Ð¾.", embed=None, view=None)
 
 
 class ManageOneTypeView(discord.ui.View):
@@ -3137,32 +3166,32 @@ class ManageOneTypeView(discord.ui.View):
     self.type_id = type_id
     self.return_page = return_page
 
-  @discord.ui.button(label="Редагувати", style=discord.ButtonStyle.primary, emoji="✏️")
+  @discord.ui.button(label="Ð ÐµÐ´Ð°Ð³ÑÐ²Ð°ÑÐ¸", style=discord.ButtonStyle.primary, emoji="âï¸")
   async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.send_message("❌ Немає права.", ephemeral=True)
+      await interaction.response.send_message("â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", ephemeral=True)
       return
 
-    # Тут форма залишається, бо Discord дозволяє вводити назву/ціну/КД
-    # саме через Modal. Але пошуку через окреме вікно більше немає.
+    # Ð¢ÑÑ ÑÐ¾ÑÐ¼Ð° Ð·Ð°Ð»Ð¸ÑÐ°ÑÑÑÑÑ, Ð±Ð¾ Discord Ð´Ð¾Ð·Ð²Ð¾Ð»ÑÑ Ð²Ð²Ð¾Ð´Ð¸ÑÐ¸ Ð½Ð°Ð·Ð²Ñ/ÑÑÐ½Ñ/ÐÐ
+    # ÑÐ°Ð¼Ðµ ÑÐµÑÐµÐ· Modal. ÐÐ»Ðµ Ð¿Ð¾ÑÑÐºÑ ÑÐµÑÐµÐ· Ð¾ÐºÑÐµÐ¼Ðµ Ð²ÑÐºÐ½Ð¾ Ð±ÑÐ»ÑÑÐµ Ð½ÐµÐ¼Ð°Ñ.
     await interaction.response.send_modal(
       ContractTypeModal("edit", interaction.user.id, self.type_id)
     )
 
-  @discord.ui.button(label="Видалити", style=discord.ButtonStyle.danger, emoji="🗑️")
+  @discord.ui.button(label="ÐÐ¸Ð´Ð°Ð»Ð¸ÑÐ¸", style=discord.ButtonStyle.danger, emoji="ðï¸")
   async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.send_message("❌ Немає права.", ephemeral=True)
+      await interaction.response.send_message("â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", ephemeral=True)
       return
 
     row = db.get_contract_type(self.type_id)
     await interaction.response.edit_message(
-      content=f"⚠️ Прибрати **{row['name']}** з переліку?",
+      content=f"â ï¸ ÐÑÐ¸Ð±ÑÐ°ÑÐ¸ **{row['name']}** Ð· Ð¿ÐµÑÐµÐ»ÑÐºÑ?",
       embed=None,
       view=DeleteTypeConfirmView(self.type_id),
     )
 
-  @discord.ui.button(label="До списку", style=discord.ButtonStyle.secondary, emoji="↩️")
+  @discord.ui.button(label="ÐÐ¾ ÑÐ¿Ð¸ÑÐºÑ", style=discord.ButtonStyle.secondary, emoji="â©ï¸")
   async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
     _, page, total_pages = admin_picker_page_data(self.return_page)
     await interaction.response.edit_message(
@@ -3177,42 +3206,42 @@ class ResetRatingConfirmView(discord.ui.View):
     super().__init__(timeout=60)
 
   @discord.ui.button(
-    label="Так, обнулити рейтинг",
+    label="Ð¢Ð°Ðº, Ð¾Ð±Ð½ÑÐ»Ð¸ÑÐ¸ ÑÐµÐ¹ÑÐ¸Ð½Ð³",
     style=discord.ButtonStyle.danger,
-    emoji="♻️",
+    emoji="â»ï¸",
   )
   async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.edit_message(content="❌ Немає права.", view=None)
+      await interaction.response.edit_message(content="â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", view=None)
       return
 
     if interaction.guild is None:
-      await interaction.response.edit_message(content="❌ Це працює тільки на сервері.", view=None)
+      await interaction.response.edit_message(content="â Ð¦Ðµ Ð¿ÑÐ°ÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð½Ð° ÑÐµÑÐ²ÐµÑÑ.", view=None)
       return
 
     reset_at = utc_now_iso()
     db.set_setting(interaction.guild.id, "rating_reset_at", reset_at)
     reset_ts = iso_to_unix(reset_at)
 
-    when = f"<t:{reset_ts}:f>" if reset_ts else "зараз"
+    when = f"<t:{reset_ts}:f>" if reset_ts else "Ð·Ð°ÑÐ°Ð·"
     await audit_log(
       interaction.guild,
-      "♻️ Рейтинг обнулено",
-      f"Обнулив/ла: <@{interaction.user.id}>",
+      "â»ï¸ Ð ÐµÐ¹ÑÐ¸Ð½Ð³ Ð¾Ð±Ð½ÑÐ»ÐµÐ½Ð¾",
+      f"ÐÐ±Ð½ÑÐ»Ð¸Ð²/Ð»Ð°: <@{interaction.user.id}>",
       discord.Color.red(),
     )
     await interaction.response.edit_message(
       content=(
-        f"✅ Рейтинг обнулено {when}.\n"
-        "Старі контракти та фінанси не змінені. "
-        "З цього моменту з нуля рахується тільки рейтинг за балами."
+        f"â Ð ÐµÐ¹ÑÐ¸Ð½Ð³ Ð¾Ð±Ð½ÑÐ»ÐµÐ½Ð¾ {when}.\n"
+        "Ð¡ÑÐ°ÑÑ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ¸ ÑÐ° ÑÑÐ½Ð°Ð½ÑÐ¸ Ð½Ðµ Ð·Ð¼ÑÐ½ÐµÐ½Ñ. "
+        "Ð ÑÑÐ¾Ð³Ð¾ Ð¼Ð¾Ð¼ÐµÐ½ÑÑ Ð· Ð½ÑÐ»Ñ ÑÐ°ÑÑÑÑÑÑÑ ÑÑÐ»ÑÐºÐ¸ ÑÐµÐ¹ÑÐ¸Ð½Ð³ Ð·Ð° Ð±Ð°Ð»Ð°Ð¼Ð¸."
       ),
       view=None,
     )
 
-  @discord.ui.button(label="Ні", style=discord.ButtonStyle.secondary)
+  @discord.ui.button(label="ÐÑ", style=discord.ButtonStyle.secondary)
   async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-    await interaction.response.edit_message(content="Обнулення рейтингу скасовано.", view=None)
+    await interaction.response.edit_message(content="ÐÐ±Ð½ÑÐ»ÐµÐ½Ð½Ñ ÑÐµÐ¹ÑÐ¸Ð½Ð³Ñ ÑÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¾.", view=None)
 
 
 class ResetEarningsConfirmView(discord.ui.View):
@@ -3220,18 +3249,18 @@ class ResetEarningsConfirmView(discord.ui.View):
     super().__init__(timeout=60)
 
   @discord.ui.button(
-    label="Так, обнулити заробіток",
+    label="Ð¢Ð°Ðº, Ð¾Ð±Ð½ÑÐ»Ð¸ÑÐ¸ Ð·Ð°ÑÐ¾Ð±ÑÑÐ¾Ðº",
     style=discord.ButtonStyle.danger,
-    emoji="💸",
+    emoji="ð¸",
   )
   async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.edit_message(content="❌ Немає права.", view=None)
+      await interaction.response.edit_message(content="â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", view=None)
       return
 
     if interaction.guild is None:
       await interaction.response.edit_message(
-        content="❌ Це працює тільки на сервері.",
+        content="â Ð¦Ðµ Ð¿ÑÐ°ÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð½Ð° ÑÐµÑÐ²ÐµÑÑ.",
         view=None,
       )
       return
@@ -3239,29 +3268,29 @@ class ResetEarningsConfirmView(discord.ui.View):
     reset_at = utc_now_iso()
     db.set_setting(interaction.guild.id, "earnings_reset_at", reset_at)
     reset_ts = iso_to_unix(reset_at)
-    when = f"<t:{reset_ts}:f>" if reset_ts else "зараз"
+    when = f"<t:{reset_ts}:f>" if reset_ts else "Ð·Ð°ÑÐ°Ð·"
 
     await audit_log(
       interaction.guild,
-      "💸 Заробіток обнулено",
-      f"Обнулив/ла: <@{interaction.user.id}>",
+      "ð¸ ÐÐ°ÑÐ¾Ð±ÑÑÐ¾Ðº Ð¾Ð±Ð½ÑÐ»ÐµÐ½Ð¾",
+      f"ÐÐ±Ð½ÑÐ»Ð¸Ð²/Ð»Ð°: <@{interaction.user.id}>",
       discord.Color.red(),
     )
 
     await interaction.response.edit_message(
       content=(
-        f"✅ Заробіток обнулено {when}.\n"
-        "Історія контрактів та оплат не видалена. "
-        "З цього моменту з нуля рахуються загальний заробіток, "
-        "Банк сім'ї та заробіток кожного учасника."
+        f"â ÐÐ°ÑÐ¾Ð±ÑÑÐ¾Ðº Ð¾Ð±Ð½ÑÐ»ÐµÐ½Ð¾ {when}.\n"
+        "ÐÑÑÐ¾ÑÑÑ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ² ÑÐ° Ð¾Ð¿Ð»Ð°Ñ Ð½Ðµ Ð²Ð¸Ð´Ð°Ð»ÐµÐ½Ð°. "
+        "Ð ÑÑÐ¾Ð³Ð¾ Ð¼Ð¾Ð¼ÐµÐ½ÑÑ Ð· Ð½ÑÐ»Ñ ÑÐ°ÑÑÑÑÑÑÑ Ð·Ð°Ð³Ð°Ð»ÑÐ½Ð¸Ð¹ Ð·Ð°ÑÐ¾Ð±ÑÑÐ¾Ðº, "
+        "ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ ÑÐ° Ð·Ð°ÑÐ¾Ð±ÑÑÐ¾Ðº ÐºÐ¾Ð¶Ð½Ð¾Ð³Ð¾ ÑÑÐ°ÑÐ½Ð¸ÐºÐ°."
       ),
       view=None,
     )
 
-  @discord.ui.button(label="Ні", style=discord.ButtonStyle.secondary)
+  @discord.ui.button(label="ÐÑ", style=discord.ButtonStyle.secondary)
   async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
     await interaction.response.edit_message(
-      content="Обнулення заробітку скасовано.",
+      content="ÐÐ±Ð½ÑÐ»ÐµÐ½Ð½Ñ Ð·Ð°ÑÐ¾Ð±ÑÑÐºÑ ÑÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¾.",
       view=None,
     )
 
@@ -3270,27 +3299,27 @@ class ContractAdminPanelView(discord.ui.View):
   def __init__(self):
     super().__init__(timeout=300)
 
-  @discord.ui.button(label="Додати", style=discord.ButtonStyle.success, emoji="➕")
+  @discord.ui.button(label="ÐÐ¾Ð´Ð°ÑÐ¸", style=discord.ButtonStyle.success, emoji="â")
   async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.send_message("❌ Немає права.", ephemeral=True)
+      await interaction.response.send_message("â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", ephemeral=True)
       return
     await interaction.response.send_modal(ContractTypeModal("add", interaction.user.id))
 
   @discord.ui.button(
-    label="Керувати контрактами",
+    label="ÐÐµÑÑÐ²Ð°ÑÐ¸ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ°Ð¼Ð¸",
     style=discord.ButtonStyle.primary,
-    emoji="📋",
+    emoji="ð",
   )
   async def manage_contracts(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.send_message("❌ Немає права.", ephemeral=True)
+      await interaction.response.send_message("â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", ephemeral=True)
       return
 
     rows, page, total_pages = admin_picker_page_data(0)
     if not rows:
       await interaction.response.send_message(
-        "Поки що контрактів немає. Спочатку натисніть **➕ Додати**.",
+        "ÐÐ¾ÐºÐ¸ ÑÐ¾ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ² Ð½ÐµÐ¼Ð°Ñ. Ð¡Ð¿Ð¾ÑÐ°ÑÐºÑ Ð½Ð°ÑÐ¸ÑÐ½ÑÑÑ **â ÐÐ¾Ð´Ð°ÑÐ¸**.",
         ephemeral=True,
       )
       return
@@ -3303,39 +3332,39 @@ class ContractAdminPanelView(discord.ui.View):
 
 
   @discord.ui.button(
-    label="Обнулити рейтинг",
+    label="ÐÐ±Ð½ÑÐ»Ð¸ÑÐ¸ ÑÐµÐ¹ÑÐ¸Ð½Ð³",
     style=discord.ButtonStyle.danger,
-    emoji="♻️",
+    emoji="â»ï¸",
   )
   async def reset_rating(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.send_message("❌ Немає права.", ephemeral=True)
+      await interaction.response.send_message("â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", ephemeral=True)
       return
 
     await interaction.response.send_message(
-      "⚠️ Обнулити поточний рейтинг?\n"
-      "Контракти, виплати та заробіток залишаться без змін. "
-      "З нуля почнуться тільки бали рейтингу.",
+      "â ï¸ ÐÐ±Ð½ÑÐ»Ð¸ÑÐ¸ Ð¿Ð¾ÑÐ¾ÑÐ½Ð¸Ð¹ ÑÐµÐ¹ÑÐ¸Ð½Ð³?\n"
+      "ÐÐ¾Ð½ÑÑÐ°ÐºÑÐ¸, Ð²Ð¸Ð¿Ð»Ð°ÑÐ¸ ÑÐ° Ð·Ð°ÑÐ¾Ð±ÑÑÐ¾Ðº Ð·Ð°Ð»Ð¸ÑÐ°ÑÑÑÑ Ð±ÐµÐ· Ð·Ð¼ÑÐ½. "
+      "Ð Ð½ÑÐ»Ñ Ð¿Ð¾ÑÐ½ÑÑÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð±Ð°Ð»Ð¸ ÑÐµÐ¹ÑÐ¸Ð½Ð³Ñ.",
       view=ResetRatingConfirmView(),
       ephemeral=True,
     )
 
 
   @discord.ui.button(
-    label="Обнулити заробіток",
+    label="ÐÐ±Ð½ÑÐ»Ð¸ÑÐ¸ Ð·Ð°ÑÐ¾Ð±ÑÑÐ¾Ðº",
     style=discord.ButtonStyle.danger,
-    emoji="💸",
+    emoji="ð¸",
   )
   async def reset_earnings(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.send_message("❌ Немає права.", ephemeral=True)
+      await interaction.response.send_message("â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", ephemeral=True)
       return
 
     await interaction.response.send_message(
-      "⚠️ Обнулити статистику заробітку?\n"
-      "Контракти й історія оплат залишаться в базі. "
-      "Але загальний заробіток, Банк сім'ї та заробіток учасників "
-      "у статистиці почнуться з нуля.",
+      "â ï¸ ÐÐ±Ð½ÑÐ»Ð¸ÑÐ¸ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÑ Ð·Ð°ÑÐ¾Ð±ÑÑÐºÑ?\n"
+      "ÐÐ¾Ð½ÑÑÐ°ÐºÑÐ¸ Ð¹ ÑÑÑÐ¾ÑÑÑ Ð¾Ð¿Ð»Ð°Ñ Ð·Ð°Ð»Ð¸ÑÐ°ÑÑÑÑ Ð² Ð±Ð°Ð·Ñ. "
+      "ÐÐ»Ðµ Ð·Ð°Ð³Ð°Ð»ÑÐ½Ð¸Ð¹ Ð·Ð°ÑÐ¾Ð±ÑÑÐ¾Ðº, ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ ÑÐ° Ð·Ð°ÑÐ¾Ð±ÑÑÐ¾Ðº ÑÑÐ°ÑÐ½Ð¸ÐºÑÐ² "
+      "Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÑÑ Ð¿Ð¾ÑÐ½ÑÑÑÑÑ Ð· Ð½ÑÐ»Ñ.",
       view=ResetEarningsConfirmView(),
       ephemeral=True,
     )
@@ -3369,35 +3398,35 @@ def build_public_rating_embed(guild_id: int) -> discord.Embed:
 
   reset_ts = iso_to_unix(rating_reset_at) if rating_reset_at else None
   subtitle = (
-    f"Поточний рейтинг • з <t:{reset_ts}:d>"
+    f"ÐÐ¾ÑÐ¾ÑÐ½Ð¸Ð¹ ÑÐµÐ¹ÑÐ¸Ð½Ð³ â¢ Ð· <t:{reset_ts}:d>"
     if reset_ts
-    else "Поточний рейтинг • від початку"
+    else "ÐÐ¾ÑÐ¾ÑÐ½Ð¸Ð¹ ÑÐµÐ¹ÑÐ¸Ð½Ð³ â¢ Ð²ÑÐ´ Ð¿Ð¾ÑÐ°ÑÐºÑ"
   )
 
   embed = discord.Embed(
-    title="🏆 Рейтинг учасників",
+    title="ð Ð ÐµÐ¹ÑÐ¸Ð½Ð³ ÑÑÐ°ÑÐ½Ð¸ÐºÑÐ²",
     description=subtitle,
     color=discord.Color.gold(),
   )
 
   if not ranking:
     embed.add_field(
-      name="Рейтинг",
-      value="Поки немає виконаних контрактів.",
+      name="Ð ÐµÐ¹ÑÐ¸Ð½Ð³",
+      value="ÐÐ¾ÐºÐ¸ Ð½ÐµÐ¼Ð°Ñ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð½Ð¸Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ².",
       inline=False,
     )
     return embed
 
   lines = [
-    f"**{idx}.** <@{uid}> — **{format_points_with_word(points[uid])}**"
+    f"**{idx}.** <@{uid}> â **{format_points_with_word(points[uid])}**"
     for idx, uid in enumerate(ranking[:25], start=1)
   ]
   embed.add_field(
-    name="Таблиця",
+    name="Ð¢Ð°Ð±Ð»Ð¸ÑÑ",
     value="\n".join(lines),
     inline=False,
   )
-  embed.set_footer(text="У рейтингу показуються тільки бали.")
+  embed.set_footer(text="Ð£ ÑÐµÐ¹ÑÐ¸Ð½Ð³Ñ Ð¿Ð¾ÐºÐ°Ð·ÑÑÑÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð±Ð°Ð»Ð¸.")
   return embed
 
 
@@ -3531,45 +3560,45 @@ def build_my_stats_embed(guild_id: int, user_id: int) -> discord.Embed:
 
   period_lines = []
   period_lines.append(
-    f"🏆 Рейтинг: з <t:{rating_ts}:d>"
+    f"ð Ð ÐµÐ¹ÑÐ¸Ð½Ð³: Ð· <t:{rating_ts}:d>"
     if rating_ts
-    else "🏆 Рейтинг: від початку"
+    else "ð Ð ÐµÐ¹ÑÐ¸Ð½Ð³: Ð²ÑÐ´ Ð¿Ð¾ÑÐ°ÑÐºÑ"
   )
   period_lines.append(
-    f"💵 Фінанси: з <t:{earnings_ts}:d>"
+    f"ðµ Ð¤ÑÐ½Ð°Ð½ÑÐ¸: Ð· <t:{earnings_ts}:d>"
     if earnings_ts
-    else "💵 Фінанси: від початку"
+    else "ðµ Ð¤ÑÐ½Ð°Ð½ÑÐ¸: Ð²ÑÐ´ Ð¿Ð¾ÑÐ°ÑÐºÑ"
   )
 
   embed = discord.Embed(
-    title="👤 Моя статистика • Поточний період",
+    title="ð¤ ÐÐ¾Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° â¢ ÐÐ¾ÑÐ¾ÑÐ½Ð¸Ð¹ Ð¿ÐµÑÑÐ¾Ð´",
     description="\n".join(period_lines),
     color=discord.Color.blurple(),
   )
 
   embed.add_field(
-    name="🏆 Рейтинг",
+    name="ð Ð ÐµÐ¹ÑÐ¸Ð½Ð³",
     value=(
-      (f"Місце: **#{position}**\n" if position else "Місце: **—**\n")
-      + f"Бали: **{format_points_with_word(points[user_id])}**\n"
-      + f"Участей: **{participations[user_id]}**"
+      (f"ÐÑÑÑÐµ: **#{position}**\n" if position else "ÐÑÑÑÐµ: **â**\n")
+      + f"ÐÐ°Ð»Ð¸: **{format_points_with_word(points[user_id])}**\n"
+      + f"Ð£ÑÐ°ÑÑÐµÐ¹: **{participations[user_id]}**"
     ),
     inline=True,
   )
 
   embed.add_field(
-    name="💵 Заробіток",
+    name="ðµ ÐÐ°ÑÐ¾Ð±ÑÑÐ¾Ðº",
     value=(
-      f"Отримано: **{format_cents(personal_earnings)}**\n"
-      f"Оплачених контрактів: **{len(paid_period_rows)}**"
+      f"ÐÑÑÐ¸Ð¼Ð°Ð½Ð¾: **{format_cents(personal_earnings)}**\n"
+      f"ÐÐ¿Ð»Ð°ÑÐµÐ½Ð¸Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ²: **{len(paid_period_rows)}**"
     ),
     inline=True,
   )
 
   embed.add_field(
-    name="⏳ Зараз",
+    name="â³ ÐÐ°ÑÐ°Ð·",
     value=(
-      f"Очікують оплати: **{len(unpaid_now_rows)}**"
+      f"ÐÑÑÐºÑÑÑÑ Ð¾Ð¿Ð»Ð°ÑÐ¸: **{len(unpaid_now_rows)}**"
     ),
     inline=False,
   )
@@ -3599,36 +3628,36 @@ def build_my_history_embed(guild_id: int, user_id: int) -> discord.Embed:
   personal_earnings = earnings["member_earnings"].get(user_id, 0)
 
   embed = discord.Embed(
-    title="🗂️ Моя статистика • Історія",
-    description="За весь час. Обнулення рейтингу або грошей на цю вкладку не впливають.",
+    title="ðï¸ ÐÐ¾Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° â¢ ÐÑÑÐ¾ÑÑÑ",
+    description="ÐÐ° Ð²ÐµÑÑ ÑÐ°Ñ. ÐÐ±Ð½ÑÐ»ÐµÐ½Ð½Ñ ÑÐµÐ¹ÑÐ¸Ð½Ð³Ñ Ð°Ð±Ð¾ Ð³ÑÐ¾ÑÐµÐ¹ Ð½Ð° ÑÑ Ð²ÐºÐ»Ð°Ð´ÐºÑ Ð½Ðµ Ð²Ð¿Ð»Ð¸Ð²Ð°ÑÑÑ.",
     color=discord.Color.dark_teal(),
   )
 
   embed.add_field(
-    name="🏆 Рейтинг за весь час",
+    name="ð Ð ÐµÐ¹ÑÐ¸Ð½Ð³ Ð·Ð° Ð²ÐµÑÑ ÑÐ°Ñ",
     value=(
-      (f"Місце: **#{position}**\n" if position else "Місце: **—**\n")
-      + f"Бали: **{format_points_with_word(points[user_id])}**\n"
-      + f"Участей: **{participations[user_id]}**"
+      (f"ÐÑÑÑÐµ: **#{position}**\n" if position else "ÐÑÑÑÐµ: **â**\n")
+      + f"ÐÐ°Ð»Ð¸: **{format_points_with_word(points[user_id])}**\n"
+      + f"Ð£ÑÐ°ÑÑÐµÐ¹: **{participations[user_id]}**"
     ),
     inline=True,
   )
 
   embed.add_field(
-    name="💵 Заробіток за весь час",
+    name="ðµ ÐÐ°ÑÐ¾Ð±ÑÑÐ¾Ðº Ð·Ð° Ð²ÐµÑÑ ÑÐ°Ñ",
     value=(
-      f"Отримано: **{format_cents(personal_earnings)}**\n"
-      f"Контрактів повністю на фаму: **{full_family_count}**"
+      f"ÐÑÑÐ¸Ð¼Ð°Ð½Ð¾: **{format_cents(personal_earnings)}**\n"
+      f"ÐÐ¾Ð½ÑÑÐ°ÐºÑÑÐ² Ð¿Ð¾Ð²Ð½ÑÑÑÑ Ð½Ð° ÑÐ°Ð¼Ñ: **{full_family_count}**"
     ),
     inline=True,
   )
 
   embed.add_field(
-    name="📋 Контракти за весь час",
+    name="ð ÐÐ¾Ð½ÑÑÐ°ÐºÑÐ¸ Ð·Ð° Ð²ÐµÑÑ ÑÐ°Ñ",
     value=(
-      f"Участей: **{len(involved_rows)}**\n"
-      f"Оплачено: **{len(paid_rows)}**\n"
-      f"Не оплачено зараз: **{len(unpaid_rows)}**"
+      f"Ð£ÑÐ°ÑÑÐµÐ¹: **{len(involved_rows)}**\n"
+      f"ÐÐ¿Ð»Ð°ÑÐµÐ½Ð¾: **{len(paid_rows)}**\n"
+      f"ÐÐµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¾ Ð·Ð°ÑÐ°Ð·: **{len(unpaid_rows)}**"
     ),
     inline=False,
   )
@@ -3674,21 +3703,21 @@ def build_my_daily_stats_embed(guild_id: int, user_id: int, page: int = 0):
   slice_rows = stats[page * page_size:(page + 1) * page_size]
 
   embed = discord.Embed(
-    title="📅 Мій заробіток • По днях",
+    title="ð ÐÑÐ¹ Ð·Ð°ÑÐ¾Ð±ÑÑÐ¾Ðº â¢ ÐÐ¾ Ð´Ð½ÑÑ",
     color=discord.Color.blurple(),
   )
 
   if not slice_rows:
-    embed.description = "Поки немає виплат."
+    embed.description = "ÐÐ¾ÐºÐ¸ Ð½ÐµÐ¼Ð°Ñ Ð²Ð¸Ð¿Ð»Ð°Ñ."
   else:
     lines = [
-      f"**{format_day(stat['day'])}** — {format_cents(stat['amount'])} • виплат: {stat['payments']}"
+      f"**{format_day(stat['day'])}** â {format_cents(stat['amount'])} â¢ Ð²Ð¸Ð¿Ð»Ð°Ñ: {stat['payments']}"
       for stat in slice_rows
     ]
     embed.description = "\n".join(lines)
 
   embed.set_footer(
-    text=f"Часова зона: {TIMEZONE_NAME} • Сторінка {page + 1}/{total_pages}"
+    text=f"Ð§Ð°ÑÐ¾Ð²Ð° Ð·Ð¾Ð½Ð°: {TIMEZONE_NAME} â¢ Ð¡ÑÐ¾ÑÑÐ½ÐºÐ° {page + 1}/{total_pages}"
   )
   return embed, page, total_pages
 
@@ -3720,8 +3749,8 @@ class MyStatsView(discord.ui.View):
     self.next_page.disabled = self.mode != "daily" or self.page >= self.total_pages - 1
 
   @discord.ui.button(
-    label="Поточна",
-    emoji="👤",
+    label="ÐÐ¾ÑÐ¾ÑÐ½Ð°",
+    emoji="ð¤",
     style=discord.ButtonStyle.primary,
     row=0,
   )
@@ -3736,8 +3765,8 @@ class MyStatsView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="По днях",
-    emoji="📅",
+    label="ÐÐ¾ Ð´Ð½ÑÑ",
+    emoji="ð",
     style=discord.ButtonStyle.primary,
     row=0,
   )
@@ -3757,8 +3786,8 @@ class MyStatsView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="Історія",
-    emoji="🗂️",
+    label="ÐÑÑÐ¾ÑÑÑ",
+    emoji="ðï¸",
     style=discord.ButtonStyle.secondary,
     row=0,
   )
@@ -3773,8 +3802,8 @@ class MyStatsView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="Назад",
-    emoji="◀️",
+    label="ÐÐ°Ð·Ð°Ð´",
+    emoji="âï¸",
     style=discord.ButtonStyle.secondary,
     row=1,
   )
@@ -3794,8 +3823,8 @@ class MyStatsView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="Далі",
-    emoji="▶️",
+    label="ÐÐ°Ð»Ñ",
+    emoji="â¶ï¸",
     style=discord.ButtonStyle.secondary,
     row=1,
   )
@@ -3862,53 +3891,53 @@ def build_admin_general_stats_embed(guild_id: int) -> discord.Embed:
 
   description_lines = [
     (
-      f"🏆 Рейтинг: з <t:{rating_ts}:d>"
+      f"ð Ð ÐµÐ¹ÑÐ¸Ð½Ð³: Ð· <t:{rating_ts}:d>"
       if rating_ts
-      else "🏆 Рейтинг: від початку"
+      else "ð Ð ÐµÐ¹ÑÐ¸Ð½Ð³: Ð²ÑÐ´ Ð¿Ð¾ÑÐ°ÑÐºÑ"
     ),
     (
-      f"💵 Фінанси: з <t:{earnings_ts}:d>"
+      f"ðµ Ð¤ÑÐ½Ð°Ð½ÑÐ¸: Ð· <t:{earnings_ts}:d>"
       if earnings_ts
-      else "💵 Фінанси: від початку"
+      else "ðµ Ð¤ÑÐ½Ð°Ð½ÑÐ¸: Ð²ÑÐ´ Ð¿Ð¾ÑÐ°ÑÐºÑ"
     ),
   ]
 
   embed = discord.Embed(
-    title="📊 Статистика • Поточний період",
+    title="ð Ð¡ÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° â¢ ÐÐ¾ÑÐ¾ÑÐ½Ð¸Ð¹ Ð¿ÐµÑÑÐ¾Ð´",
     description="\n".join(description_lines),
     color=discord.Color.blurple(),
   )
 
   embed.add_field(
-    name="📋 Контракти",
+    name="ð ÐÐ¾Ð½ÑÑÐ°ÐºÑÐ¸",
     value=(
-      f"Оплачено в періоді: **{len(paid_rows)}**\n"
-      f"Не оплачено зараз: **{len(unpaid_rows)}**\n"
-      f"Повністю на фаму: **{full_family_count}**"
+      f"ÐÐ¿Ð»Ð°ÑÐµÐ½Ð¾ Ð² Ð¿ÐµÑÑÐ¾Ð´Ñ: **{len(paid_rows)}**\n"
+      f"ÐÐµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¾ Ð·Ð°ÑÐ°Ð·: **{len(unpaid_rows)}**\n"
+      f"ÐÐ¾Ð²Ð½ÑÑÑÑ Ð½Ð° ÑÐ°Ð¼Ñ: **{full_family_count}**"
     ),
     inline=True,
   )
 
   embed.add_field(
-    name="👥 Активність",
+    name="ð¥ ÐÐºÑÐ¸Ð²Ð½ÑÑÑÑ",
     value=(
-      f"Учасників у рейтингу: **{len(active_users)}**\n"
-      f"Участей у рейтингу: **{sum(participations.values())}**\n"
-      f"Середня команда: **{avg_team:.1f}**\n"
-      f"Оплат з винятками: **{exception_count}**\n"
-      f"Налаштованих оплат: **{custom_count}**"
+      f"Ð£ÑÐ°ÑÐ½Ð¸ÐºÑÐ² Ñ ÑÐµÐ¹ÑÐ¸Ð½Ð³Ñ: **{len(active_users)}**\n"
+      f"Ð£ÑÐ°ÑÑÐµÐ¹ Ñ ÑÐµÐ¹ÑÐ¸Ð½Ð³Ñ: **{sum(participations.values())}**\n"
+      f"Ð¡ÐµÑÐµÐ´Ð½Ñ ÐºÐ¾Ð¼Ð°Ð½Ð´Ð°: **{avg_team:.1f}**\n"
+      f"ÐÐ¿Ð»Ð°Ñ Ð· Ð²Ð¸Ð½ÑÑÐºÐ°Ð¼Ð¸: **{exception_count}**\n"
+      f"ÐÐ°Ð»Ð°ÑÑÐ¾Ð²Ð°Ð½Ð¸Ñ Ð¾Ð¿Ð»Ð°Ñ: **{custom_count}**"
     ),
     inline=True,
   )
 
   embed.add_field(
-    name="💰 Фінанси",
+    name="ð° Ð¤ÑÐ½Ð°Ð½ÑÐ¸",
     value=(
-      f"Загалом по контрактах: **{format_cents(gross)}**\n"
-      f"На фаму: **{format_cents(family)}**\n"
-      f"Учасникам: **{format_cents(members)}**\n"
-      f"Очікує оплати: **{format_cents(unpaid)}**\n"
-      f"Середній оплачений контракт: **{format_cents(avg_contract)}**"
+      f"ÐÐ°Ð³Ð°Ð»Ð¾Ð¼ Ð¿Ð¾ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ°Ñ: **{format_cents(gross)}**\n"
+      f"ÐÐ° ÑÐ°Ð¼Ñ: **{format_cents(family)}**\n"
+      f"Ð£ÑÐ°ÑÐ½Ð¸ÐºÐ°Ð¼: **{format_cents(members)}**\n"
+      f"ÐÑÑÐºÑÑ Ð¾Ð¿Ð»Ð°ÑÐ¸: **{format_cents(unpaid)}**\n"
+      f"Ð¡ÐµÑÐµÐ´Ð½ÑÐ¹ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ: **{format_cents(avg_contract)}**"
     ),
     inline=False,
   )
@@ -3974,53 +4003,53 @@ def build_admin_history_embed(guild_id: int) -> discord.Embed:
   )[:5]
 
   embed = discord.Embed(
-    title="🗂️ Статистика • Історія",
-    description="За весь час. Обнулення рейтингу та грошей ці дані не стирають.",
+    title="ðï¸ Ð¡ÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° â¢ ÐÑÑÐ¾ÑÑÑ",
+    description="ÐÐ° Ð²ÐµÑÑ ÑÐ°Ñ. ÐÐ±Ð½ÑÐ»ÐµÐ½Ð½Ñ ÑÐµÐ¹ÑÐ¸Ð½Ð³Ñ ÑÐ° Ð³ÑÐ¾ÑÐµÐ¹ ÑÑ Ð´Ð°Ð½Ñ Ð½Ðµ ÑÑÐ¸ÑÐ°ÑÑÑ.",
     color=discord.Color.dark_teal(),
   )
 
   embed.add_field(
-    name="📋 Контракти за весь час",
+    name="ð ÐÐ¾Ð½ÑÑÐ°ÐºÑÐ¸ Ð·Ð° Ð²ÐµÑÑ ÑÐ°Ñ",
     value=(
-      f"Всього дійсних: **{len(valid_rows)}**\n"
-      f"Оплачено: **{len(paid_rows)}**\n"
-      f"Не оплачено зараз: **{len(unpaid_rows)}**\n"
-      f"Скасовано: **{len(cancelled)}**\n"
-      f"Анульовано після оплати: **{len(annulled)}**"
+      f"ÐÑÑÐ¾Ð³Ð¾ Ð´ÑÐ¹ÑÐ½Ð¸Ñ: **{len(valid_rows)}**\n"
+      f"ÐÐ¿Ð»Ð°ÑÐµÐ½Ð¾: **{len(paid_rows)}**\n"
+      f"ÐÐµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¾ Ð·Ð°ÑÐ°Ð·: **{len(unpaid_rows)}**\n"
+      f"Ð¡ÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¾: **{len(cancelled)}**\n"
+      f"ÐÐ½ÑÐ»ÑÐ¾Ð²Ð°Ð½Ð¾ Ð¿ÑÑÐ»Ñ Ð¾Ð¿Ð»Ð°ÑÐ¸: **{len(annulled)}**"
     ),
     inline=True,
   )
 
   embed.add_field(
-    name="👥 Активність за весь час",
+    name="ð¥ ÐÐºÑÐ¸Ð²Ð½ÑÑÑÑ Ð·Ð° Ð²ÐµÑÑ ÑÐ°Ñ",
     value=(
-      f"Учасників: **{len(active_users)}**\n"
-      f"Участей: **{sum(participations.values())}**\n"
-      f"Середня команда: **{avg_team:.1f}**\n"
-      f"Оплат з винятками: **{exception_count}**\n"
-      f"Повністю на фаму: **{full_family_count}**"
+      f"Ð£ÑÐ°ÑÐ½Ð¸ÐºÑÐ²: **{len(active_users)}**\n"
+      f"Ð£ÑÐ°ÑÑÐµÐ¹: **{sum(participations.values())}**\n"
+      f"Ð¡ÐµÑÐµÐ´Ð½Ñ ÐºÐ¾Ð¼Ð°Ð½Ð´Ð°: **{avg_team:.1f}**\n"
+      f"ÐÐ¿Ð»Ð°Ñ Ð· Ð²Ð¸Ð½ÑÑÐºÐ°Ð¼Ð¸: **{exception_count}**\n"
+      f"ÐÐ¾Ð²Ð½ÑÑÑÑ Ð½Ð° ÑÐ°Ð¼Ñ: **{full_family_count}**"
     ),
     inline=True,
   )
 
   embed.add_field(
-    name="💰 Фінанси за весь час",
+    name="ð° Ð¤ÑÐ½Ð°Ð½ÑÐ¸ Ð·Ð° Ð²ÐµÑÑ ÑÐ°Ñ",
     value=(
-      f"Загалом по контрактах: **{format_cents(gross)}**\n"
-      f"На фаму: **{format_cents(family)}**\n"
-      f"Учасникам: **{format_cents(members)}**\n"
-      f"Не оплачено зараз: **{format_cents(unpaid)}**"
+      f"ÐÐ°Ð³Ð°Ð»Ð¾Ð¼ Ð¿Ð¾ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ°Ñ: **{format_cents(gross)}**\n"
+      f"ÐÐ° ÑÐ°Ð¼Ñ: **{format_cents(family)}**\n"
+      f"Ð£ÑÐ°ÑÐ½Ð¸ÐºÐ°Ð¼: **{format_cents(members)}**\n"
+      f"ÐÐµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¾ Ð·Ð°ÑÐ°Ð·: **{format_cents(unpaid)}**"
     ),
     inline=False,
   )
 
   if rating_users:
     rating_lines = [
-      f"**{idx}.** <@{uid}> — **{format_points_with_word(points[uid])}**"
+      f"**{idx}.** <@{uid}> â **{format_points_with_word(points[uid])}**"
       for idx, uid in enumerate(rating_users[:5], start=1)
     ]
     embed.add_field(
-      name="🏆 Топ рейтингу за весь час",
+      name="ð Ð¢Ð¾Ð¿ ÑÐµÐ¹ÑÐ¸Ð½Ð³Ñ Ð·Ð° Ð²ÐµÑÑ ÑÐ°Ñ",
       value="\n".join(rating_lines),
       inline=False,
     )
@@ -4028,13 +4057,13 @@ def build_admin_history_embed(guild_id: int) -> discord.Embed:
   if top_contracts:
     contract_lines = [
       (
-        f"**{idx}. {name}** — {format_cents(stat['gross'])} "
-        f"• {stat['count']} раз(и)"
+        f"**{idx}. {name}** â {format_cents(stat['gross'])} "
+        f"â¢ {stat['count']} ÑÐ°Ð·(Ð¸)"
       )
       for idx, (name, stat) in enumerate(top_contracts, start=1)
     ]
     embed.add_field(
-      name="📋 Топ контрактів за весь час",
+      name="ð Ð¢Ð¾Ð¿ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ² Ð·Ð° Ð²ÐµÑÑ ÑÐ°Ñ",
       value="\n".join(contract_lines),
       inline=False,
     )
@@ -4080,30 +4109,30 @@ def build_contract_stats_embed(guild_id: int, page: int = 0):
   slice_rows = stats[page * page_size:(page + 1) * page_size]
 
   embed = discord.Embed(
-    title="📋 Статистика • По контрактах",
+    title="ð Ð¡ÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° â¢ ÐÐ¾ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ°Ñ",
     description=(
-      "Для кожного типу: загальний оборот і скільки з нього пішло на фаму."
+      "ÐÐ»Ñ ÐºÐ¾Ð¶Ð½Ð¾Ð³Ð¾ ÑÐ¸Ð¿Ñ: Ð·Ð°Ð³Ð°Ð»ÑÐ½Ð¸Ð¹ Ð¾Ð±Ð¾ÑÐ¾Ñ Ñ ÑÐºÑÐ»ÑÐºÐ¸ Ð· Ð½ÑÐ¾Ð³Ð¾ Ð¿ÑÑÐ»Ð¾ Ð½Ð° ÑÐ°Ð¼Ñ."
     ),
     color=discord.Color.blurple(),
   )
 
   if not slice_rows:
-    embed.description = "Ще немає оплачених контрактів."
+    embed.description = "Ð©Ðµ Ð½ÐµÐ¼Ð°Ñ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ²."
   else:
     for stat in slice_rows:
       embed.add_field(
         name=stat["name"],
         value=(
-          f"Оплачено: **{stat['count']}**\n"
-          f"Загалом: **{format_cents(stat['gross'])}**\n"
-          f"На фаму: **{format_cents(stat['family'])}**\n"
-          f"Учасникам: **{format_cents(stat['members'])}**\n"
-          f"З винятками: **{stat['exceptions']}**"
+          f"ÐÐ¿Ð»Ð°ÑÐµÐ½Ð¾: **{stat['count']}**\n"
+          f"ÐÐ°Ð³Ð°Ð»Ð¾Ð¼: **{format_cents(stat['gross'])}**\n"
+          f"ÐÐ° ÑÐ°Ð¼Ñ: **{format_cents(stat['family'])}**\n"
+          f"Ð£ÑÐ°ÑÐ½Ð¸ÐºÐ°Ð¼: **{format_cents(stat['members'])}**\n"
+          f"Ð Ð²Ð¸Ð½ÑÑÐºÐ°Ð¼Ð¸: **{stat['exceptions']}**"
         ),
         inline=True,
       )
 
-  embed.set_footer(text=f"Сторінка {page + 1}/{total_pages}")
+  embed.set_footer(text=f"Ð¡ÑÐ¾ÑÑÐ½ÐºÐ° {page + 1}/{total_pages}")
   return embed, page, total_pages
 
 
@@ -4162,21 +4191,21 @@ def build_daily_stats_embed(guild_id: int, page: int = 0):
   reset_ts = iso_to_unix(reset_at) if reset_at else None
 
   description = (
-    f"Заробіток по днях • з <t:{reset_ts}:d>"
+    f"ÐÐ°ÑÐ¾Ð±ÑÑÐ¾Ðº Ð¿Ð¾ Ð´Ð½ÑÑ â¢ Ð· <t:{reset_ts}:d>"
     if reset_ts
-    else "Заробіток по днях • від початку"
+    else "ÐÐ°ÑÐ¾Ð±ÑÑÐ¾Ðº Ð¿Ð¾ Ð´Ð½ÑÑ â¢ Ð²ÑÐ´ Ð¿Ð¾ÑÐ°ÑÐºÑ"
   )
 
   embed = discord.Embed(
-    title="📅 Статистика • По днях",
+    title="ð Ð¡ÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° â¢ ÐÐ¾ Ð´Ð½ÑÑ",
     description=description,
     color=discord.Color.blurple(),
   )
 
   if not slice_rows:
     embed.add_field(
-      name="Немає даних",
-      value="Ще немає оплачених контрактів.",
+      name="ÐÐµÐ¼Ð°Ñ Ð´Ð°Ð½Ð¸Ñ",
+      value="Ð©Ðµ Ð½ÐµÐ¼Ð°Ñ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ².",
       inline=False,
     )
   else:
@@ -4184,17 +4213,17 @@ def build_daily_stats_embed(guild_id: int, page: int = 0):
       embed.add_field(
         name=format_day(stat["day"]),
         value=(
-          f"Контрактів: **{stat['count']}**\n"
-          f"Загалом: **{format_cents(stat['gross'])}**\n"
-          f"На фаму: **{format_cents(stat['family'])}**\n"
-          f"Учасникам: **{format_cents(stat['members'])}**\n"
-          f"Повністю на фаму: **{stat['full_family']}**"
+          f"ÐÐ¾Ð½ÑÑÐ°ÐºÑÑÐ²: **{stat['count']}**\n"
+          f"ÐÐ°Ð³Ð°Ð»Ð¾Ð¼: **{format_cents(stat['gross'])}**\n"
+          f"ÐÐ° ÑÐ°Ð¼Ñ: **{format_cents(stat['family'])}**\n"
+          f"Ð£ÑÐ°ÑÐ½Ð¸ÐºÐ°Ð¼: **{format_cents(stat['members'])}**\n"
+          f"ÐÐ¾Ð²Ð½ÑÑÑÑ Ð½Ð° ÑÐ°Ð¼Ñ: **{stat['full_family']}**"
         ),
         inline=False,
       )
 
   embed.set_footer(
-    text=f"Часова зона: {TIMEZONE_NAME} • Сторінка {page + 1}/{total_pages}"
+    text=f"Ð§Ð°ÑÐ¾Ð²Ð° Ð·Ð¾Ð½Ð°: {TIMEZONE_NAME} â¢ Ð¡ÑÐ¾ÑÑÐ½ÐºÐ° {page + 1}/{total_pages}"
   )
   return embed, page, total_pages
 
@@ -4208,10 +4237,10 @@ def build_member_stats_embed(
     earnings = earnings_data_for_guild(guild_id)
 
     embed = discord.Embed(
-      title="👥 Статистика • Учасники",
+      title="ð¥ Ð¡ÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° â¢ Ð£ÑÐ°ÑÐ½Ð¸ÐºÐ¸",
       description=(
-        "Поточний рейтинг і топ заробітку.\n"
-        "Для детальної статистики оберіть конкретну людину зі списку нижче."
+        "ÐÐ¾ÑÐ¾ÑÐ½Ð¸Ð¹ ÑÐµÐ¹ÑÐ¸Ð½Ð³ Ñ ÑÐ¾Ð¿ Ð·Ð°ÑÐ¾Ð±ÑÑÐºÑ.\n"
+        "ÐÐ»Ñ Ð´ÐµÑÐ°Ð»ÑÐ½Ð¾Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ¸ Ð¾Ð±ÐµÑÑÑÑ ÐºÐ¾Ð½ÐºÑÐµÑÐ½Ñ Ð»ÑÐ´Ð¸Ð½Ñ Ð·Ñ ÑÐ¿Ð¸ÑÐºÑ Ð½Ð¸Ð¶ÑÐµ."
       ),
       color=discord.Color.blurple(),
     )
@@ -4219,21 +4248,21 @@ def build_member_stats_embed(
     if rating_users:
       rating_lines = [
         (
-          f"**{idx}.** <@{uid}> — "
+          f"**{idx}.** <@{uid}> â "
           f"**{format_points_with_word(points[uid])}** "
-          f"• {participations[uid]} участей"
+          f"â¢ {participations[uid]} ÑÑÐ°ÑÑÐµÐ¹"
         )
         for idx, uid in enumerate(rating_users[:10], start=1)
       ]
       embed.add_field(
-        name="🏆 Поточний рейтинг",
+        name="ð ÐÐ¾ÑÐ¾ÑÐ½Ð¸Ð¹ ÑÐµÐ¹ÑÐ¸Ð½Ð³",
         value="\n".join(rating_lines),
         inline=False,
       )
     else:
       embed.add_field(
-        name="🏆 Поточний рейтинг",
-        value="Поки немає виконаних контрактів у поточному періоді.",
+        name="ð ÐÐ¾ÑÐ¾ÑÐ½Ð¸Ð¹ ÑÐµÐ¹ÑÐ¸Ð½Ð³",
+        value="ÐÐ¾ÐºÐ¸ Ð½ÐµÐ¼Ð°Ñ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð½Ð¸Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ² Ñ Ð¿Ð¾ÑÐ¾ÑÐ½Ð¾Ð¼Ñ Ð¿ÐµÑÑÐ¾Ð´Ñ.",
         inline=False,
       )
 
@@ -4246,20 +4275,20 @@ def build_member_stats_embed(
     if earning_users:
       earning_lines = [
         (
-          f"**{idx}.** <@{uid}> — "
+          f"**{idx}.** <@{uid}> â "
           f"**{format_cents(earnings['member_earnings'][uid])}**"
         )
         for idx, uid in enumerate(earning_users[:5], start=1)
       ]
       embed.add_field(
-        name="💵 Топ-5 по заробітку",
+        name="ðµ Ð¢Ð¾Ð¿-5 Ð¿Ð¾ Ð·Ð°ÑÐ¾Ð±ÑÑÐºÑ",
         value="\n".join(earning_lines),
         inline=False,
       )
     else:
       embed.add_field(
-        name="💵 Топ-5 по заробітку",
-        value="Поки немає виплаченого заробітку в поточному періоді.",
+        name="ðµ Ð¢Ð¾Ð¿-5 Ð¿Ð¾ Ð·Ð°ÑÐ¾Ð±ÑÑÐºÑ",
+        value="ÐÐ¾ÐºÐ¸ Ð½ÐµÐ¼Ð°Ñ Ð²Ð¸Ð¿Ð»Ð°ÑÐµÐ½Ð¾Ð³Ð¾ Ð·Ð°ÑÐ¾Ð±ÑÑÐºÑ Ð² Ð¿Ð¾ÑÐ¾ÑÐ½Ð¾Ð¼Ñ Ð¿ÐµÑÑÐ¾Ð´Ñ.",
         inline=False,
       )
 
@@ -4300,48 +4329,48 @@ def build_member_stats_embed(
   ]
 
   embed = discord.Embed(
-    title="👤 Статистика учасника",
+    title="ð¤ Ð¡ÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° ÑÑÐ°ÑÐ½Ð¸ÐºÐ°",
     description=f"<@{user_id}>",
     color=discord.Color.blurple(),
   )
 
   embed.add_field(
-    name="🏆 Поточний рейтинг",
+    name="ð ÐÐ¾ÑÐ¾ÑÐ½Ð¸Ð¹ ÑÐµÐ¹ÑÐ¸Ð½Ð³",
     value=(
-      (f"Місце: **#{position}**\n" if position else "Місце: **—**\n")
-      + f"Бали: **{format_points_with_word(points[user_id])}**\n"
-      + f"Участей: **{participations[user_id]}**"
+      (f"ÐÑÑÑÐµ: **#{position}**\n" if position else "ÐÑÑÑÐµ: **â**\n")
+      + f"ÐÐ°Ð»Ð¸: **{format_points_with_word(points[user_id])}**\n"
+      + f"Ð£ÑÐ°ÑÑÐµÐ¹: **{participations[user_id]}**"
     ),
     inline=True,
   )
 
   embed.add_field(
-    name="💵 Поточні фінанси",
+    name="ðµ ÐÐ¾ÑÐ¾ÑÐ½Ñ ÑÑÐ½Ð°Ð½ÑÐ¸",
     value=(
-      f"Отримано: **{format_cents(current_received)}**\n"
-      f"Відкладена оплата: **{format_cents(pending_debt)}**\n"
-      f"Оплачених контрактів: **{len(paid_period)}**\n"
-      f"Очікують оплати: **{len(unpaid_now)}**"
+      f"ÐÑÑÐ¸Ð¼Ð°Ð½Ð¾: **{format_cents(current_received)}**\n"
+      f"ÐÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð° Ð¾Ð¿Ð»Ð°ÑÐ°: **{format_cents(pending_debt)}**\n"
+      f"ÐÐ¿Ð»Ð°ÑÐµÐ½Ð¸Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ²: **{len(paid_period)}**\n"
+      f"ÐÑÑÐºÑÑÑÑ Ð¾Ð¿Ð»Ð°ÑÐ¸: **{len(unpaid_now)}**"
     ),
     inline=True,
   )
 
   embed.add_field(
-    name="🏦 Особистий внесок у Банк сім'ї",
+    name="ð¦ ÐÑÐ¾Ð±Ð¸ÑÑÐ¸Ð¹ Ð²Ð½ÐµÑÐ¾Ðº Ñ ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ",
     value=(
-      f"Поточний період: **{format_cents(current_family_contribution)}**\n"
-      f"За весь час: **{format_cents(all_family_contribution)}**"
+      f"ÐÐ¾ÑÐ¾ÑÐ½Ð¸Ð¹ Ð¿ÐµÑÑÐ¾Ð´: **{format_cents(current_family_contribution)}**\n"
+      f"ÐÐ° Ð²ÐµÑÑ ÑÐ°Ñ: **{format_cents(all_family_contribution)}**"
     ),
     inline=False,
   )
 
   embed.add_field(
-    name="🗂️ За весь час",
+    name="ðï¸ ÐÐ° Ð²ÐµÑÑ ÑÐ°Ñ",
     value=(
-      (f"Місце: **#{all_position}**\n" if all_position else "Місце: **—**\n")
-      + f"Бали: **{format_points_with_word(all_points[user_id])}**\n"
-      + f"Участей: **{all_participations[user_id]}**\n"
-      + f"Отримано: **{format_cents(all_received)}**"
+      (f"ÐÑÑÑÐµ: **#{all_position}**\n" if all_position else "ÐÑÑÑÐµ: **â**\n")
+      + f"ÐÐ°Ð»Ð¸: **{format_points_with_word(all_points[user_id])}**\n"
+      + f"Ð£ÑÐ°ÑÑÐµÐ¹: **{all_participations[user_id]}**\n"
+      + f"ÐÑÑÐ¸Ð¼Ð°Ð½Ð¾: **{format_cents(all_received)}**"
     ),
     inline=False,
   )
@@ -4382,7 +4411,7 @@ class MemberStatsSelect(discord.ui.Select):
       discord.SelectOption(
         label=labels.get(uid, f"ID {uid}")[:100],
         value=str(uid),
-        description=f"Статистика учасника • {uid}"[:100],
+        description=f"Ð¡ÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° ÑÑÐ°ÑÐ½Ð¸ÐºÐ° â¢ {uid}"[:100],
       )
       for uid in user_ids
     ]
@@ -4390,13 +4419,13 @@ class MemberStatsSelect(discord.ui.Select):
     if not options:
       options = [
         discord.SelectOption(
-          label="Учасників ще немає",
+          label="Ð£ÑÐ°ÑÐ½Ð¸ÐºÑÐ² ÑÐµ Ð½ÐµÐ¼Ð°Ñ",
           value="none",
         )
       ]
 
     super().__init__(
-      placeholder="Оберіть учасника",
+      placeholder="ÐÐ±ÐµÑÑÑÑ ÑÑÐ°ÑÐ½Ð¸ÐºÐ°",
       min_values=1,
       max_values=1,
       options=options,
@@ -4445,8 +4474,8 @@ class MemberStatsPickerView(discord.ui.View):
     self.next_page.disabled = page >= total_pages - 1
 
   @discord.ui.button(
-    label="Назад",
-    emoji="◀️",
+    label="ÐÐ°Ð·Ð°Ð´",
+    emoji="âï¸",
     style=discord.ButtonStyle.secondary,
     row=1,
   )
@@ -4479,8 +4508,8 @@ class MemberStatsPickerView(discord.ui.View):
     pass
 
   @discord.ui.button(
-    label="Далі",
-    emoji="▶️",
+    label="ÐÐ°Ð»Ñ",
+    emoji="â¶ï¸",
     style=discord.ButtonStyle.secondary,
     row=1,
   )
@@ -4500,8 +4529,8 @@ class MemberStatsPickerView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="До статистики",
-    emoji="↩️",
+    label="ÐÐ¾ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ¸",
+    emoji="â©ï¸",
     style=discord.ButtonStyle.secondary,
     row=2,
   )
@@ -4566,8 +4595,8 @@ class AdminStatsView(discord.ui.View):
     self.next_page.disabled = self.total_pages <= 1 or self.page >= self.total_pages - 1
 
   @discord.ui.button(
-    label="Поточна",
-    emoji="📊",
+    label="ÐÐ¾ÑÐ¾ÑÐ½Ð°",
+    emoji="ð",
     style=discord.ButtonStyle.primary,
     row=0,
   )
@@ -4582,8 +4611,8 @@ class AdminStatsView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="По контрактах",
-    emoji="📋",
+    label="ÐÐ¾ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ°Ñ",
+    emoji="ð",
     style=discord.ButtonStyle.primary,
     row=0,
   )
@@ -4599,8 +4628,8 @@ class AdminStatsView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="По днях",
-    emoji="📅",
+    label="ÐÐ¾ Ð´Ð½ÑÑ",
+    emoji="ð",
     style=discord.ButtonStyle.primary,
     row=0,
   )
@@ -4616,8 +4645,8 @@ class AdminStatsView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="Учасники",
-    emoji="👥",
+    label="Ð£ÑÐ°ÑÐ½Ð¸ÐºÐ¸",
+    emoji="ð¥",
     style=discord.ButtonStyle.primary,
     row=0,
   )
@@ -4637,8 +4666,8 @@ class AdminStatsView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="Історія",
-    emoji="🗂️",
+    label="ÐÑÑÐ¾ÑÑÑ",
+    emoji="ðï¸",
     style=discord.ButtonStyle.secondary,
     row=0,
   )
@@ -4653,8 +4682,8 @@ class AdminStatsView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="Назад",
-    emoji="◀️",
+    label="ÐÐ°Ð·Ð°Ð´",
+    emoji="âï¸",
     style=discord.ButtonStyle.secondary,
     row=1,
   )
@@ -4683,8 +4712,8 @@ class AdminStatsView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="Далі",
-    emoji="▶️",
+    label="ÐÐ°Ð»Ñ",
+    emoji="â¶ï¸",
     style=discord.ButtonStyle.secondary,
     row=1,
   )
@@ -4716,15 +4745,15 @@ class AdminStatsView(discord.ui.View):
 
 def build_main_panel_embed() -> discord.Embed:
   return discord.Embed(
-    title="📋 КОНТРАКТИ СІМ’Ї",
+    title="ð ÐÐÐÐ¢Ð ÐÐÐ¢Ð Ð¡ÐÐâÐ",
     description=(
-      "Виконав контракт — обери потрібну кнопку.\n\n"
-      "👤 **Я виконав/ла** — якщо виконував/ла сам/а.\n"
-      "👥 **Кілька виконавців** — якщо контракт робили разом.\n"
-      "🏆 **Рейтинг** — поточний рейтинг учасників.\n"
-      "👤 **Моя статистика** — мої бали, участі та заробіток.\n"
-      "🔎 **Пошук** — доступний прямо всередині списку контрактів.\n\n"
-      "Назва, ціна та КД підтягуються автоматично."
+      "ÐÐ¸ÐºÐ¾Ð½Ð°Ð² ÐºÐ¾Ð½ÑÑÐ°ÐºÑ â Ð¾Ð±ÐµÑÐ¸ Ð¿Ð¾ÑÑÑÐ±Ð½Ñ ÐºÐ½Ð¾Ð¿ÐºÑ.\n\n"
+      "ð¤ **Ð¯ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²/Ð»Ð°** â ÑÐºÑÐ¾ Ð²Ð¸ÐºÐ¾Ð½ÑÐ²Ð°Ð²/Ð»Ð° ÑÐ°Ð¼/Ð°.\n"
+      "ð¥ **ÐÑÐ»ÑÐºÐ° Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²ÑÑÐ²** â ÑÐºÑÐ¾ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ ÑÐ¾Ð±Ð¸Ð»Ð¸ ÑÐ°Ð·Ð¾Ð¼.\n"
+      "ð **Ð ÐµÐ¹ÑÐ¸Ð½Ð³** â Ð¿Ð¾ÑÐ¾ÑÐ½Ð¸Ð¹ ÑÐµÐ¹ÑÐ¸Ð½Ð³ ÑÑÐ°ÑÐ½Ð¸ÐºÑÐ².\n"
+      "ð¤ **ÐÐ¾Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ°** â Ð¼Ð¾Ñ Ð±Ð°Ð»Ð¸, ÑÑÐ°ÑÑÑ ÑÐ° Ð·Ð°ÑÐ¾Ð±ÑÑÐ¾Ðº.\n"
+      "ð **ÐÐ¾ÑÑÐº** â Ð´Ð¾ÑÑÑÐ¿Ð½Ð¸Ð¹ Ð¿ÑÑÐ¼Ð¾ Ð²ÑÐµÑÐµÐ´Ð¸Ð½Ñ ÑÐ¿Ð¸ÑÐºÑ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ².\n\n"
+      "ÐÐ°Ð·Ð²Ð°, ÑÑÐ½Ð° ÑÐ° ÐÐ Ð¿ÑÐ´ÑÑÐ³ÑÑÑÑÑÑ Ð°Ð²ÑÐ¾Ð¼Ð°ÑÐ¸ÑÐ½Ð¾."
     ),
     color=discord.Color.blurple(),
   )
@@ -4735,8 +4764,8 @@ async def move_main_panel_to_bottom(
   channel: discord.TextChannel,
 ) -> Optional[discord.Message]:
   """
-  Тримає панель останнім повідомленням у каналі.
-  Стару панель видаляємо; якщо Discord не дає — прибираємо з неї кнопки.
+  Ð¢ÑÐ¸Ð¼Ð°Ñ Ð¿Ð°Ð½ÐµÐ»Ñ Ð¾ÑÑÐ°Ð½Ð½ÑÐ¼ Ð¿Ð¾Ð²ÑÐ´Ð¾Ð¼Ð»ÐµÐ½Ð½ÑÐ¼ Ñ ÐºÐ°Ð½Ð°Ð»Ñ.
+  Ð¡ÑÐ°ÑÑ Ð¿Ð°Ð½ÐµÐ»Ñ Ð²Ð¸Ð´Ð°Ð»ÑÑÐ¼Ð¾; ÑÐºÑÐ¾ Discord Ð½Ðµ Ð´Ð°Ñ â Ð¿ÑÐ¸Ð±Ð¸ÑÐ°ÑÐ¼Ð¾ Ð· Ð½ÐµÑ ÐºÐ½Ð¾Ð¿ÐºÐ¸.
   """
   old_panel_id = db.get_setting(guild.id, "panel_message_id")
 
@@ -4775,15 +4804,15 @@ class MainContractPanelView(discord.ui.View):
     self.bot_instance = bot_instance
 
   @discord.ui.button(
-    label="Я виконав/ла",
+    label="Ð¯ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²/Ð»Ð°",
     style=discord.ButtonStyle.success,
-    emoji="👤",
+    emoji="ð¤",
     custom_id="contract_v34:self",
   )
   async def self_contract(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not db.active_contract_types(limit=1):
       await interaction.response.send_message(
-        "❌ Перелік контрактів ще порожній. Керівництво має додати їх через `/contracts_admin`.",
+        "â ÐÐµÑÐµÐ»ÑÐº ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ² ÑÐµ Ð¿Ð¾ÑÐ¾Ð¶Ð½ÑÐ¹. ÐÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð¾ Ð¼Ð°Ñ Ð´Ð¾Ð´Ð°ÑÐ¸ ÑÑ ÑÐµÑÐµÐ· `/contracts_admin`.",
         ephemeral=True,
       )
       return
@@ -4801,35 +4830,35 @@ class MainContractPanelView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="Кілька виконавців",
+    label="ÐÑÐ»ÑÐºÐ° Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²ÑÑÐ²",
     style=discord.ButtonStyle.primary,
-    emoji="👥",
+    emoji="ð¥",
     custom_id="contract_v34:group",
   )
   async def group_contract(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not db.active_contract_types(limit=1):
       await interaction.response.send_message(
-        "❌ Перелік контрактів ще порожній. Керівництво має додати їх через `/contracts_admin`.",
+        "â ÐÐµÑÐµÐ»ÑÐº ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ² ÑÐµ Ð¿Ð¾ÑÐ¾Ð¶Ð½ÑÐ¹. ÐÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð¾ Ð¼Ð°Ñ Ð´Ð¾Ð´Ð°ÑÐ¸ ÑÑ ÑÐµÑÐµÐ· `/contracts_admin`.",
         ephemeral=True,
       )
       return
 
     await interaction.response.send_message(
-      "👥 Оберіть усіх виконавців контракту:",
+      "ð¥ ÐÐ±ÐµÑÑÑÑ ÑÑÑÑ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²ÑÑÐ² ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ:",
       view=PerformerStepView(self.bot_instance, show_self_button=False),
       ephemeral=True,
     )
 
   @discord.ui.button(
-    label="Рейтинг",
+    label="Ð ÐµÐ¹ÑÐ¸Ð½Ð³",
     style=discord.ButtonStyle.secondary,
-    emoji="🏆",
+    emoji="ð",
     custom_id="contract_v34:rating",
   )
   async def rating(self, interaction: discord.Interaction, button: discord.ui.Button):
     if interaction.guild is None:
       await interaction.response.send_message(
-        "❌ Це працює тільки на сервері.",
+        "â Ð¦Ðµ Ð¿ÑÐ°ÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð½Ð° ÑÐµÑÐ²ÐµÑÑ.",
         ephemeral=True,
       )
       return
@@ -4842,15 +4871,15 @@ class MainContractPanelView(discord.ui.View):
 
 
   @discord.ui.button(
-    label="Моя статистика",
+    label="ÐÐ¾Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ°",
     style=discord.ButtonStyle.secondary,
-    emoji="👤",
+    emoji="ð¤",
     custom_id="contract_v4:mystats",
   )
   async def my_stats(self, interaction: discord.Interaction, button: discord.ui.Button):
     if interaction.guild is None:
       await interaction.response.send_message(
-        "❌ Це працює тільки на сервері.",
+        "â Ð¦Ðµ Ð¿ÑÐ°ÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð½Ð° ÑÐµÑÐ²ÐµÑÑ.",
         ephemeral=True,
       )
       return
@@ -4868,6 +4897,353 @@ class MainContractPanelView(discord.ui.View):
 
 
 # ----------------------------
+# Automatic channel reports
+# ----------------------------
+
+def chunk_lines(
+  lines: list[str],
+  max_lines: int = 20,
+  max_chars: int = 3500,
+) -> list[list[str]]:
+  chunks = []
+  current = []
+  current_chars = 0
+
+  for line in lines:
+    projected = current_chars + len(line) + 1
+    if current and (
+      len(current) >= max_lines
+      or projected > max_chars
+    ):
+      chunks.append(current)
+      current = []
+      current_chars = 0
+
+    current.append(line)
+    current_chars += len(line) + 1
+
+  if current:
+    chunks.append(current)
+
+  return chunks
+
+
+def build_auto_rating_embeds(
+  guild_id: int,
+  slot_label: str,
+) -> list[discord.Embed]:
+  points, participations, users, _ = rating_data_for_guild(guild_id)
+
+  if not users:
+    return [
+      discord.Embed(
+        title="ð Ð ÐÐÐ¢ÐÐÐ ÐÐÐÐ¢Ð ÐÐÐ¢ÐÐ",
+        description=(
+          f"**{slot_label}**\n\n"
+          "Ð£ Ð¿Ð¾ÑÐ¾ÑÐ½Ð¾Ð¼Ñ ÑÐµÐ¹ÑÐ¸Ð½Ð³Ð¾Ð²Ð¾Ð¼Ñ Ð¿ÐµÑÑÐ¾Ð´Ñ ÑÐµ Ð½ÐµÐ¼Ð°Ñ ÑÑÐ°ÑÐ½Ð¸ÐºÑÐ²."
+        ),
+        color=discord.Color.gold(),
+      )
+    ]
+
+  lines = [
+    (
+      f"**{idx}.** <@{uid}> â "
+      f"**{format_points_with_word(points[uid])}** "
+      f"â¢ {participations[uid]} ÑÑÐ°ÑÑÐµÐ¹"
+    )
+    for idx, uid in enumerate(users, start=1)
+    if points[uid] > 0
+  ]
+
+  chunks = chunk_lines(lines)
+  total_participations = sum(participations[uid] for uid in users)
+
+  embeds = []
+  for idx, chunk in enumerate(chunks, start=1):
+    embed = discord.Embed(
+      title=(
+        "ð Ð ÐÐÐ¢ÐÐÐ ÐÐÐÐ¢Ð ÐÐÐ¢ÐÐ"
+        if idx == 1
+        else "ð Ð ÐÐÐ¢ÐÐÐ ÐÐÐÐ¢Ð ÐÐÐ¢ÐÐ â¢ Ð¿ÑÐ¾Ð´Ð¾Ð²Ð¶ÐµÐ½Ð½Ñ"
+      ),
+      description="\n".join(chunk),
+      color=discord.Color.gold(),
+    )
+
+    if idx == 1:
+      embed.add_field(
+        name="ÐÐµÑÑÐ¾Ð´",
+        value=slot_label,
+        inline=False,
+      )
+
+    embed.set_footer(
+      text=(
+        f"Ð£ ÑÐµÐ¹ÑÐ¸Ð½Ð³Ñ: {len(lines)} â¢ "
+        f"ÐÑÑÐ¾Ð³Ð¾ ÑÑÐ°ÑÑÐµÐ¹: {total_participations} â¢ "
+        f"Ð¡ÑÐ¾ÑÑÐ½ÐºÐ° {idx}/{len(chunks)}"
+      )
+    )
+    embeds.append(embed)
+
+  return embeds
+
+
+def build_family_daily_embed(
+  guild_id: int,
+  target_day,
+) -> discord.Embed:
+  rows = db.all_non_cancelled(guild_id)
+
+  completed_today = [
+    row for row in rows
+    if local_date_from_iso(row["created_at"]) == target_day
+  ]
+  paid_today = [
+    row for row in rows
+    if row["status"] == "paid"
+    and local_date_from_iso(row["paid_at"]) == target_day
+  ]
+
+  gross_cents = sum((row["price"] or 0) * 100 for row in paid_today)
+  family_cents = sum(row["fomo_cents"] or 0 for row in paid_today)
+
+  participant_counter = Counter()
+  for row in completed_today:
+    for uid in parse_ids(row["participant_ids"]):
+      participant_counter[uid] += 1
+
+  unique_participants = len(participant_counter)
+  participations_total = sum(participant_counter.values())
+
+  all_payouts = db.paid_payouts_for_guild(guild_id)
+  payouts_today = [
+    row for row in all_payouts
+    if local_date_from_iso(row["created_at"]) == target_day
+  ]
+  paid_to_members_cents = sum(row["amount_cents"] or 0 for row in payouts_today)
+
+  earnings_counter = Counter()
+  for row in payouts_today:
+    earnings_counter[row["user_id"]] += row["amount_cents"] or 0
+
+  debts = db.admin_debts_for_guild(guild_id)
+  deferred_created_today = [
+    row for row in debts
+    if local_date_from_iso(row["created_at"]) == target_day
+  ]
+  deferred_cents = sum(row["amount_cents"] or 0 for row in deferred_created_today)
+
+  deferred_settled_today = [
+    row for row in debts
+    if row["settled_at"]
+    and local_date_from_iso(row["settled_at"]) == target_day
+  ]
+  deferred_settled_cents = sum(
+    row["amount_cents"] or 0
+    for row in deferred_settled_today
+  )
+
+  contributions = db.family_contributions_for_guild(guild_id)
+  personal_family_cents = sum(
+    row["amount_cents"] or 0
+    for row in contributions
+    if local_date_from_iso(row["created_at"]) == target_day
+  )
+
+  embed = discord.Embed(
+    title=f"ð ÐÐÐÐ¡Ð£ÐÐÐ Ð¡ÐÐ'Ð â¢ {target_day.strftime('%d.%m.%Y')}",
+    description="ÐÐ²ÑÐ¾Ð¼Ð°ÑÐ¸ÑÐ½Ð¸Ð¹ Ð·Ð²ÑÑ Ð·Ð° Ð·Ð°Ð²ÐµÑÑÐµÐ½Ð¸Ð¹ Ð´ÐµÐ½Ñ.",
+    color=discord.Color.blurple(),
+  )
+
+  embed.add_field(
+    name="ð ÐÐ¾Ð½ÑÑÐ°ÐºÑÐ¸",
+    value=(
+      f"ÐÐ¸ÐºÐ¾Ð½Ð°Ð½Ð¾: **{len(completed_today)}**\n"
+      f"ÐÐ¿Ð»Ð°ÑÐµÐ½Ð¾: **{len(paid_today)}**\n"
+      f"ÐÐ°Ð³Ð°Ð»ÑÐ½Ð° ÑÑÐ¼Ð° Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ñ: **{format_cents(gross_cents)}**"
+    ),
+    inline=False,
+  )
+
+  embed.add_field(
+    name="ð¦ ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ",
+    value=(
+      f"ÐÐ°Ð´ÑÐ¹ÑÐ»Ð¾: **{format_cents(family_cents)}**\n"
+      f"Ð Ð½Ð¸Ñ Ð¾ÑÐ¾Ð±Ð¸ÑÑÐ¸Ñ Ð²Ð½ÐµÑÐºÑÐ²: **{format_cents(personal_family_cents)}**"
+    ),
+    inline=True,
+  )
+
+  embed.add_field(
+    name="ðµ ÐÐ¸Ð¿Ð»Ð°ÑÐ¸",
+    value=(
+      f"Ð¤Ð°ÐºÑÐ¸ÑÐ½Ð¾ Ð²Ð¸Ð¿Ð»Ð°ÑÐµÐ½Ð¾: **{format_cents(paid_to_members_cents)}**\n"
+      f"Ð¡ÑÐ²Ð¾ÑÐµÐ½Ð¾ Ð²ÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð¸Ñ Ð¾Ð¿Ð»Ð°Ñ: **{format_cents(deferred_cents)}**\n"
+      f"ÐÐ°ÐºÑÐ¸ÑÐ¾ Ð²ÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð¸Ñ Ð¾Ð¿Ð»Ð°Ñ: **{format_cents(deferred_settled_cents)}**"
+    ),
+    inline=True,
+  )
+
+  embed.add_field(
+    name="ð¥ ÐÐºÑÐ¸Ð²Ð½ÑÑÑÑ",
+    value=(
+      f"Ð£Ð½ÑÐºÐ°Ð»ÑÐ½Ð¸Ñ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²ÑÑÐ²: **{unique_participants}**\n"
+      f"ÐÑÑÐ¾Ð³Ð¾ ÑÑÐ°ÑÑÐµÐ¹: **{participations_total}**"
+    ),
+    inline=False,
+  )
+
+  top_activity = participant_counter.most_common(5)
+  if top_activity:
+    activity_lines = [
+      f"**{idx}.** <@{uid}> â **{count}** ÑÑÐ°ÑÑÐµÐ¹"
+      for idx, (uid, count) in enumerate(top_activity, start=1)
+    ]
+    embed.add_field(
+      name="ð ÐÐ°Ð¹Ð°ÐºÑÐ¸Ð²Ð½ÑÑÑ Ð·Ð° Ð´ÐµÐ½Ñ",
+      value="\n".join(activity_lines),
+      inline=False,
+    )
+
+  top_earnings = earnings_counter.most_common(5)
+  if top_earnings:
+    earning_lines = [
+      f"**{idx}.** <@{uid}> â **{format_cents(amount)}**"
+      for idx, (uid, amount) in enumerate(top_earnings, start=1)
+    ]
+    embed.add_field(
+      name="ð° Ð¢Ð¾Ð¿-5 Ð·Ð°ÑÐ¾Ð±ÑÑÐºÑ Ð·Ð° Ð´ÐµÐ½Ñ",
+      value="\n".join(earning_lines),
+      inline=False,
+    )
+
+  embed.set_footer(text=f"Ð§Ð°ÑÐ¾Ð²Ð° Ð·Ð¾Ð½Ð°: {TIMEZONE_NAME}")
+  return embed
+
+
+async def send_auto_rating(
+  bot_instance: commands.Bot,
+  slot_label: str,
+):
+  if not GUILD_ID or not RATING_CHANNEL_ID:
+    return
+
+  guild = bot_instance.get_guild(GUILD_ID)
+  if guild is None:
+    return
+
+  channel = guild.get_channel(RATING_CHANNEL_ID)
+  if not isinstance(channel, discord.TextChannel):
+    try:
+      channel = await bot_instance.fetch_channel(RATING_CHANNEL_ID)
+    except discord.DiscordException:
+      return
+
+  if not isinstance(channel, discord.TextChannel):
+    return
+
+  for embed in build_auto_rating_embeds(GUILD_ID, slot_label):
+    await channel.send(embed=embed)
+
+
+async def send_auto_family_stats(
+  bot_instance: commands.Bot,
+  target_day,
+):
+  if not GUILD_ID or not FAMILY_STATS_CHANNEL_ID:
+    return
+
+  guild = bot_instance.get_guild(GUILD_ID)
+  if guild is None:
+    return
+
+  channel = guild.get_channel(FAMILY_STATS_CHANNEL_ID)
+  if not isinstance(channel, discord.TextChannel):
+    try:
+      channel = await bot_instance.fetch_channel(FAMILY_STATS_CHANNEL_ID)
+    except discord.DiscordException:
+      return
+
+  if not isinstance(channel, discord.TextChannel):
+    return
+
+  await channel.send(
+    embed=build_family_daily_embed(
+      GUILD_ID,
+      target_day,
+    )
+  )
+
+
+async def scheduled_posts_loop(bot_instance: commands.Bot):
+  await bot_instance.wait_until_ready()
+
+  while not bot_instance.is_closed():
+    try:
+      now = datetime.now(LOCAL_TZ)
+      today_key = now.date().isoformat()
+
+      # Morning rating: once during the whole scheduled hour.
+      if (
+        RATING_CHANNEL_ID
+        and now.hour == RATING_MORNING_HOUR
+        and db.get_setting(GUILD_ID, "auto_rating_morning_date") != today_key
+      ):
+        await send_auto_rating(
+          bot_instance,
+          f"{now.strftime('%d.%m.%Y')} â¢ ÑÐ°Ð½Ð¾Ðº",
+        )
+        db.set_setting(
+          GUILD_ID,
+          "auto_rating_morning_date",
+          today_key,
+        )
+        print(f"[AUTO] Morning rating sent for {today_key}")
+
+      # Evening rating.
+      if (
+        RATING_CHANNEL_ID
+        and now.hour == RATING_EVENING_HOUR
+        and db.get_setting(GUILD_ID, "auto_rating_evening_date") != today_key
+      ):
+        await send_auto_rating(
+          bot_instance,
+          f"{now.strftime('%d.%m.%Y')} â¢ Ð²ÐµÑÑÑ",
+        )
+        db.set_setting(
+          GUILD_ID,
+          "auto_rating_evening_date",
+          today_key,
+        )
+        print(f"[AUTO] Evening rating sent for {today_key}")
+
+      # At midnight post the previous completed calendar day.
+      if FAMILY_STATS_CHANNEL_ID and now.hour == FAMILY_STATS_HOUR:
+        report_day = now.date() - timedelta(days=1)
+        report_key = report_day.isoformat()
+
+        if db.get_setting(GUILD_ID, "auto_family_stats_date") != report_key:
+          await send_auto_family_stats(
+            bot_instance,
+            report_day,
+          )
+          db.set_setting(
+            GUILD_ID,
+            "auto_family_stats_date",
+            report_key,
+          )
+          print(f"[AUTO] Family daily stats sent for {report_key}")
+
+    except Exception as exc:
+      print(f"[AUTO] Scheduled post error: {exc}")
+
+    await asyncio.sleep(30)
+
+
+# ----------------------------
 # Bot + commands
 # ----------------------------
 
@@ -4876,10 +5252,16 @@ class ContractBot(commands.Bot):
     intents = discord.Intents.default()
     super().__init__(command_prefix="!", intents=intents)
     self._unpaid_refreshed = False
+    self._scheduled_posts_task = None
 
   async def setup_hook(self):
     self.add_view(MainContractPanelView(self))
     self.add_view(UnpaidCompletedView(self))
+
+    if self._scheduled_posts_task is None:
+      self._scheduled_posts_task = asyncio.create_task(
+        scheduled_posts_loop(self)
+      )
 
     if GUILD_ID:
       guild = discord.Object(id=GUILD_ID)
@@ -4892,6 +5274,14 @@ class ContractBot(commands.Bot):
 
   async def on_ready(self):
     print(f"[READY] Logged in as {self.user} ({self.user.id})")
+    print(
+      "[AUTO] "
+      f"rating_channel={RATING_CHANNEL_ID or 'disabled'} "
+      f"family_stats_channel={FAMILY_STATS_CHANNEL_ID or 'disabled'} "
+      f"rating_hours={RATING_MORNING_HOUR}/{RATING_EVENING_HOUR} "
+      f"family_stats_hour={FAMILY_STATS_HOUR} "
+      f"timezone={TIMEZONE_NAME}"
+    )
 
     if not self._unpaid_refreshed and GUILD_ID:
       self._unpaid_refreshed = True
@@ -4910,11 +5300,11 @@ class ContractBot(commands.Bot):
 bot = ContractBot()
 
 
-@bot.tree.command(name="setup", description="Створити панель контрактів")
+@bot.tree.command(name="setup", description="Ð¡ÑÐ²Ð¾ÑÐ¸ÑÐ¸ Ð¿Ð°Ð½ÐµÐ»Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ²")
 async def setup_panel(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
     await interaction.response.send_message(
-      "❌ Ця команда тільки для керівництва.",
+      "â Ð¦Ñ ÐºÐ¾Ð¼Ð°Ð½Ð´Ð° ÑÑÐ»ÑÐºÐ¸ Ð´Ð»Ñ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð°.",
       ephemeral=True,
     )
     return
@@ -4922,7 +5312,7 @@ async def setup_panel(interaction: discord.Interaction):
   guild = interaction.guild
   if guild is None:
     await interaction.response.send_message(
-      "❌ Це працює тільки на сервері.",
+      "â Ð¦Ðµ Ð¿ÑÐ°ÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð½Ð° ÑÐµÑÐ²ÐµÑÑ.",
       ephemeral=True,
     )
     return
@@ -4930,7 +5320,7 @@ async def setup_panel(interaction: discord.Interaction):
   channel = await get_target_channel(guild, interaction.channel_id)
   if not isinstance(channel, discord.TextChannel):
     await interaction.response.send_message(
-      "❌ Панель треба створювати у звичайному текстовому каналі.",
+      "â ÐÐ°Ð½ÐµÐ»Ñ ÑÑÐµÐ±Ð° ÑÑÐ²Ð¾ÑÑÐ²Ð°ÑÐ¸ Ñ Ð·Ð²Ð¸ÑÐ°Ð¹Ð½Ð¾Ð¼Ñ ÑÐµÐºÑÑÐ¾Ð²Ð¾Ð¼Ñ ÐºÐ°Ð½Ð°Ð»Ñ.",
       ephemeral=True,
     )
     return
@@ -4941,7 +5331,7 @@ async def setup_panel(interaction: discord.Interaction):
 
   if panel is None:
     await interaction.followup.send(
-      "❌ Не вдалося створити панель у каналі.",
+      "â ÐÐµ Ð²Ð´Ð°Ð»Ð¾ÑÑ ÑÑÐ²Ð¾ÑÐ¸ÑÐ¸ Ð¿Ð°Ð½ÐµÐ»Ñ Ñ ÐºÐ°Ð½Ð°Ð»Ñ.",
       ephemeral=True,
     )
     return
@@ -4949,14 +5339,14 @@ async def setup_panel(interaction: discord.Interaction):
   log_note = (
     ""
     if LOG_CHANNEL_ID
-    else "\n⚠️ LOG_CHANNEL_ID не задано — журнал дій поки вимкнений."
+    else "\nâ ï¸ LOG_CHANNEL_ID Ð½Ðµ Ð·Ð°Ð´Ð°Ð½Ð¾ â Ð¶ÑÑÐ½Ð°Ð» Ð´ÑÐ¹ Ð¿Ð¾ÐºÐ¸ Ð²Ð¸Ð¼ÐºÐ½ÐµÐ½Ð¸Ð¹."
   )
 
   await interaction.followup.send(
     (
-      f"✅ Панель готова: {panel.jump_url}\n"
-      "Її більше не треба шукати в закріплених — після кожного нового контракту "
-      "бот автоматично переносить панель у самий низ каналу."
+      f"â ÐÐ°Ð½ÐµÐ»Ñ Ð³Ð¾ÑÐ¾Ð²Ð°: {panel.jump_url}\n"
+      "ÐÑ Ð±ÑÐ»ÑÑÐµ Ð½Ðµ ÑÑÐµÐ±Ð° ÑÑÐºÐ°ÑÐ¸ Ð² Ð·Ð°ÐºÑÑÐ¿Ð»ÐµÐ½Ð¸Ñ â Ð¿ÑÑÐ»Ñ ÐºÐ¾Ð¶Ð½Ð¾Ð³Ð¾ Ð½Ð¾Ð²Ð¾Ð³Ð¾ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ "
+      "Ð±Ð¾Ñ Ð°Ð²ÑÐ¾Ð¼Ð°ÑÐ¸ÑÐ½Ð¾ Ð¿ÐµÑÐµÐ½Ð¾ÑÐ¸ÑÑ Ð¿Ð°Ð½ÐµÐ»Ñ Ñ ÑÐ°Ð¼Ð¸Ð¹ Ð½Ð¸Ð· ÐºÐ°Ð½Ð°Ð»Ñ."
       f"{log_note}"
     ),
     ephemeral=True,
@@ -4965,21 +5355,21 @@ async def setup_panel(interaction: discord.Interaction):
 
 
 
-@bot.tree.command(name="contracts_admin", description="Керування переліком контрактів")
+@bot.tree.command(name="contracts_admin", description="ÐÐµÑÑÐ²Ð°Ð½Ð½Ñ Ð¿ÐµÑÐµÐ»ÑÐºÐ¾Ð¼ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ²")
 async def contracts_admin(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
     await interaction.response.send_message(
-      "❌ Ця команда тільки для керівництва.",
+      "â Ð¦Ñ ÐºÐ¾Ð¼Ð°Ð½Ð´Ð° ÑÑÐ»ÑÐºÐ¸ Ð´Ð»Ñ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð°.",
       ephemeral=True,
     )
     return
 
   embed = discord.Embed(
-    title="⚙️ Керування контрактами",
+    title="âï¸ ÐÐµÑÑÐ²Ð°Ð½Ð½Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ°Ð¼Ð¸",
     description=(
-      "Тут керівництво створює та редагує перелік контрактів.\n"
-      "Для кожного контракту зберігаються **назва, ціна та КД**.\n"
-      "Рейтинг і статистика заробітку обнуляються **окремо**."
+      "Ð¢ÑÑ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð¾ ÑÑÐ²Ð¾ÑÑÑ ÑÐ° ÑÐµÐ´Ð°Ð³ÑÑ Ð¿ÐµÑÐµÐ»ÑÐº ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ².\n"
+      "ÐÐ»Ñ ÐºÐ¾Ð¶Ð½Ð¾Ð³Ð¾ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ Ð·Ð±ÐµÑÑÐ³Ð°ÑÑÑÑÑ **Ð½Ð°Ð·Ð²Ð°, ÑÑÐ½Ð° ÑÐ° ÐÐ**.\n"
+      "Ð ÐµÐ¹ÑÐ¸Ð½Ð³ Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° Ð·Ð°ÑÐ¾Ð±ÑÑÐºÑ Ð¾Ð±Ð½ÑÐ»ÑÑÑÑÑÑ **Ð¾ÐºÑÐµÐ¼Ð¾**."
     ),
     color=discord.Color.blurple(),
   )
@@ -4994,10 +5384,10 @@ async def contracts_admin(interaction: discord.Interaction):
 
 @bot.tree.command(
   name="annul",
-  description="Анулювати вже оплачений контракт за його ID",
+  description="ÐÐ½ÑÐ»ÑÐ²Ð°ÑÐ¸ Ð²Ð¶Ðµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ Ð·Ð° Ð¹Ð¾Ð³Ð¾ ID",
 )
 @app_commands.describe(
-  contract_id="ID контракту, вказаний внизу його картки",
+  contract_id="ID ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ, Ð²ÐºÐ°Ð·Ð°Ð½Ð¸Ð¹ Ð²Ð½Ð¸Ð·Ñ Ð¹Ð¾Ð³Ð¾ ÐºÐ°ÑÑÐºÐ¸",
 )
 async def annul_contract(
   interaction: discord.Interaction,
@@ -5005,7 +5395,7 @@ async def annul_contract(
 ):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
     await interaction.response.send_message(
-      "❌ Анулювати оплачений контракт може тільки керівництво.",
+      "â ÐÐ½ÑÐ»ÑÐ²Ð°ÑÐ¸ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ Ð¼Ð¾Ð¶Ðµ ÑÑÐ»ÑÐºÐ¸ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð¾.",
       ephemeral=True,
     )
     return
@@ -5013,7 +5403,7 @@ async def annul_contract(
   guild = interaction.guild
   if guild is None:
     await interaction.response.send_message(
-      "❌ Це працює тільки на сервері.",
+      "â Ð¦Ðµ Ð¿ÑÐ°ÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð½Ð° ÑÐµÑÐ²ÐµÑÑ.",
       ephemeral=True,
     )
     return
@@ -5022,28 +5412,28 @@ async def annul_contract(
 
   if not row or row["guild_id"] != guild.id:
     await interaction.response.send_message(
-      f"❌ Контракт з ID **{contract_id}** не знайдено на цьому сервері.",
+      f"â ÐÐ¾Ð½ÑÑÐ°ÐºÑ Ð· ID **{contract_id}** Ð½Ðµ Ð·Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾ Ð½Ð° ÑÑÐ¾Ð¼Ñ ÑÐµÑÐ²ÐµÑÑ.",
       ephemeral=True,
     )
     return
 
   if row["status"] == "annulled":
     await interaction.response.send_message(
-      f"ℹ️ Контракт **#{contract_id}** уже анульований.",
+      f"â¹ï¸ ÐÐ¾Ð½ÑÑÐ°ÐºÑ **#{contract_id}** ÑÐ¶Ðµ Ð°Ð½ÑÐ»ÑÐ¾Ð²Ð°Ð½Ð¸Ð¹.",
       ephemeral=True,
     )
     return
 
   if row["status"] != "paid":
     status_names = {
-      "unpaid": "не оплачений",
-      "cancelled": "скасований",
+      "unpaid": "Ð½Ðµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹",
+      "cancelled": "ÑÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¸Ð¹",
     }
     status_name = status_names.get(row["status"], row["status"])
     await interaction.response.send_message(
       (
-        f"❌ Контракт **#{contract_id}** зараз **{status_name}**.\n"
-        "Анулювати цією командою можна тільки вже оплачений контракт."
+        f"â ÐÐ¾Ð½ÑÑÐ°ÐºÑ **#{contract_id}** Ð·Ð°ÑÐ°Ð· **{status_name}**.\n"
+        "ÐÐ½ÑÐ»ÑÐ²Ð°ÑÐ¸ ÑÑÑÑ ÐºÐ¾Ð¼Ð°Ð½Ð´Ð¾Ñ Ð¼Ð¾Ð¶Ð½Ð° ÑÑÐ»ÑÐºÐ¸ Ð²Ð¶Ðµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ."
       ),
       ephemeral=True,
     )
@@ -5056,15 +5446,15 @@ async def annul_contract(
   )
 
   embed = discord.Embed(
-    title=f"🚫 Анулювання контракту #{contract_id}",
+    title=f"ð« ÐÐ½ÑÐ»ÑÐ²Ð°Ð½Ð½Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ #{contract_id}",
     description=(
-      "Перевір контракт перед підтвердженням.\n\n"
-      f"📋 **{row['contract_name']}**\n"
-      f"💰 Сума: **{format_money_dollars(row['price'])} $**\n"
-      f"👥 Виконавці: {participant_text}\n"
-      f"🏦 Було в Банк сім'ї: **{format_cents(row['fomo_cents'] or 0)}**\n"
-      f"💸 Було учасникам: **{format_cents(row['net_cents'] or 0)}**\n\n"
-      f"[Відкрити повідомлення контракту]({jump_url})"
+      "ÐÐµÑÐµÐ²ÑÑ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ Ð¿ÐµÑÐµÐ´ Ð¿ÑÐ´ÑÐ²ÐµÑÐ´Ð¶ÐµÐ½Ð½ÑÐ¼.\n\n"
+      f"ð **{row['contract_name']}**\n"
+      f"ð° Ð¡ÑÐ¼Ð°: **{format_money_dollars(row['price'])} $**\n"
+      f"ð¥ ÐÐ¸ÐºÐ¾Ð½Ð°Ð²ÑÑ: {participant_text}\n"
+      f"ð¦ ÐÑÐ»Ð¾ Ð² ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ: **{format_cents(row['fomo_cents'] or 0)}**\n"
+      f"ð¸ ÐÑÐ»Ð¾ ÑÑÐ°ÑÐ½Ð¸ÐºÐ°Ð¼: **{format_cents(row['net_cents'] or 0)}**\n\n"
+      f"[ÐÑÐ´ÐºÑÐ¸ÑÐ¸ Ð¿Ð¾Ð²ÑÐ´Ð¾Ð¼Ð»ÐµÐ½Ð½Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ]({jump_url})"
     ),
     color=discord.Color.red(),
   )
@@ -5103,15 +5493,15 @@ class DebtUserSelect(discord.ui.Select):
         label=labels.get(row["user_id"], f"ID {row['user_id']}")[:100],
         value=str(row["user_id"]),
         description=(
-          f"Відкладено: {format_cents(row['total_cents'])} • "
-          f"контрактів: {row['debt_count']}"
+          f"ÐÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð¾: {format_cents(row['total_cents'])} â¢ "
+          f"ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ²: {row['debt_count']}"
         )[:100],
       )
       for row in rows[:25]
     ]
 
     super().__init__(
-      placeholder="Оберіть зама",
+      placeholder="ÐÐ±ÐµÑÑÑÑ Ð·Ð°Ð¼Ð°",
       min_values=1,
       max_values=1,
       options=options,
@@ -5140,8 +5530,8 @@ class DebtPayView(discord.ui.View):
     self.user_id = user_id
 
   @discord.ui.button(
-    label="Оплатити борг",
-    emoji="💵",
+    label="ÐÐ¿Ð»Ð°ÑÐ¸ÑÐ¸ Ð±Ð¾ÑÐ³",
+    emoji="ðµ",
     style=discord.ButtonStyle.success,
   )
   async def pay(
@@ -5151,7 +5541,7 @@ class DebtPayView(discord.ui.View):
   ):
     if not isinstance(interaction.user, discord.Member) or not leader_member(interaction.user):
       await interaction.response.send_message(
-        "❌ Проводити відкладені виплати може тільки лідер.",
+        "â ÐÑÐ¾Ð²Ð¾Ð´Ð¸ÑÐ¸ Ð²ÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ñ Ð²Ð¸Ð¿Ð»Ð°ÑÐ¸ Ð¼Ð¾Ð¶Ðµ ÑÑÐ»ÑÐºÐ¸ Ð»ÑÐ´ÐµÑ.",
         ephemeral=True,
       )
       return
@@ -5159,7 +5549,7 @@ class DebtPayView(discord.ui.View):
     guild = interaction.guild
     if guild is None:
       await interaction.response.send_message(
-        "❌ Це працює тільки на сервері.",
+        "â Ð¦Ðµ Ð¿ÑÐ°ÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð½Ð° ÑÐµÑÐ²ÐµÑÑ.",
         ephemeral=True,
       )
       return
@@ -5170,7 +5560,7 @@ class DebtPayView(discord.ui.View):
     )
     if not debts:
       await interaction.response.edit_message(
-        content="✅ Відкладеної оплати вже немає.",
+        content="â ÐÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð¾Ñ Ð¾Ð¿Ð»Ð°ÑÐ¸ Ð²Ð¶Ðµ Ð½ÐµÐ¼Ð°Ñ.",
         embed=None,
         view=None,
       )
@@ -5179,7 +5569,7 @@ class DebtPayView(discord.ui.View):
     total = sum(row["amount_cents"] for row in debts)
 
     await interaction.response.edit_message(
-      content="⏳ Проводжу відкладену оплату...",
+      content="â³ ÐÑÐ¾Ð²Ð¾Ð´Ð¶Ñ Ð²ÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ñ Ð¾Ð¿Ð»Ð°ÑÑ...",
       embed=None,
       view=None,
     )
@@ -5195,28 +5585,28 @@ class DebtPayView(discord.ui.View):
 
     await audit_log(
       guild,
-      "💵 Відкладену оплату проведено",
+      "ðµ ÐÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ñ Ð¾Ð¿Ð»Ð°ÑÑ Ð¿ÑÐ¾Ð²ÐµÐ´ÐµÐ½Ð¾",
       (
-        f"Зам: <@{self.user_id}>\n"
-        f"Сума: **{format_cents(total)}**\n"
-        f"Контрактів: **{len(settled)}**\n"
-        f"Оплатив/ла: <@{interaction.user.id}>"
+        f"ÐÐ°Ð¼: <@{self.user_id}>\n"
+        f"Ð¡ÑÐ¼Ð°: **{format_cents(total)}**\n"
+        f"ÐÐ¾Ð½ÑÑÐ°ÐºÑÑÐ²: **{len(settled)}**\n"
+        f"ÐÐ¿Ð»Ð°ÑÐ¸Ð²/Ð»Ð°: <@{interaction.user.id}>"
       ),
       discord.Color.green(),
     )
 
     await interaction.edit_original_response(
       content=(
-        f"✅ <@{self.user_id}> виплачено **{format_cents(total)}**.\n"
-        "Відкладену оплату закрито."
+        f"â <@{self.user_id}> Ð²Ð¸Ð¿Ð»Ð°ÑÐµÐ½Ð¾ **{format_cents(total)}**.\n"
+        "ÐÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ñ Ð¾Ð¿Ð»Ð°ÑÑ Ð·Ð°ÐºÑÐ¸ÑÐ¾."
       ),
       embed=None,
       view=None,
     )
 
   @discord.ui.button(
-    label="Назад",
-    emoji="↩️",
+    label="ÐÐ°Ð·Ð°Ð´",
+    emoji="â©ï¸",
     style=discord.ButtonStyle.secondary,
   )
   async def back(
@@ -5240,24 +5630,24 @@ async def show_debt_user(
   label = await debt_user_label(guild, user_id)
 
   embed = discord.Embed(
-    title="💰 Відкладена оплата",
+    title="ð° ÐÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð° Ð¾Ð¿Ð»Ð°ÑÐ°",
     description=(
-      f"**{label}** • <@{user_id}>\n"
-      f"Всього відкладено: **{format_cents(total)}**\n"
-      f"Контрактів у боргу: **{len(debts)}**"
+      f"**{label}** â¢ <@{user_id}>\n"
+      f"ÐÑÑÐ¾Ð³Ð¾ Ð²ÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð¾: **{format_cents(total)}**\n"
+      f"ÐÐ¾Ð½ÑÑÐ°ÐºÑÑÐ² Ñ Ð±Ð¾ÑÐ³Ñ: **{len(debts)}**"
     ),
     color=discord.Color.gold(),
   )
 
   if debts:
     lines = [
-      f"#{row['contract_id']} • {row['contract_name']} — **{format_cents(row['amount_cents'])}**"
+      f"#{row['contract_id']} â¢ {row['contract_name']} â **{format_cents(row['amount_cents'])}**"
       for row in debts[:10]
     ]
     if len(debts) > 10:
-      lines.append(f"…і ще {len(debts) - 10}")
+      lines.append(f"â¦Ñ ÑÐµ {len(debts) - 10}")
     embed.add_field(
-      name="Контракти",
+      name="ÐÐ¾Ð½ÑÑÐ°ÐºÑÐ¸",
       value="\n".join(lines),
       inline=False,
     )
@@ -5281,8 +5671,8 @@ async def send_debts_list(
 
   if not rows:
     embed = discord.Embed(
-      title="💰 Відкладені оплати",
-      description="✅ Відкладених оплат немає.",
+      title="ð° ÐÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ñ Ð¾Ð¿Ð»Ð°ÑÐ¸",
+      description="â ÐÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð¸Ñ Ð¾Ð¿Ð»Ð°Ñ Ð½ÐµÐ¼Ð°Ñ.",
       color=discord.Color.green(),
     )
     if edit:
@@ -5309,16 +5699,16 @@ async def send_debts_list(
 
   lines = [
     (
-      f"<@{row['user_id']}> — **{format_cents(row['total_cents'])}** "
-      f"• {row['debt_count']} контракт(ів)"
+      f"<@{row['user_id']}> â **{format_cents(row['total_cents'])}** "
+      f"â¢ {row['debt_count']} ÐºÐ¾Ð½ÑÑÐ°ÐºÑ(ÑÐ²)"
     )
     for row in rows[:25]
   ]
 
   embed = discord.Embed(
-    title="💰 Відкладені оплати",
+    title="ð° ÐÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ñ Ð¾Ð¿Ð»Ð°ÑÐ¸",
     description=(
-      f"Всього відкладено: **{format_cents(total)}**\n\n"
+      f"ÐÑÑÐ¾Ð³Ð¾ Ð²ÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð¾: **{format_cents(total)}**\n\n"
       + "\n".join(lines)
     ),
     color=discord.Color.gold(),
@@ -5342,12 +5732,12 @@ async def send_debts_list(
 
 @bot.tree.command(
   name="debts",
-  description="Показати відкладені виплати замам за виконані контракти",
+  description="ÐÐ¾ÐºÐ°Ð·Ð°ÑÐ¸ Ð²ÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ñ Ð²Ð¸Ð¿Ð»Ð°ÑÐ¸ Ð·Ð°Ð¼Ð°Ð¼ Ð·Ð° Ð²Ð¸ÐºÐ¾Ð½Ð°Ð½Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ¸",
 )
 async def debts(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
     await interaction.response.send_message(
-      "❌ Команда доступна тільки керівництву.",
+      "â ÐÐ¾Ð¼Ð°Ð½Ð´Ð° Ð´Ð¾ÑÑÑÐ¿Ð½Ð° ÑÑÐ»ÑÐºÐ¸ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ñ.",
       ephemeral=True,
     )
     return
@@ -5355,11 +5745,11 @@ async def debts(interaction: discord.Interaction):
   await send_debts_list(interaction)
 
 
-@bot.tree.command(name="stats", description="Статистика контрактів для керівництва")
+@bot.tree.command(name="stats", description="Ð¡ÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ² Ð´Ð»Ñ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð°")
 async def stats(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
     await interaction.response.send_message(
-      "❌ Статистика доступна тільки керівництву.",
+      "â Ð¡ÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° Ð´Ð¾ÑÑÑÐ¿Ð½Ð° ÑÑÐ»ÑÐºÐ¸ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ñ.",
       ephemeral=True,
     )
     return
@@ -5367,7 +5757,7 @@ async def stats(interaction: discord.Interaction):
   guild = interaction.guild
   if guild is None:
     await interaction.response.send_message(
-      "❌ Це працює тільки на сервері.",
+      "â Ð¦Ðµ Ð¿ÑÐ°ÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð½Ð° ÑÐµÑÐ²ÐµÑÑ.",
       ephemeral=True,
     )
     return
@@ -5379,23 +5769,23 @@ async def stats(interaction: discord.Interaction):
   )
 
 
-@bot.tree.command(name="unpaid", description="Неоплачені контракти")
+@bot.tree.command(name="unpaid", description="ÐÐµÐ¾Ð¿Ð»Ð°ÑÐµÐ½Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ¸")
 async def unpaid(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
     await interaction.response.send_message(
-      "❌ Доступно тільки керівництву.",
+      "â ÐÐ¾ÑÑÑÐ¿Ð½Ð¾ ÑÑÐ»ÑÐºÐ¸ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ñ.",
       ephemeral=True,
     )
     return
 
   guild = interaction.guild
   if guild is None:
-    await interaction.response.send_message("❌ Це працює тільки на сервері.", ephemeral=True)
+    await interaction.response.send_message("â Ð¦Ðµ Ð¿ÑÐ°ÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð½Ð° ÑÐµÑÐ²ÐµÑÑ.", ephemeral=True)
     return
 
   rows = db.unpaid_for_guild(guild.id)
   if not rows:
-    await interaction.response.send_message("✅ Неоплачених контрактів немає.", ephemeral=True)
+    await interaction.response.send_message("â ÐÐµÐ¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ² Ð½ÐµÐ¼Ð°Ñ.", ephemeral=True)
     return
 
   lines = []
@@ -5403,12 +5793,12 @@ async def unpaid(interaction: discord.Interaction):
     participants = " ".join(f"<@{uid}>" for uid in parse_ids(row["participant_ids"]))
     jump_url = f"https://discord.com/channels/{guild.id}/{row['channel_id']}/{row['message_id']}"
     lines.append(
-      f"• **{row['contract_name']}** — {format_money_dollars(row['price'])} $ — "
-      f"{participants} — [відкрити]({jump_url})"
+      f"â¢ **{row['contract_name']}** â {format_money_dollars(row['price'])} $ â "
+      f"{participants} â [Ð²ÑÐ´ÐºÑÐ¸ÑÐ¸]({jump_url})"
     )
 
   embed = discord.Embed(
-    title="💸 Неоплачені контракти",
+    title="ð¸ ÐÐµÐ¾Ð¿Ð»Ð°ÑÐµÐ½Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ¸",
     description="\n".join(lines),
     color=discord.Color.orange(),
   )

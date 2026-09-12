@@ -42,8 +42,8 @@ MANAGER_ROLE_IDS = {
 if ADMIN_ROLE_ID:
   MANAGER_ROLE_IDS.add(ADMIN_ROLE_ID)
 
-# Ð Ð¾Ð»Ñ Ð»ÑÐ´ÐµÑÐ°. Ð¯ÐºÑÐ¾ Ð¾ÐºÑÐµÐ¼Ð¾ Ð½Ðµ Ð·Ð°Ð´Ð°Ð½Ð° â Ð²Ð¸ÐºÐ¾ÑÐ¸ÑÑÐ¾Ð²ÑÑÐ¼Ð¾ ADMIN_ROLE_ID.
-# MANAGER_ROLE_IDS = ÑÐ¾Ð»Ñ Ð·Ð°Ð¼ÑÐ²/ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð°, ÑÐºÐ¸Ð¼ Ð²Ð¸Ð¿Ð»Ð°ÑÐ° Ð¼Ð¾Ð¶Ðµ Ð½Ð°ÐºÐ¾Ð¿Ð¸ÑÑÐ²Ð°ÑÐ¸ÑÑ Ð±Ð¾ÑÐ³Ð¾Ð¼.
+# \u0420\u043e\u043b\u044c \u043b\u0456\u0434\u0435\u0440\u0430. \u042f\u043a\u0449\u043e \u043e\u043a\u0440\u0435\u043c\u043e \u043d\u0435 \u0437\u0430\u0434\u0430\u043d\u0430 \u2014 \u0432\u0438\u043a\u043e\u0440\u0438\u0441\u0442\u043e\u0432\u0443\u0454\u043c\u043e ADMIN_ROLE_ID.
+# MANAGER_ROLE_IDS = \u0440\u043e\u043b\u0456 \u0437\u0430\u043c\u0456\u0432/\u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u0430, \u044f\u043a\u0438\u043c \u0432\u0438\u043f\u043b\u0430\u0442\u0430 \u043c\u043e\u0436\u0435 \u043d\u0430\u043a\u043e\u043f\u0438\u0447\u0443\u0432\u0430\u0442\u0438\u0441\u044f \u0431\u043e\u0440\u0433\u043e\u043c.
 LEADER_ROLE_ID = int(os.getenv("LEADER_ROLE_ID", str(ADMIN_ROLE_ID or 0)) or 0)
 
 DB_PATH = os.getenv("DB_PATH", "contracts.db").strip()
@@ -87,27 +87,27 @@ def parse_money(raw: str) -> int:
   Examples:
   110000
   110 000
-  110Ðº / 110k
-  1.2Ð¼ / 1.2m
+  110\u043a / 110k
+  1.2\u043c / 1.2m
   """
   s = raw.strip().lower()
-  s = s.replace("$", "").replace("â´", "").replace(" ", "").replace("_", "")
+  s = s.replace("$", "").replace("\u20b4", "").replace(" ", "").replace("_", "")
   s = s.replace(",", ".")
 
   multiplier = 1
-  if s.endswith(("Ðº", "k")):
+  if s.endswith(("\u043a", "k")):
     multiplier = 1_000
     s = s[:-1]
-  elif s.endswith(("Ð¼", "m")):
+  elif s.endswith(("\u043c", "m")):
     multiplier = 1_000_000
     s = s[:-1]
 
   if not re.fullmatch(r"\d+(\.\d+)?", s):
-    raise ValueError("ÐÐµÐºÐ¾ÑÐµÐºÑÐ½Ð° ÑÑÐ¼Ð°")
+    raise ValueError("\u041d\u0435\u043a\u043e\u0440\u0435\u043a\u0442\u043d\u0430 \u0441\u0443\u043c\u0430")
 
   value = int(Decimal(s) * multiplier)
   if value <= 0:
-    raise ValueError("Ð¡ÑÐ¼Ð° Ð¼Ð°Ñ Ð±ÑÑÐ¸ Ð±ÑÐ»ÑÑÐ¾Ñ Ð·Ð° 0")
+    raise ValueError("\u0421\u0443\u043c\u0430 \u043c\u0430\u0454 \u0431\u0443\u0442\u0438 \u0431\u0456\u043b\u044c\u0448\u043e\u044e \u0437\u0430 0")
   return value
 
 
@@ -125,7 +125,7 @@ def format_cents(cents: int) -> str:
   return f"{sign}{whole_text}.{rem:02d} $"
 
 
-UA_ALPHABET = "Ð°Ð±Ð²Ð³ÒÐ´ÐµÑÐ¶Ð·Ð¸ÑÑÐ¹ÐºÐ»Ð¼Ð½Ð¾Ð¿ÑÑÑÑÑÑÑÑÑÑÑÑÑ"
+UA_ALPHABET = "\u0430\u0431\u0432\u0433\u0491\u0434\u0435\u0454\u0436\u0437\u0438\u0456\u0457\u0439\u043a\u043b\u043c\u043d\u043e\u043f\u0440\u0441\u0442\u0443\u0444\u0445\u0446\u0447\u0448\u0449\u044c\u044e\u044f"
 UA_ORDER = {char: idx for idx, char in enumerate(UA_ALPHABET)}
 
 
@@ -146,24 +146,24 @@ def format_points(value: Fraction) -> str:
 
 
 def format_points_with_word(value: Fraction) -> str:
-  """1 Ð±Ð°Ð», 2 Ð±Ð°Ð»Ð¸, 10 Ð±Ð°Ð»ÑÐ², 1.65 Ð±Ð°Ð»Ð°."""
+  """1 \u0431\u0430\u043b, 2 \u0431\u0430\u043b\u0438, 10 \u0431\u0430\u043b\u0456\u0432, 1.65 \u0431\u0430\u043b\u0430."""
   number = format_points(value)
 
   if value.denominator != 1:
-    return f"{number} Ð±Ð°Ð»Ð°"
+    return f"{number} \u0431\u0430\u043b\u0430"
 
   n = abs(value.numerator)
   last_two = n % 100
   last = n % 10
 
   if last_two in (11, 12, 13, 14):
-    word = "Ð±Ð°Ð»ÑÐ²"
+    word = "\u0431\u0430\u043b\u0456\u0432"
   elif last == 1:
-    word = "Ð±Ð°Ð»"
+    word = "\u0431\u0430\u043b"
   elif last in (2, 3, 4):
-    word = "Ð±Ð°Ð»Ð¸"
+    word = "\u0431\u0430\u043b\u0438"
   else:
-    word = "Ð±Ð°Ð»ÑÐ²"
+    word = "\u0431\u0430\u043b\u0456\u0432"
 
   return f"{number} {word}"
 
@@ -183,7 +183,7 @@ def local_date_from_iso(value: Optional[str]):
 
 def format_day(day) -> str:
   weekdays = (
-    "ÐÐ½", "ÐÑ", "Ð¡Ñ", "Ð§Ñ", "ÐÑ", "Ð¡Ð±", "ÐÐ´"
+    "\u041f\u043d", "\u0412\u0442", "\u0421\u0440", "\u0427\u0442", "\u041f\u0442", "\u0421\u0431", "\u041d\u0434"
   )
   return f"{weekdays[day.weekday()]}, {day.strftime('%d.%m.%Y')}"
 
@@ -218,12 +218,12 @@ PAYMENT_MODE_LEGACY_FAMILY = "family"
 
 def payment_mode_label(mode: str) -> str:
   labels = {
-    PAYMENT_MODE_NORMAL: "ÐÐ²Ð¸ÑÐ°Ð¹Ð½Ð° Ð¾Ð¿Ð»Ð°ÑÐ°",
-    PAYMENT_MODE_REDISTRIBUTE: "Ð Ð¾Ð·Ð´ÑÐ»Ð¸ÑÐ¸ Ð¼ÑÐ¶ ÑÐµÑÑÐ¾Ñ",
-    PAYMENT_MODE_FAMILY_SHARE: "Ð§Ð°ÑÑÐºÑ Ð²Ð¸Ð½ÑÑÐºÑÐ² Ñ ÑÑÐ¼'Ñ",
-    PAYMENT_MODE_LEGACY_FAMILY: "ÐÐ° ÑÐ°Ð¼Ñ",
+    PAYMENT_MODE_NORMAL: "\u0417\u0432\u0438\u0447\u0430\u0439\u043d\u0430 \u043e\u043f\u043b\u0430\u0442\u0430",
+    PAYMENT_MODE_REDISTRIBUTE: "\u0420\u043e\u0437\u0434\u0456\u043b\u0438\u0442\u0438 \u043c\u0456\u0436 \u0440\u0435\u0448\u0442\u043e\u044e",
+    PAYMENT_MODE_FAMILY_SHARE: "\u0427\u0430\u0441\u0442\u043a\u0443 \u0432\u0438\u043d\u044f\u0442\u043a\u0456\u0432 \u0443 \u0441\u0456\u043c'\u044e",
+    PAYMENT_MODE_LEGACY_FAMILY: "\u041d\u0430 \u0444\u0430\u043c\u0443",
   }
-  return labels.get(mode, "ÐÐ¿Ð»Ð°ÑÐ°")
+  return labels.get(mode, "\u041e\u043f\u043b\u0430\u0442\u0430")
 
 
 def calculate_payment(
@@ -321,17 +321,17 @@ def calculate_personal_family_contributions(
   excluded_payment_ids: Optional[list[int]] = None,
 ) -> dict[int, int]:
   """
-  Ð Ð°ÑÑÑ ÑÑÐ»ÑÐºÐ¸ ÐÐ¡ÐÐÐÐ¡Ð¢Ð Ð³ÑÐ¾ÑÑ ÑÑÐ°ÑÐ½Ð¸ÐºÐ°, ÑÐºÑ Ð¿ÑÑÐ»Ð¸ Ð² ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ.
-  Ð¡ÑÐ°Ð½Ð´Ð°ÑÑÐ½Ñ FAMILY_PERCENT Ð½Ðµ Ð¿ÑÐ¸Ð¿Ð¸ÑÑÑÑÑÑÑ ÐºÐ¾Ð½ÐºÑÐµÑÐ½ÑÐ¹ Ð»ÑÐ´Ð¸Ð½Ñ.
+  \u0420\u0430\u0445\u0443\u0454 \u0442\u0456\u043b\u044c\u043a\u0438 \u041e\u0421\u041e\u0411\u0418\u0421\u0422\u0406 \u0433\u0440\u043e\u0448\u0456 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430, \u044f\u043a\u0456 \u043f\u0456\u0448\u043b\u0438 \u0432 \u0411\u0430\u043d\u043a \u0441\u0456\u043c'\u0457.
+  \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0456 FAMILY_PERCENT \u043d\u0435 \u043f\u0440\u0438\u043f\u0438\u0441\u0443\u044e\u0442\u044c\u0441\u044f \u043a\u043e\u043d\u043a\u0440\u0435\u0442\u043d\u0456\u0439 \u043b\u044e\u0434\u0438\u043d\u0456.
 
-  ÐÐ° ÑÐ°Ð¼Ñ:
-    ÐºÐ¾Ð¶Ð½Ð¾Ð¼Ñ Ð·Ð°ÑÐ°ÑÐ¾Ð²ÑÑÑÑÑÑ Ð¹Ð¾Ð³Ð¾ Ð½Ð¾ÑÐ¼Ð°Ð»ÑÐ½Ð° ÑÐ°ÑÑÐºÐ° Ð· participant pool.
+  \u041d\u0430 \u0444\u0430\u043c\u0443:
+    \u043a\u043e\u0436\u043d\u043e\u043c\u0443 \u0437\u0430\u0440\u0430\u0445\u043e\u0432\u0443\u0454\u0442\u044c\u0441\u044f \u0439\u043e\u0433\u043e \u043d\u043e\u0440\u043c\u0430\u043b\u044c\u043d\u0430 \u0447\u0430\u0441\u0442\u043a\u0430 \u0437 participant pool.
 
-  Ð§Ð°ÑÑÐºÑ Ð² ÑÑÐ¼'Ñ:
-    Ð¾ÑÐ¾Ð±Ð¸ÑÑÐ¸Ð¼ Ð²Ð½ÐµÑÐºÐ¾Ð¼ Ñ Ð½Ð¾ÑÐ¼Ð°Ð»ÑÐ½Ð° ÑÐ°ÑÑÐºÐ° ÑÐ°Ð¼Ðµ Ð²Ð¸ÐºÐ»ÑÑÐµÐ½Ð¸Ñ Ð»ÑÐ´ÐµÐ¹.
+  \u0427\u0430\u0441\u0442\u043a\u0443 \u0432 \u0441\u0456\u043c'\u044e:
+    \u043e\u0441\u043e\u0431\u0438\u0441\u0442\u0438\u043c \u0432\u043d\u0435\u0441\u043a\u043e\u043c \u0454 \u043d\u043e\u0440\u043c\u0430\u043b\u044c\u043d\u0430 \u0447\u0430\u0441\u0442\u043a\u0430 \u0441\u0430\u043c\u0435 \u0432\u0438\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0445 \u043b\u044e\u0434\u0435\u0439.
 
-  ÐÐ²Ð¸ÑÐ°Ð¹Ð½Ð° / Ð Ð¾Ð·Ð´ÑÐ»Ð¸ÑÐ¸ Ð¼ÑÐ¶ ÑÐµÑÑÐ¾Ñ:
-    Ð¾ÑÐ¾Ð±Ð¸ÑÑÐ¸Ð¹ Ð²Ð½ÐµÑÐ¾Ðº = 0.
+  \u0417\u0432\u0438\u0447\u0430\u0439\u043d\u0430 / \u0420\u043e\u0437\u0434\u0456\u043b\u0438\u0442\u0438 \u043c\u0456\u0436 \u0440\u0435\u0448\u0442\u043e\u044e:
+    \u043e\u0441\u043e\u0431\u0438\u0441\u0442\u0438\u0439 \u0432\u043d\u0435\u0441\u043e\u043a = 0.
   """
   if not participant_ids:
     return {}
@@ -369,33 +369,33 @@ def payment_preview_embed(
   )
 
   embed = discord.Embed(
-    title="ðµ ÐÐµÑÐµÐ²ÑÑÐºÐ° Ð¾Ð¿Ð»Ð°ÑÐ¸",
+    title="\U0001f4b5 \u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u043e\u043f\u043b\u0430\u0442\u0438",
     description=(
       f"**{row['contract_name']}**\n"
-      f"Ð¡ÑÐ¼Ð° ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ: **{format_money_dollars(row['price'])} $**"
+      f"\u0421\u0443\u043c\u0430 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443: **{format_money_dollars(row['price'])} $**"
     ),
     color=discord.Color.gold(),
   )
 
   embed.add_field(
-    name="Ð¡Ð¿Ð¾ÑÑÐ±",
+    name="\u0421\u043f\u043e\u0441\u0456\u0431",
     value=payment_mode_label(payment_mode),
     inline=False,
   )
   embed.add_field(
-    name="ð¦ ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ",
+    name="\U0001f3e6 \u0411\u0430\u043d\u043a \u0441\u0456\u043c'\u0457",
     value=format_cents(family_cents),
     inline=True,
   )
   embed.add_field(
-    name="ð¸ Ð£ÑÐ°ÑÐ½Ð¸ÐºÐ°Ð¼",
+    name="\U0001f4b8 \u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c",
     value=format_cents(net_cents),
     inline=True,
   )
 
   if normalized_excluded and payment_mode != PAYMENT_MODE_LEGACY_FAMILY:
     embed.add_field(
-      name="ð« ÐÐµÐ· Ð²Ð¸Ð¿Ð»Ð°ÑÐ¸",
+      name="\U0001f6ab \u0411\u0435\u0437 \u0432\u0438\u043f\u043b\u0430\u0442\u0438",
       value=" ".join(f"<@{uid}>" for uid in normalized_excluded),
       inline=False,
     )
@@ -406,20 +406,20 @@ def payment_preview_embed(
     for uid, amount in payouts.items():
       if uid in deferred_set:
         lines.append(
-          f"â³ <@{uid}> â **{format_cents(amount)}** â¢ Ð²ÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð° Ð¾Ð¿Ð»Ð°ÑÐ°"
+          f"\u23f3 <@{uid}> \u2014 **{format_cents(amount)}** \u2022 \u0432\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0430 \u043e\u043f\u043b\u0430\u0442\u0430"
         )
       else:
         lines.append(
-          f"<@{uid}> â **{format_cents(amount)}**"
+          f"<@{uid}> \u2014 **{format_cents(amount)}**"
         )
 
     embed.add_field(
-      name="ð¤ Ð Ð¾Ð·Ð¿Ð¾Ð´ÑÐ»",
+      name="\U0001f464 \u0420\u043e\u0437\u043f\u043e\u0434\u0456\u043b",
       value="\n".join(lines),
       inline=False,
     )
 
-  embed.set_footer(text="ÐÐµÑÐµÐ²ÑÑÑÐµ ÑÑÐ¼Ð¸ Ð¿ÐµÑÐµÐ´ Ð¿ÑÐ´ÑÐ²ÐµÑÐ´Ð¶ÐµÐ½Ð½ÑÐ¼")
+  embed.set_footer(text="\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u0441\u0443\u043c\u0438 \u043f\u0435\u0440\u0435\u0434 \u043f\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043d\u043d\u044f\u043c")
   return embed
 
 
@@ -439,7 +439,7 @@ def leader_member(member: discord.Member) -> bool:
 
 
 def deferred_payout_member(member: discord.Member) -> bool:
-  """ÐÐ°Ð¼/ÐºÐµÑÑÐ²Ð½Ð¸Ðº, Ð²Ð¸Ð¿Ð»Ð°ÑÐ° ÑÐºÐ¾Ð¼Ñ Ð½Ð°ÐºÐ¾Ð¿Ð¸ÑÑÑÑÑÑÑ Ð±Ð¾ÑÐ³Ð¾Ð¼ Ð»ÑÐ´ÐµÑÐ°."""
+  """\u0417\u0430\u043c/\u043a\u0435\u0440\u0456\u0432\u043d\u0438\u043a, \u0432\u0438\u043f\u043b\u0430\u0442\u0430 \u044f\u043a\u043e\u043c\u0443 \u043d\u0430\u043a\u043e\u043f\u0438\u0447\u0443\u0454\u0442\u044c\u0441\u044f \u0431\u043e\u0440\u0433\u043e\u043c \u043b\u0456\u0434\u0435\u0440\u0430."""
   if LEADER_ROLE_ID and any(role.id == LEADER_ROLE_ID for role in member.roles):
     return False
   return any(role.id in MANAGER_ROLE_IDS for role in member.roles)
@@ -596,8 +596,8 @@ class Database:
 
   def backfill_legacy_paid_contracts(self):
     """
-    Ð¡ÑÐ°ÑÑ MVP/V2 Ð·Ð°Ð¿Ð¸ÑÐ¸ Ð¼Ð¾Ð³Ð»Ð¸ Ð±ÑÑÐ¸ Ð¿Ð¾Ð·Ð½Ð°ÑÐµÐ½Ñ ÑÐº paid ÑÐµ Ð´Ð¾ Ð¿Ð¾ÑÐ²Ð¸
-    ÐÐ°Ð½ÐºÑ ÑÑÐ¼'Ñ ÑÐ° Ð¿ÐµÑÑÐ¾Ð½Ð°Ð»ÑÐ½Ð¸Ñ payout-ÑÐ². ÐÐ¾ÑÐ°ÑÐ¾Ð²ÑÑÐ¼Ð¾ ÑÑ Ð¾Ð´Ð¸Ð½ ÑÐ°Ð·.
+    \u0421\u0442\u0430\u0440\u0456 MVP/V2 \u0437\u0430\u043f\u0438\u0441\u0438 \u043c\u043e\u0433\u043b\u0438 \u0431\u0443\u0442\u0438 \u043f\u043e\u0437\u043d\u0430\u0447\u0435\u043d\u0456 \u044f\u043a paid \u0449\u0435 \u0434\u043e \u043f\u043e\u044f\u0432\u0438
+    \u0411\u0430\u043d\u043a\u0443 \u0441\u0456\u043c'\u0457 \u0442\u0430 \u043f\u0435\u0440\u0441\u043e\u043d\u0430\u043b\u044c\u043d\u0438\u0445 payout-\u0456\u0432. \u0414\u043e\u0440\u0430\u0445\u043e\u0432\u0443\u0454\u043c\u043e \u0457\u0445 \u043e\u0434\u0438\u043d \u0440\u0430\u0437.
     """
     rows = self.conn.execute("""
     SELECT *
@@ -668,8 +668,8 @@ class Database:
 
   def backfill_family_contributions(self):
     """
-    Ð¡ÑÐ°ÑÑ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ¸ Ð²Ð¶Ðµ Ð¼ÑÑÑÑÑÑ payment_mode / excluded ids,
-    ÑÐ¾Ð¼Ñ Ð¾ÑÐ¾Ð±Ð¸ÑÑÐ¸Ð¹ Ð²Ð½ÐµÑÐ¾Ðº Ñ ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ Ð¼Ð¾Ð¶Ð½Ð° Ð²ÑÐ´Ð½Ð¾Ð²Ð¸ÑÐ¸ Ð·Ð°Ð´Ð½ÑÐ¼ ÑÐ¸ÑÐ»Ð¾Ð¼.
+    \u0421\u0442\u0430\u0440\u0456 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0456 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438 \u0432\u0436\u0435 \u043c\u0456\u0441\u0442\u044f\u0442\u044c payment_mode / excluded ids,
+    \u0442\u043e\u043c\u0443 \u043e\u0441\u043e\u0431\u0438\u0441\u0442\u0438\u0439 \u0432\u043d\u0435\u0441\u043e\u043a \u0443 \u0411\u0430\u043d\u043a \u0441\u0456\u043c'\u0457 \u043c\u043e\u0436\u043d\u0430 \u0432\u0456\u0434\u043d\u043e\u0432\u0438\u0442\u0438 \u0437\u0430\u0434\u043d\u0456\u043c \u0447\u0438\u0441\u043b\u043e\u043c.
     """
     rows = self.conn.execute("""
     SELECT *
@@ -864,9 +864,9 @@ class Database:
 
   def annul_paid(self, message_id: int, annulled_by: int) -> bool:
     """
-    ÐÐ½ÑÐ»ÑÑ Ð²Ð¶Ðµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ Ð±ÐµÐ· ÑÑÐ·Ð¸ÑÐ½Ð¾Ð³Ð¾ Ð²Ð¸Ð´Ð°Ð»ÐµÐ½Ð½Ñ.
-    Ð¡ÑÐ°ÑÑ payout-Ð¸ Ð·Ð°Ð»Ð¸ÑÐ°ÑÑÑÑÑ Ð² ÐÐ ÑÐº ÑÑÑÐ¾ÑÐ¸ÑÐ½Ð¸Ð¹ ÑÐ»ÑÐ´,
-    Ð°Ð»Ðµ ÑÐµÑÐµÐ· status='annulled' Ð±ÑÐ»ÑÑÐµ Ð½Ðµ Ð¿Ð¾ÑÑÐ°Ð¿Ð»ÑÑÑÑ Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÑ.
+    \u0410\u043d\u0443\u043b\u044e\u0454 \u0432\u0436\u0435 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0439 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0431\u0435\u0437 \u0444\u0456\u0437\u0438\u0447\u043d\u043e\u0433\u043e \u0432\u0438\u0434\u0430\u043b\u0435\u043d\u043d\u044f.
+    \u0421\u0442\u0430\u0440\u0456 payout-\u0438 \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f \u0432 \u0411\u0414 \u044f\u043a \u0456\u0441\u0442\u043e\u0440\u0438\u0447\u043d\u0438\u0439 \u0441\u043b\u0456\u0434,
+    \u0430\u043b\u0435 \u0447\u0435\u0440\u0435\u0437 status='annulled' \u0431\u0456\u043b\u044c\u0448\u0435 \u043d\u0435 \u043f\u043e\u0442\u0440\u0430\u043f\u043b\u044f\u044e\u0442\u044c \u0443 \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0443.
     """
     cur = self.conn.execute("""
     UPDATE contracts
@@ -1282,25 +1282,25 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
   if row["status"] == "paid":
     color = discord.Color.green()
     if (row["payment_mode"] or PAYMENT_MODE_NORMAL) == PAYMENT_MODE_LEGACY_FAMILY:
-      status_text = "ð  **ÐÐ° ÑÐ°Ð¼Ñ**"
+      status_text = "\U0001f3e0 **\u041d\u0430 \u0444\u0430\u043c\u0443**"
     else:
-      status_text = "ð¢ **ÐÐ¿Ð»Ð°ÑÐµÐ½Ð¾**"
+      status_text = "\U0001f7e2 **\u041e\u043f\u043b\u0430\u0447\u0435\u043d\u043e**"
   elif row["status"] == "annulled":
     color = discord.Color.dark_red()
-    status_text = "ð« **ÐÐ½ÑÐ»ÑÐ¾Ð²Ð°Ð½Ð¾**"
+    status_text = "\U0001f6ab **\u0410\u043d\u0443\u043b\u044c\u043e\u0432\u0430\u043d\u043e**"
   elif row["status"] == "cancelled":
     color = discord.Color.dark_grey()
-    status_text = "â« **Ð¡ÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¾**"
+    status_text = "\u26ab **\u0421\u043a\u0430\u0441\u043e\u0432\u0430\u043d\u043e**"
   else:
     color = discord.Color.orange()
-    status_text = "ð´ **ÐÐµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¾**"
+    status_text = "\U0001f534 **\u041d\u0435 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u043e**"
 
   if row["status"] == "annulled":
-    title = "ð« ÐÐÐÐ¢Ð ÐÐÐ¢ ÐÐÐ£ÐÐ¬ÐÐÐÐÐ"
+    title = "\U0001f6ab \u041a\u041e\u041d\u0422\u0420\u0410\u041a\u0422 \u0410\u041d\u0423\u041b\u042c\u041e\u0412\u0410\u041d\u041e"
   elif row["status"] == "cancelled":
-    title = "â ÐÐÐÐ¢Ð ÐÐÐ¢ Ð¡ÐÐÐ¡ÐÐÐÐÐ"
+    title = "\u274c \u041a\u041e\u041d\u0422\u0420\u0410\u041a\u0422 \u0421\u041a\u0410\u0421\u041e\u0412\u0410\u041d\u041e"
   else:
-    title = "â ÐÐÐÐ¢Ð ÐÐÐ¢ ÐÐÐÐÐÐÐÐ"
+    title = "\u2705 \u041a\u041e\u041d\u0422\u0420\u0410\u041a\u0422 \u0412\u0418\u041a\u041e\u041d\u0410\u041d\u041e"
 
   embed = discord.Embed(
     title=title,
@@ -1308,31 +1308,31 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
   )
 
   embed.add_field(
-    name="ð¥ ÐÐ¸ÐºÐ¾Ð½ÑÐ²Ð°Ð»Ð¸",
-    value=" ".join(f"<@{uid}>" for uid in participants) or "â",
+    name="\U0001f465 \u0412\u0438\u043a\u043e\u043d\u0443\u0432\u0430\u043b\u0438",
+    value=" ".join(f"<@{uid}>" for uid in participants) or "\u2014",
     inline=False,
   )
-  embed.add_field(name="ð ÐÐ¾Ð½ÑÑÐ°ÐºÑ", value=row["contract_name"], inline=True)
-  embed.add_field(name="ð° Ð¡ÑÐ¼Ð°", value=f"{format_money_dollars(row['price'])} $", inline=True)
-  embed.add_field(name="â³ ÐÐ", value=row["cooldown"], inline=True)
-  embed.add_field(name="ð³ Ð¡ÑÐ°ÑÑÑ", value=status_text, inline=False)
+  embed.add_field(name="\U0001f4cb \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442", value=row["contract_name"], inline=True)
+  embed.add_field(name="\U0001f4b0 \u0421\u0443\u043c\u0430", value=f"{format_money_dollars(row['price'])} $", inline=True)
+  embed.add_field(name="\u23f3 \u041a\u0414", value=row["cooldown"], inline=True)
+  embed.add_field(name="\U0001f4b3 \u0421\u0442\u0430\u0442\u0443\u0441", value=status_text, inline=False)
 
   if row["status"] == "paid":
     paid_ts = iso_to_unix(row["paid_at"])
     if paid_ts:
-      embed.add_field(name="â ÐÐ¿Ð»Ð°ÑÐµÐ½Ð¾", value=f"<t:{paid_ts}:f>", inline=True)
+      embed.add_field(name="\u2705 \u041e\u043f\u043b\u0430\u0447\u0435\u043d\u043e", value=f"<t:{paid_ts}:f>", inline=True)
 
     fomo_cents = row["fomo_cents"] or 0
     net_cents = row["net_cents"] or 0
     payment_mode = row["payment_mode"] or PAYMENT_MODE_NORMAL
 
     embed.add_field(
-      name="ð¦ ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ",
+      name="\U0001f3e6 \u0411\u0430\u043d\u043a \u0441\u0456\u043c'\u0457",
       value=format_cents(fomo_cents),
       inline=True,
     )
     embed.add_field(
-      name="ð¸ Ð£ÑÐ°ÑÐ½Ð¸ÐºÐ°Ð¼",
+      name="\U0001f4b8 \u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c",
       value=format_cents(net_cents),
       inline=True,
     )
@@ -1340,7 +1340,7 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
     excluded_payment_ids = parse_ids(row["excluded_payment_ids"] or "[]")
     if excluded_payment_ids and payment_mode != PAYMENT_MODE_LEGACY_FAMILY:
       embed.add_field(
-        name="ð« ÐÐµÐ· Ð²Ð¸Ð¿Ð»Ð°ÑÐ¸",
+        name="\U0001f6ab \u0411\u0435\u0437 \u0432\u0438\u043f\u043b\u0430\u0442\u0438",
         value=" ".join(f"<@{uid}>" for uid in excluded_payment_ids),
         inline=False,
       )
@@ -1351,7 +1351,7 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
       PAYMENT_MODE_LEGACY_FAMILY,
     ):
       embed.add_field(
-        name="âï¸ Ð¡Ð¿Ð¾ÑÑÐ± Ð¾Ð¿Ð»Ð°ÑÐ¸",
+        name="\u2699\ufe0f \u0421\u043f\u043e\u0441\u0456\u0431 \u043e\u043f\u043b\u0430\u0442\u0438",
         value=payment_mode_label(payment_mode),
         inline=False,
       )
@@ -1360,23 +1360,23 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
     debts = db.admin_debts_for_contract(row["id"])
 
     payout_lines = [
-      f"<@{p['user_id']}> â **{format_cents(p['amount_cents'])}**"
+      f"<@{p['user_id']}> \u2014 **{format_cents(p['amount_cents'])}**"
       for p in payouts
     ]
 
     for debt in debts:
       if debt["status"] == "paid":
         payout_lines.append(
-          f"â <@{debt['user_id']}> â **{format_cents(debt['amount_cents'])}** â¢ Ð²Ð¸Ð¿Ð»Ð°ÑÐµÐ½Ð¾ Ð»ÑÐ´ÐµÑÐ¾Ð¼"
+          f"\u2705 <@{debt['user_id']}> \u2014 **{format_cents(debt['amount_cents'])}** \u2022 \u0432\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u043e \u043b\u0456\u0434\u0435\u0440\u043e\u043c"
         )
       else:
         payout_lines.append(
-          f"â³ <@{debt['user_id']}> â **{format_cents(debt['amount_cents'])}** â¢ Ð²ÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð° Ð¾Ð¿Ð»Ð°ÑÐ°"
+          f"\u23f3 <@{debt['user_id']}> \u2014 **{format_cents(debt['amount_cents'])}** \u2022 \u0432\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0430 \u043e\u043f\u043b\u0430\u0442\u0430"
         )
 
     if payout_lines:
       embed.add_field(
-        name="ð¤ Ð Ð¾Ð·Ð¿Ð¾Ð´ÑÐ» Ð²Ð¸Ð¿Ð»Ð°ÑÐ¸",
+        name="\U0001f464 \u0420\u043e\u0437\u043f\u043e\u0434\u0456\u043b \u0432\u0438\u043f\u043b\u0430\u0442\u0438",
         value="\n".join(payout_lines),
         inline=False,
       )
@@ -1388,32 +1388,32 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
 
     details = []
     if annulled_by:
-      details.append(f"ÐÐ½ÑÐ»ÑÐ²Ð°Ð²/Ð»Ð°: <@{annulled_by}>")
+      details.append(f"\u0410\u043d\u0443\u043b\u044e\u0432\u0430\u0432/\u043b\u0430: <@{annulled_by}>")
     if annulled_ts:
       details.append(f"<t:{annulled_ts}:f>")
 
     if paid_ts:
       embed.add_field(
-        name="ÐÑÐ»Ð¾ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¾",
+        name="\u0411\u0443\u043b\u043e \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u043e",
         value=f"<t:{paid_ts}:f>",
         inline=True,
       )
 
     embed.add_field(
-      name="ÐÑÐ»Ð¾ Ð² ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ",
+      name="\u0411\u0443\u043b\u043e \u0432 \u0411\u0430\u043d\u043a \u0441\u0456\u043c'\u0457",
       value=format_cents(row["fomo_cents"] or 0),
       inline=True,
     )
     embed.add_field(
-      name="ÐÑÐ»Ð¾ ÑÑÐ°ÑÐ½Ð¸ÐºÐ°Ð¼",
+      name="\u0411\u0443\u043b\u043e \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c",
       value=format_cents(row["net_cents"] or 0),
       inline=True,
     )
 
     if details:
       embed.add_field(
-        name="ÐÐ½ÑÐ»ÑÐ²Ð°Ð½Ð½Ñ",
-        value=" â¢ ".join(details),
+        name="\u0410\u043d\u0443\u043b\u044e\u0432\u0430\u043d\u043d\u044f",
+        value=" \u2022 ".join(details),
         inline=False,
       )
 
@@ -1422,14 +1422,14 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
     cancelled_by = row["cancelled_by"]
     details = []
     if cancelled_by:
-      details.append(f"Ð¡ÐºÐ°ÑÑÐ²Ð°Ð²: <@{cancelled_by}>")
+      details.append(f"\u0421\u043a\u0430\u0441\u0443\u0432\u0430\u0432: <@{cancelled_by}>")
     if cancelled_ts:
       details.append(f"<t:{cancelled_ts}:f>")
     if details:
-      embed.add_field(name="Ð¡ÐºÐ°ÑÑÐ²Ð°Ð½Ð½Ñ", value=" â¢ ".join(details), inline=False)
+      embed.add_field(name="\u0421\u043a\u0430\u0441\u0443\u0432\u0430\u043d\u043d\u044f", value=" \u2022 ".join(details), inline=False)
 
-  embed.set_footer(text=f"ÐÐ°Ð¿Ð¸Ñ #{row['id']}")
-  embed.set_footer(text=f"ID ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ: {row['id']}")
+  embed.set_footer(text=f"\u0417\u0430\u043f\u0438\u0441 #{row['id']}")
+  embed.set_footer(text=f"ID \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443: {row['id']}")
   return embed
 
 
@@ -1491,7 +1491,7 @@ async def audit_log(
 
 
 def mentions(user_ids: list[int]) -> str:
-  return " ".join(f"<@{uid}>" for uid in user_ids) or "â"
+  return " ".join(f"<@{uid}>" for uid in user_ids) or "\u2014"
 
 
 # ----------------------------
@@ -1501,7 +1501,7 @@ def mentions(user_ids: list[int]) -> str:
 class PerformerSelect(discord.ui.UserSelect):
   def __init__(self):
     super().__init__(
-      placeholder="ÐÐ±ÐµÑÑÑÑ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²ÑÑÐ² ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ",
+      placeholder="\u041e\u0431\u0435\u0440\u0456\u0442\u044c \u0432\u0438\u043a\u043e\u043d\u0430\u0432\u0446\u0456\u0432 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443",
       min_values=1,
       max_values=25,
     )
@@ -1512,7 +1512,7 @@ class PerformerSelect(discord.ui.UserSelect):
 
     if not ids:
       await interaction.response.send_message(
-        "â ÐÐ±ÐµÑÑÑÑ ÑÐ¾ÑÐ° Ð± Ð¾Ð´Ð½Ð¾Ð³Ð¾ Ð·Ð²Ð¸ÑÐ°Ð¹Ð½Ð¾Ð³Ð¾ ÑÑÐ°ÑÐ½Ð¸ÐºÐ°.",
+        "\u274c \u041e\u0431\u0435\u0440\u0456\u0442\u044c \u0445\u043e\u0447\u0430 \u0431 \u043e\u0434\u043d\u043e\u0433\u043e \u0437\u0432\u0438\u0447\u0430\u0439\u043d\u043e\u0433\u043e \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430.",
         ephemeral=True,
       )
       return
@@ -1534,13 +1534,13 @@ class PerformerStepView(discord.ui.View):
       self.remove_item(self.myself)
 
   @discord.ui.button(
-    label="Ð¯ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²/Ð»Ð° ÑÐ°Ð¼/Ð°",
+    label="\u042f \u0432\u0438\u043a\u043e\u043d\u0430\u0432/\u043b\u0430 \u0441\u0430\u043c/\u0430",
     style=discord.ButtonStyle.primary,
-    emoji="ð¤",
+    emoji="\U0001f464",
   )
   async def myself(self, interaction: discord.Interaction, button: discord.ui.Button):
     if getattr(interaction.user, "bot", False):
-      await interaction.response.send_message("â ÐÐ¾Ñ Ð½Ðµ Ð¼Ð¾Ð¶Ðµ Ð±ÑÑÐ¸ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²ÑÐµÐ¼.", ephemeral=True)
+      await interaction.response.send_message("\u274c \u0411\u043e\u0442 \u043d\u0435 \u043c\u043e\u0436\u0435 \u0431\u0443\u0442\u0438 \u0432\u0438\u043a\u043e\u043d\u0430\u0432\u0446\u0435\u043c.", ephemeral=True)
       return
 
     participant_ids = [interaction.user.id]
@@ -1588,14 +1588,14 @@ def picker_content(
   mentions = " ".join(f"<@{uid}>" for uid in participant_ids)
 
   if query:
-    title = f"ð ÐÐ¾ÑÑÐº: **{query}**"
+    title = f"\U0001f50e \u041f\u043e\u0448\u0443\u043a: **{query}**"
   else:
-    title = "ð ÐÐ¾Ð½ÑÑÐ°ÐºÑÐ¸"
+    title = "\U0001f4cb \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438"
 
   return (
-    f"ð¥ ÐÐ¸ÐºÐ¾Ð½Ð°Ð²ÑÑ: {mentions}\n\n"
-    f"{title} â¢ ÑÑÐ¾ÑÑÐ½ÐºÐ° **{page + 1}/{total_pages}**\n"
-    "ÐÐ±ÐµÑÑÑÑ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ Ð·Ñ ÑÐ¿Ð¸ÑÐºÑ."
+    f"\U0001f465 \u0412\u0438\u043a\u043e\u043d\u0430\u0432\u0446\u0456: {mentions}\n\n"
+    f"{title} \u2022 \u0441\u0442\u043e\u0440\u0456\u043d\u043a\u0430 **{page + 1}/{total_pages}**\n"
+    "\u041e\u0431\u0435\u0440\u0456\u0442\u044c \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0437\u0456 \u0441\u043f\u0438\u0441\u043a\u0443."
   )
 
 
@@ -1623,7 +1623,7 @@ class ContractPageSelect(discord.ui.Select):
         label=row["name"][:100],
         value=str(row["id"]),
         description=(
-          f"{format_money_dollars(row['price'])} $ â¢ ÐÐ {row['cooldown']}"
+          f"{format_money_dollars(row['price'])} $ \u2022 \u041a\u0414 {row['cooldown']}"
         )[:100],
       )
       for row in rows
@@ -1632,16 +1632,16 @@ class ContractPageSelect(discord.ui.Select):
     if not options:
       options = [
         discord.SelectOption(
-          label="ÐÑÑÐ¾Ð³Ð¾ Ð½Ðµ Ð·Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾",
+          label="\u041d\u0456\u0447\u043e\u0433\u043e \u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u043e",
           value="none",
-          description="ÐÐ¼ÑÐ½ÑÑÑ Ð¿Ð¾ÑÑÐº Ð°Ð±Ð¾ Ð¿Ð¾ÐºÐ°Ð¶ÑÑÑ ÑÑÑ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ¸",
+          description="\u0417\u043c\u0456\u043d\u0456\u0442\u044c \u043f\u043e\u0448\u0443\u043a \u0430\u0431\u043e \u043f\u043e\u043a\u0430\u0436\u0456\u0442\u044c \u0443\u0441\u0456 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438",
         )
       ]
 
     placeholder = (
-      f"Ð ÐµÐ·ÑÐ»ÑÑÐ°ÑÐ¸: {query} â¢ {page + 1}/{total_pages}"
+      f"\u0420\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442\u0438: {query} \u2022 {page + 1}/{total_pages}"
       if query
-      else f"ÐÐ¾Ð½ÑÑÐ°ÐºÑÐ¸ â¢ {page + 1}/{total_pages}"
+      else f"\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438 \u2022 {page + 1}/{total_pages}"
     )
 
     super().__init__(
@@ -1659,13 +1659,13 @@ class ContractPageSelect(discord.ui.Select):
 
     if not row or not row["active"]:
       await interaction.response.send_message(
-        "â Ð¦ÐµÐ¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ ÑÐ¶Ðµ Ð½ÐµÐ´Ð¾ÑÑÑÐ¿Ð½Ð¸Ð¹.",
+        "\u274c \u0426\u0435\u0439 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0443\u0436\u0435 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0438\u0439.",
         ephemeral=True,
       )
       return
 
     await interaction.response.edit_message(
-      content="ÐÐµÑÐµÐ²ÑÑÑÐµ Ð´Ð°Ð½Ñ Ð¹ Ð¿ÑÐ´ÑÐ²ÐµÑÐ´ÑÑÐµ.",
+      content="\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u0434\u0430\u043d\u0456 \u0439 \u043f\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u044c\u0442\u0435.",
       embed=build_confirmation_embed(row, self.participant_ids),
       view=ConfirmContractView(
         self.bot_instance,
@@ -1677,7 +1677,7 @@ class ContractPageSelect(discord.ui.Select):
     )
 
 
-class ContractSearchModal(discord.ui.Modal, title="ÐÐ¾ÑÑÐº ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ"):
+class ContractSearchModal(discord.ui.Modal, title="\u041f\u043e\u0448\u0443\u043a \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443"):
   def __init__(
     self,
     bot_instance: "ContractBot",
@@ -1689,8 +1689,8 @@ class ContractSearchModal(discord.ui.Modal, title="ÐÐ¾ÑÑÐº ÐºÐ¾
     self.participant_ids = participant_ids
 
     self.search_input = discord.ui.TextInput(
-      label="ÐÐ°Ð·Ð²Ð° ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ",
-      placeholder="ÐÐ°Ð¿ÑÐ¸ÐºÐ»Ð°Ð´: Ð±Ð°Ð»Ð¾Ð½Ð¸, Ð´ÑÐ¾Ð²Ð°, Ð¿ÐµÑÐµÑÐ¾Ð±ÐºÐ°...",
+      label="\u041d\u0430\u0437\u0432\u0430 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443",
+      placeholder="\u041d\u0430\u043f\u0440\u0438\u043a\u043b\u0430\u0434: \u0431\u0430\u043b\u043e\u043d\u0438, \u0434\u0440\u043e\u0432\u0430, \u043f\u0435\u0440\u0435\u0440\u043e\u0431\u043a\u0430...",
       default=current_query or None,
       required=True,
       max_length=80,
@@ -1712,8 +1712,8 @@ class ContractSearchModal(discord.ui.Modal, title="ÐÐ¾ÑÑÐº ÐºÐ¾
       query,
     )
 
-    # Modal Ð±ÑÐ² Ð²ÑÐ´ÐºÑÐ¸ÑÐ¸Ð¹ ÐºÐ½Ð¾Ð¿ÐºÐ¾Ñ Ð· ÑÑÐ¾Ð³Ð¾ Ð¶ ephemeral-Ð¿Ð¾Ð²ÑÐ´Ð¾Ð¼Ð»ÐµÐ½Ð½Ñ,
-    # ÑÐ¾Ð¼Ñ ÑÐµÐ´Ð°Ð³ÑÑÐ¼Ð¾ Ð¹Ð¾Ð³Ð¾, Ð° Ð½Ðµ ÑÑÐ²Ð¾ÑÑÑÐ¼Ð¾ ÑÐµ Ð¾Ð´Ð½Ðµ.
+    # Modal \u0431\u0443\u0432 \u0432\u0456\u0434\u043a\u0440\u0438\u0442\u0438\u0439 \u043a\u043d\u043e\u043f\u043a\u043e\u044e \u0437 \u0446\u044c\u043e\u0433\u043e \u0436 ephemeral-\u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f,
+    # \u0442\u043e\u043c\u0443 \u0440\u0435\u0434\u0430\u0433\u0443\u0454\u043c\u043e \u0439\u043e\u0433\u043e, \u0430 \u043d\u0435 \u0441\u0442\u0432\u043e\u0440\u044e\u0454\u043c\u043e \u0449\u0435 \u043e\u0434\u043d\u0435.
     try:
       await interaction.response.edit_message(
         content=content,
@@ -1771,9 +1771,9 @@ class ContractPickerView(discord.ui.View):
     self.clear_search.disabled = not bool(query)
 
   @discord.ui.button(
-    label="ÐÐ°Ð·Ð°Ð´",
+    label="\u041d\u0430\u0437\u0430\u0434",
     style=discord.ButtonStyle.secondary,
-    emoji="âï¸",
+    emoji="\u25c0\ufe0f",
     row=1,
   )
   async def previous(
@@ -1817,9 +1817,9 @@ class ContractPickerView(discord.ui.View):
     pass
 
   @discord.ui.button(
-    label="ÐÐ°Ð»Ñ",
+    label="\u0414\u0430\u043b\u0456",
     style=discord.ButtonStyle.secondary,
-    emoji="â¶ï¸",
+    emoji="\u25b6\ufe0f",
     row=1,
   )
   async def next_page(
@@ -1850,9 +1850,9 @@ class ContractPickerView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="ÐÐ¾ÑÑÐº",
+    label="\u041f\u043e\u0448\u0443\u043a",
     style=discord.ButtonStyle.primary,
-    emoji="ð",
+    emoji="\U0001f50e",
     row=2,
   )
   async def search(
@@ -1869,9 +1869,9 @@ class ContractPickerView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="ÐÐ¾ÐºÐ°Ð·Ð°ÑÐ¸ Ð²ÑÑ",
+    label="\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u0438 \u0432\u0441\u0456",
     style=discord.ButtonStyle.secondary,
-    emoji="ð",
+    emoji="\U0001f4cb",
     row=2,
   )
   async def clear_search(
@@ -1899,21 +1899,21 @@ class ContractPickerView(discord.ui.View):
 
 def build_confirmation_embed(contract_type: sqlite3.Row, participant_ids: list[int]) -> discord.Embed:
   embed = discord.Embed(
-    title="ÐÑÐ´ÑÐ²ÐµÑÐ´Ð¸ÑÐ¸ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð½Ð½Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ",
+    title="\u041f\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u0438 \u0432\u0438\u043a\u043e\u043d\u0430\u043d\u043d\u044f \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443",
     color=discord.Color.blurple(),
   )
   embed.add_field(
-    name="ð¥ ÐÐ¸ÐºÐ¾Ð½Ð°Ð²ÑÑ",
+    name="\U0001f465 \u0412\u0438\u043a\u043e\u043d\u0430\u0432\u0446\u0456",
     value=" ".join(f"<@{uid}>" for uid in participant_ids),
     inline=False,
   )
-  embed.add_field(name="ð ÐÐ¾Ð½ÑÑÐ°ÐºÑ", value=contract_type["name"], inline=True)
+  embed.add_field(name="\U0001f4cb \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442", value=contract_type["name"], inline=True)
   embed.add_field(
-    name="ð° Ð¡ÑÐ¼Ð°",
+    name="\U0001f4b0 \u0421\u0443\u043c\u0430",
     value=f"{format_money_dollars(contract_type['price'])} $",
     inline=True,
   )
-  embed.add_field(name="â³ ÐÐ", value=contract_type["cooldown"], inline=True)
+  embed.add_field(name="\u23f3 \u041a\u0414", value=contract_type["cooldown"], inline=True)
   return embed
 
 
@@ -1933,17 +1933,17 @@ class ConfirmContractView(discord.ui.View):
     self.return_page = return_page
     self.return_query = return_query
 
-  @discord.ui.button(label="ÐÑÐ´ÑÐ²ÐµÑÐ´Ð¸ÑÐ¸", style=discord.ButtonStyle.success, emoji="â")
+  @discord.ui.button(label="\u041f\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u0438", style=discord.ButtonStyle.success, emoji="\u2705")
   async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
     guild = interaction.guild
     if guild is None:
-      await interaction.response.send_message("â Ð¦Ðµ Ð¿ÑÐ°ÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð½Ð° ÑÐµÑÐ²ÐµÑÑ.", ephemeral=True)
+      await interaction.response.send_message("\u274c \u0426\u0435 \u043f\u0440\u0430\u0446\u044e\u0454 \u0442\u0456\u043b\u044c\u043a\u0438 \u043d\u0430 \u0441\u0435\u0440\u0432\u0435\u0440\u0456.", ephemeral=True)
       return
 
     contract_type = db.get_contract_type(self.type_id)
     if not contract_type or not contract_type["active"]:
       await interaction.response.send_message(
-        "â ÐÐ¾Ð½ÑÑÐ°ÐºÑ ÑÐ¶Ðµ Ð²Ð¸Ð´Ð°Ð»ÐµÐ½Ð¸Ð¹ ÑÐ· Ð¿ÐµÑÐµÐ»ÑÐºÑ.",
+        "\u274c \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0443\u0436\u0435 \u0432\u0438\u0434\u0430\u043b\u0435\u043d\u0438\u0439 \u0456\u0437 \u043f\u0435\u0440\u0435\u043b\u0456\u043a\u0443.",
         ephemeral=True,
       )
       return
@@ -1951,19 +1951,19 @@ class ConfirmContractView(discord.ui.View):
     channel = await get_target_channel(guild, interaction.channel_id)
     if not isinstance(channel, (discord.TextChannel, discord.Thread)):
       await interaction.response.send_message(
-        "â ÐÐµ Ð·Ð½Ð°Ð¹ÑÐ¾Ð² ÐºÐ°Ð½Ð°Ð» ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ².",
+        "\u274c \u041d\u0435 \u0437\u043d\u0430\u0439\u0448\u043e\u0432 \u043a\u0430\u043d\u0430\u043b \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432.",
         ephemeral=True,
       )
       return
 
-    # ÐÐ´ÑÐ°Ð·Ñ Ð¿ÑÐ¸Ð±Ð¸ÑÐ°ÑÐ¼Ð¾ ÐºÐ½Ð¾Ð¿ÐºÐ¸, ÑÐ¾Ð± Ð¿Ð¾Ð´Ð²ÑÐ¹Ð½Ð¸Ð¹ ÐºÐ»ÑÐº Ð½Ðµ ÑÑÐ²Ð¾ÑÐ¸Ð² Ð´ÑÐ±Ð»Ñ.
+    # \u041e\u0434\u0440\u0430\u0437\u0443 \u043f\u0440\u0438\u0431\u0438\u0440\u0430\u0454\u043c\u043e \u043a\u043d\u043e\u043f\u043a\u0438, \u0449\u043e\u0431 \u043f\u043e\u0434\u0432\u0456\u0439\u043d\u0438\u0439 \u043a\u043b\u0456\u043a \u043d\u0435 \u0441\u0442\u0432\u043e\u0440\u0438\u0432 \u0434\u0443\u0431\u043b\u044c.
     await interaction.response.edit_message(
-      content="â³ ÐÐ°Ð¿Ð¸ÑÑÑ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ...",
+      content="\u23f3 \u0417\u0430\u043f\u0438\u0441\u0443\u044e \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442...",
       embed=None,
       view=None,
     )
 
-    placeholder = await channel.send("â³ ÐÐ°Ð¿Ð¸ÑÑÑ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ...")
+    placeholder = await channel.send("\u23f3 \u0417\u0430\u043f\u0438\u0441\u0443\u044e \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442...")
 
     db.add_completed_contract(
       message_id=placeholder.id,
@@ -1983,28 +1983,28 @@ class ConfirmContractView(discord.ui.View):
 
     await audit_log(
       guild,
-      "â ÐÐ¾Ð½ÑÑÐ°ÐºÑ Ð·Ð°Ð¿Ð¸ÑÐ°Ð½Ð¾",
+      "\u2705 \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0437\u0430\u043f\u0438\u0441\u0430\u043d\u043e",
       (
-        f"ÐÐ°Ð¿Ð¸Ñ: **#{row['id']}**\n"
-        f"ÐÐ¾Ð½ÑÑÐ°ÐºÑ: **{row['contract_name']}**\n"
-        f"Ð¡ÑÐ¼Ð°: **{format_money_dollars(row['price'])} $**\n"
-        f"ÐÐ¸ÐºÐ¾Ð½Ð°Ð²ÑÑ: {mentions(self.participant_ids)}\n"
-        f"ÐÐ°Ð¿Ð¸ÑÐ°Ð²/Ð»Ð°: <@{interaction.user.id}>"
+        f"\u0417\u0430\u043f\u0438\u0441: **#{row['id']}**\n"
+        f"\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442: **{row['contract_name']}**\n"
+        f"\u0421\u0443\u043c\u0430: **{format_money_dollars(row['price'])} $**\n"
+        f"\u0412\u0438\u043a\u043e\u043d\u0430\u0432\u0446\u0456: {mentions(self.participant_ids)}\n"
+        f"\u0417\u0430\u043f\u0438\u0441\u0430\u0432/\u043b\u0430: <@{interaction.user.id}>"
       ),
       discord.Color.green(),
     )
 
-    # ÐÐ°Ð½ÐµÐ»Ñ Ð·Ð°Ð²Ð¶Ð´Ð¸ Ð¿ÐµÑÐµÐ½Ð¾ÑÐ¸Ð¼Ð¾ Ð² ÑÐ°Ð¼Ð¸Ð¹ Ð½Ð¸Ð· ÐºÐ°Ð½Ð°Ð»Ñ.
+    # \u041f\u0430\u043d\u0435\u043b\u044c \u0437\u0430\u0432\u0436\u0434\u0438 \u043f\u0435\u0440\u0435\u043d\u043e\u0441\u0438\u043c\u043e \u0432 \u0441\u0430\u043c\u0438\u0439 \u043d\u0438\u0437 \u043a\u0430\u043d\u0430\u043b\u0443.
     if isinstance(channel, discord.TextChannel):
       await move_main_panel_to_bottom(guild, channel)
 
     await interaction.edit_original_response(
-      content=f"â ÐÐ¾Ð½ÑÑÐ°ÐºÑ Ð·Ð°Ð¿Ð¸ÑÐ°Ð½Ð¾: {placeholder.jump_url}",
+      content=f"\u2705 \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0437\u0430\u043f\u0438\u0441\u0430\u043d\u043e: {placeholder.jump_url}",
       embed=None,
       view=None,
     )
 
-  @discord.ui.button(label="ÐÐ°Ð·Ð°Ð´", style=discord.ButtonStyle.secondary, emoji="â©ï¸")
+  @discord.ui.button(label="\u041d\u0430\u0437\u0430\u0434", style=discord.ButtonStyle.secondary, emoji="\u21a9\ufe0f")
   async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
     _, page, total_pages = picker_page_data(
       self.return_page,
@@ -2037,23 +2037,23 @@ class CancelCompletedConfirmView(discord.ui.View):
     self.bot_instance = bot_instance
     self.message_id = message_id
 
-  @discord.ui.button(label="Ð¢Ð°Ðº, ÑÐºÐ°ÑÑÐ²Ð°ÑÐ¸", style=discord.ButtonStyle.danger, emoji="ðï¸")
+  @discord.ui.button(label="\u0422\u0430\u043a, \u0441\u043a\u0430\u0441\u0443\u0432\u0430\u0442\u0438", style=discord.ButtonStyle.danger, emoji="\U0001f5d1\ufe0f")
   async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.edit_message(content="â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", view=None)
+      await interaction.response.edit_message(content="\u274c \u041d\u0435\u043c\u0430\u0454 \u043f\u0440\u0430\u0432\u0430.", view=None)
       return
 
     row_before = db.get_completed_by_message(self.message_id)
 
     await interaction.response.edit_message(
-      content="â³ Ð¡ÐºÐ°ÑÐ¾Ð²ÑÑ Ð·Ð°Ð¿Ð¸Ñ...",
+      content="\u23f3 \u0421\u043a\u0430\u0441\u043e\u0432\u0443\u044e \u0437\u0430\u043f\u0438\u0441...",
       view=None,
     )
 
     ok = db.cancel_completed(self.message_id, interaction.user.id)
     if not ok:
       await interaction.edit_original_response(
-        content="â Ð¡ÐºÐ°ÑÑÐ²Ð°ÑÐ¸ Ð¼Ð¾Ð¶Ð½Ð° ÑÑÐ»ÑÐºÐ¸ Ð½ÐµÐ¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ.",
+        content="\u274c \u0421\u043a\u0430\u0441\u0443\u0432\u0430\u0442\u0438 \u043c\u043e\u0436\u043d\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u043d\u0435\u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0439 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442.",
         view=None,
       )
       return
@@ -2063,23 +2063,23 @@ class CancelCompletedConfirmView(discord.ui.View):
     if row_before:
       await audit_log(
         interaction.guild,
-        "ðï¸ ÐÐ¾Ð½ÑÑÐ°ÐºÑ ÑÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¾",
+        "\U0001f5d1\ufe0f \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0441\u043a\u0430\u0441\u043e\u0432\u0430\u043d\u043e",
         (
-          f"ÐÐ°Ð¿Ð¸Ñ: **#{row_before['id']}**\n"
-          f"ÐÐ¾Ð½ÑÑÐ°ÐºÑ: **{row_before['contract_name']}**\n"
-          f"Ð¡ÐºÐ°ÑÑÐ²Ð°Ð²/Ð»Ð°: <@{interaction.user.id}>"
+          f"\u0417\u0430\u043f\u0438\u0441: **#{row_before['id']}**\n"
+          f"\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442: **{row_before['contract_name']}**\n"
+          f"\u0421\u043a\u0430\u0441\u0443\u0432\u0430\u0432/\u043b\u0430: <@{interaction.user.id}>"
         ),
         discord.Color.red(),
       )
 
     await interaction.edit_original_response(
-      content="â ÐÐ°Ð¿Ð¸Ñ ÑÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¾. ÐÑÐ½ Ð±ÑÐ»ÑÑÐµ Ð½Ðµ ÑÐ°ÑÑÑÑÑÑÑ Ð² ÑÑÐ°ÑÐ¸ÑÑÐ¸ÑÑ.",
+      content="\u2705 \u0417\u0430\u043f\u0438\u0441 \u0441\u043a\u0430\u0441\u043e\u0432\u0430\u043d\u043e. \u0412\u0456\u043d \u0431\u0456\u043b\u044c\u0448\u0435 \u043d\u0435 \u0440\u0430\u0445\u0443\u0454\u0442\u044c\u0441\u044f \u0432 \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u0446\u0456.",
       view=None,
     )
 
-  @discord.ui.button(label="ÐÑ", style=discord.ButtonStyle.secondary)
+  @discord.ui.button(label="\u041d\u0456", style=discord.ButtonStyle.secondary)
   async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
-    await interaction.response.edit_message(content="Ð¡ÐºÐ°ÑÑÐ²Ð°Ð½Ð½Ñ Ð²ÑÐ´Ð¼ÑÐ½ÐµÐ½Ð¾.", view=None)
+    await interaction.response.edit_message(content="\u0421\u043a\u0430\u0441\u0443\u0432\u0430\u043d\u043d\u044f \u0432\u0456\u0434\u043c\u0456\u043d\u0435\u043d\u043e.", view=None)
 
 
 async def payment_preview_with_debts(
@@ -2138,27 +2138,27 @@ class PaymentConfirmView(discord.ui.View):
     self.deferred_ids = deferred_ids or []
 
   @discord.ui.button(
-    label="ÐÑÐ´ÑÐ²ÐµÑÐ´Ð¸ÑÐ¸",
+    label="\u041f\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u0438",
     style=discord.ButtonStyle.success,
-    emoji="â",
+    emoji="\u2705",
   )
   async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.edit_message(content="â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", view=None)
+      await interaction.response.edit_message(content="\u274c \u041d\u0435\u043c\u0430\u0454 \u043f\u0440\u0430\u0432\u0430.", view=None)
       return
 
     row_before = db.get_completed_by_message(self.message_id)
     if not row_before or row_before["status"] != "unpaid":
       await interaction.response.edit_message(
-        content="â ÐÐ¾Ð½ÑÑÐ°ÐºÑ ÑÐ¶Ðµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ Ð°Ð±Ð¾ ÑÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¸Ð¹.",
+        content="\u274c \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0443\u0436\u0435 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0439 \u0430\u0431\u043e \u0441\u043a\u0430\u0441\u043e\u0432\u0430\u043d\u0438\u0439.",
         embed=None,
         view=None,
       )
       return
 
-    # ÐÐ»Ð¾ÐºÑÑÐ¼Ð¾ Ð¿Ð¾Ð²ÑÐ¾ÑÐ½Ðµ Ð½Ð°ÑÐ¸ÑÐºÐ°Ð½Ð½Ñ Ð¾Ð´ÑÐ°Ð·Ñ.
+    # \u0411\u043b\u043e\u043a\u0443\u0454\u043c\u043e \u043f\u043e\u0432\u0442\u043e\u0440\u043d\u0435 \u043d\u0430\u0442\u0438\u0441\u043a\u0430\u043d\u043d\u044f \u043e\u0434\u0440\u0430\u0437\u0443.
     await interaction.response.edit_message(
-      content="â³ ÐÑÐ¾Ð²Ð¾Ð´Ð¶Ñ Ð¾Ð¿Ð»Ð°ÑÑ...",
+      content="\u23f3 \u041f\u0440\u043e\u0432\u043e\u0434\u0436\u0443 \u043e\u043f\u043b\u0430\u0442\u0443...",
       embed=None,
       view=None,
     )
@@ -2173,7 +2173,7 @@ class PaymentConfirmView(discord.ui.View):
 
     if not result:
       await interaction.edit_original_response(
-        content="â ÐÐµ Ð²Ð´Ð°Ð»Ð¾ÑÑ Ð¿ÑÐ¾Ð²ÐµÑÑÐ¸ Ð¾Ð¿Ð»Ð°ÑÑ.",
+        content="\u274c \u041d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f \u043f\u0440\u043e\u0432\u0435\u0441\u0442\u0438 \u043e\u043f\u043b\u0430\u0442\u0443.",
         embed=None,
         view=None,
       )
@@ -2182,54 +2182,54 @@ class PaymentConfirmView(discord.ui.View):
     await refresh_completed_message(self.message_id)
 
     payout_lines = [
-      f"<@{uid}> â **{format_cents(amount)}**"
+      f"<@{uid}> \u2014 **{format_cents(amount)}**"
       for uid, amount in result["payouts"].items()
     ]
     payout_lines.extend(
-      f"â³ <@{uid}> â **{format_cents(amount)}** â¢ Ð²ÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð° Ð¾Ð¿Ð»Ð°ÑÐ°"
+      f"\u23f3 <@{uid}> \u2014 **{format_cents(amount)}** \u2022 \u0432\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0430 \u043e\u043f\u043b\u0430\u0442\u0430"
       for uid, amount in result["deferred_payouts"].items()
     )
-    payouts_text = "\n".join(payout_lines) or "â"
+    payouts_text = "\n".join(payout_lines) or "\u2014"
 
     excluded_text = (
-      "â"
+      "\u2014"
       if self.payment_mode == PAYMENT_MODE_LEGACY_FAMILY
       else mentions(result["excluded_payment_ids"])
     )
 
     await audit_log(
       interaction.guild,
-      "ðµ ÐÐ¾Ð½ÑÑÐ°ÐºÑ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¾",
+      "\U0001f4b5 \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u043e",
       (
-        f"ÐÐ°Ð¿Ð¸Ñ: **#{row_before['id']}**\n"
-        f"ÐÐ¾Ð½ÑÑÐ°ÐºÑ: **{row_before['contract_name']}**\n"
-        f"Ð¡Ð¿Ð¾ÑÑÐ±: **{payment_mode_label(self.payment_mode)}**\n"
-        f"ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ: **{format_cents(result['fomo_cents'])}**\n"
-        f"Ð£ÑÐ°ÑÐ½Ð¸ÐºÐ°Ð¼: **{format_cents(result['net_cents'])}**\n"
-        f"ÐÐµÐ· Ð²Ð¸Ð¿Ð»Ð°ÑÐ¸: {excluded_text}\n"
-        f"Ð Ð¾Ð·Ð¿Ð¾Ð´ÑÐ»:\n{payouts_text}\n"
-        f"ÐÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð¾ Ð¿ÑÑÐ»Ñ ÑÑÐ¾Ð³Ð¾ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ: **{format_cents(sum(result['deferred_payouts'].values()))}**\n"
-        f"ÐÐ¿Ð»Ð°ÑÐ¸Ð²/Ð»Ð°: <@{interaction.user.id}>"
+        f"\u0417\u0430\u043f\u0438\u0441: **#{row_before['id']}**\n"
+        f"\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442: **{row_before['contract_name']}**\n"
+        f"\u0421\u043f\u043e\u0441\u0456\u0431: **{payment_mode_label(self.payment_mode)}**\n"
+        f"\u0411\u0430\u043d\u043a \u0441\u0456\u043c'\u0457: **{format_cents(result['fomo_cents'])}**\n"
+        f"\u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c: **{format_cents(result['net_cents'])}**\n"
+        f"\u0411\u0435\u0437 \u0432\u0438\u043f\u043b\u0430\u0442\u0438: {excluded_text}\n"
+        f"\u0420\u043e\u0437\u043f\u043e\u0434\u0456\u043b:\n{payouts_text}\n"
+        f"\u0412\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u043e \u043f\u0456\u0441\u043b\u044f \u0446\u044c\u043e\u0433\u043e \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443: **{format_cents(sum(result['deferred_payouts'].values()))}**\n"
+        f"\u041e\u043f\u043b\u0430\u0442\u0438\u0432/\u043b\u0430: <@{interaction.user.id}>"
       ),
       discord.Color.green(),
     )
 
     await interaction.edit_original_response(
-      content="â ÐÐ¿Ð»Ð°ÑÑ Ð¿ÑÐ¾Ð²ÐµÐ´ÐµÐ½Ð¾.",
+      content="\u2705 \u041e\u043f\u043b\u0430\u0442\u0443 \u043f\u0440\u043e\u0432\u0435\u0434\u0435\u043d\u043e.",
       embed=None,
       view=None,
     )
 
   @discord.ui.button(
-    label="ÐÐ°Ð·Ð°Ð´",
+    label="\u041d\u0430\u0437\u0430\u0434",
     style=discord.ButtonStyle.secondary,
-    emoji="â©ï¸",
+    emoji="\u21a9\ufe0f",
   )
   async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
     row = db.get_completed_by_message(self.message_id)
     if not row or interaction.guild is None:
       await interaction.response.edit_message(
-        content="â ÐÐ¾Ð½ÑÑÐ°ÐºÑ ÑÐ¶Ðµ Ð½ÐµÐ´Ð¾ÑÑÑÐ¿Ð½Ð¸Ð¹.",
+        content="\u274c \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0443\u0436\u0435 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0438\u0439.",
         embed=None,
         view=None,
       )
@@ -2238,8 +2238,8 @@ class PaymentConfirmView(discord.ui.View):
     if self.back_to_custom:
       await interaction.response.edit_message(
         content=(
-          "âï¸ **ÐÐ°Ð»Ð°ÑÑÑÐ²Ð°ÑÐ¸ Ð¾Ð¿Ð»Ð°ÑÑ**\n"
-          "ÐÐ±ÐµÑÑÑÑ, ÐºÐ¾Ð³Ð¾ Ð½Ðµ Ð¿Ð¾ÑÑÑÐ±Ð½Ð¾ Ð¾Ð¿Ð»Ð°ÑÑÐ²Ð°ÑÐ¸, Ð° Ð¿Ð¾ÑÑÐ¼ ÑÐ¿Ð¾ÑÑÐ± ÑÐ¾Ð·Ð¿Ð¾Ð´ÑÐ»Ñ."
+          "\u2699\ufe0f **\u041d\u0430\u043b\u0430\u0448\u0442\u0443\u0432\u0430\u0442\u0438 \u043e\u043f\u043b\u0430\u0442\u0443**\n"
+          "\u041e\u0431\u0435\u0440\u0456\u0442\u044c, \u043a\u043e\u0433\u043e \u043d\u0435 \u043f\u043e\u0442\u0440\u0456\u0431\u043d\u043e \u043e\u043f\u043b\u0430\u0447\u0443\u0432\u0430\u0442\u0438, \u0430 \u043f\u043e\u0442\u0456\u043c \u0441\u043f\u043e\u0441\u0456\u0431 \u0440\u043e\u0437\u043f\u043e\u0434\u0456\u043b\u0443."
         ),
         embed=None,
         view=CustomPaymentView(
@@ -2252,7 +2252,7 @@ class PaymentConfirmView(discord.ui.View):
       )
     else:
       await interaction.response.edit_message(
-        content="ÐÐ¿Ð»Ð°ÑÑ Ð½Ðµ Ð¿ÑÐ¾Ð²ÐµÐ´ÐµÐ½Ð¾.",
+        content="\u041e\u043f\u043b\u0430\u0442\u0443 \u043d\u0435 \u043f\u0440\u043e\u0432\u0435\u0434\u0435\u043d\u043e.",
         embed=None,
         view=None,
       )
@@ -2275,13 +2275,13 @@ class CustomExcludeSelect(discord.ui.Select):
         discord.SelectOption(
           label=label[:100],
           value=str(uid),
-          description="ÐÐµ Ð²Ð¸Ð¿Ð»Ð°ÑÑÐ²Ð°ÑÐ¸ Ð³ÑÐ¾ÑÑ ÑÑÐ¾Ð¼Ñ ÑÑÐ°ÑÐ½Ð¸ÐºÑ",
+          description="\u041d\u0435 \u0432\u0438\u043f\u043b\u0430\u0447\u0443\u0432\u0430\u0442\u0438 \u0433\u0440\u043e\u0448\u0456 \u0446\u044c\u043e\u043c\u0443 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0443",
           default=uid in selected,
         )
       )
 
     super().__init__(
-      placeholder="ÐÐ¾Ð³Ð¾ Ð²Ð¸ÐºÐ»ÑÑÐ¸ÑÐ¸ Ð· Ð¾Ð¿Ð»Ð°ÑÐ¸?",
+      placeholder="\u041a\u043e\u0433\u043e \u0432\u0438\u043a\u043b\u044e\u0447\u0438\u0442\u0438 \u0437 \u043e\u043f\u043b\u0430\u0442\u0438?",
       min_values=1,
       max_values=len(options),
       options=options,
@@ -2297,9 +2297,9 @@ class CustomExcludeSelect(discord.ui.Select):
 
     await interaction.response.edit_message(
       content=(
-        "âï¸ **ÐÐ°Ð»Ð°ÑÑÑÐ²Ð°ÑÐ¸ Ð¾Ð¿Ð»Ð°ÑÑ**\n"
-        f"ð« ÐÐµÐ· Ð²Ð¸Ð¿Ð»Ð°ÑÐ¸: {mentions(view.excluded_ids)}\n\n"
-        "ÐÐ±ÐµÑÑÑÑ ÑÐ¿Ð¾ÑÑÐ±:"
+        "\u2699\ufe0f **\u041d\u0430\u043b\u0430\u0448\u0442\u0443\u0432\u0430\u0442\u0438 \u043e\u043f\u043b\u0430\u0442\u0443**\n"
+        f"\U0001f6ab \u0411\u0435\u0437 \u0432\u0438\u043f\u043b\u0430\u0442\u0438: {mentions(view.excluded_ids)}\n\n"
+        "\u041e\u0431\u0435\u0440\u0456\u0442\u044c \u0441\u043f\u043e\u0441\u0456\u0431:"
       ),
       view=view,
     )
@@ -2336,15 +2336,15 @@ class CustomPaymentView(discord.ui.View):
     self.family_share.disabled = not bool(self.excluded_ids)
 
   @discord.ui.button(
-    label="Ð Ð¾Ð·Ð´ÑÐ»Ð¸ÑÐ¸ Ð¼ÑÐ¶ ÑÐµÑÑÐ¾Ñ",
+    label="\u0420\u043e\u0437\u0434\u0456\u043b\u0438\u0442\u0438 \u043c\u0456\u0436 \u0440\u0435\u0448\u0442\u043e\u044e",
     style=discord.ButtonStyle.success,
-    emoji="ð¸",
+    emoji="\U0001f4b8",
     row=1,
   )
   async def redistribute(self, interaction: discord.Interaction, button: discord.ui.Button):
     row = db.get_completed_by_message(self.message_id)
     if not row:
-      await interaction.response.edit_message(content="â ÐÐ¾Ð½ÑÑÐ°ÐºÑ Ð½Ðµ Ð·Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾.", view=None)
+      await interaction.response.edit_message(content="\u274c \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u043e.", view=None)
       return
 
     try:
@@ -2358,7 +2358,7 @@ class CustomPaymentView(discord.ui.View):
       )
     except ValueError:
       await interaction.response.edit_message(
-        content="â ÐÐ»Ñ ÑÑÐ¾Ð³Ð¾ ÑÐ¿Ð¾ÑÐ¾Ð±Ñ Ð¼Ð°Ñ Ð·Ð°Ð»Ð¸ÑÐ¸ÑÐ¸ÑÑ ÑÐ¾ÑÐ° Ð± Ð¾Ð´Ð¸Ð½ Ð¾ÑÑÐ¸Ð¼ÑÐ²Ð°Ñ.",
+        content="\u274c \u0414\u043b\u044f \u0446\u044c\u043e\u0433\u043e \u0441\u043f\u043e\u0441\u043e\u0431\u0443 \u043c\u0430\u0454 \u0437\u0430\u043b\u0438\u0448\u0438\u0442\u0438\u0441\u044f \u0445\u043e\u0447\u0430 \u0431 \u043e\u0434\u0438\u043d \u043e\u0442\u0440\u0438\u043c\u0443\u0432\u0430\u0447.",
         view=self,
       )
       return
@@ -2370,15 +2370,15 @@ class CustomPaymentView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="Ð§Ð°ÑÑÐºÑ Ð² ÑÑÐ¼'Ñ",
+    label="\u0427\u0430\u0441\u0442\u043a\u0443 \u0432 \u0441\u0456\u043c'\u044e",
     style=discord.ButtonStyle.primary,
-    emoji="ð¦",
+    emoji="\U0001f3e6",
     row=1,
   )
   async def family_share(self, interaction: discord.Interaction, button: discord.ui.Button):
     row = db.get_completed_by_message(self.message_id)
     if not row:
-      await interaction.response.edit_message(content="â ÐÐ¾Ð½ÑÑÐ°ÐºÑ Ð½Ðµ Ð·Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾.", view=None)
+      await interaction.response.edit_message(content="\u274c \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u043e.", view=None)
       return
 
     embed, confirm_view = await payment_preview_with_debts(
@@ -2397,14 +2397,14 @@ class CustomPaymentView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="ÐÐ°Ð·Ð°Ð´",
+    label="\u041d\u0430\u0437\u0430\u0434",
     style=discord.ButtonStyle.secondary,
-    emoji="â©ï¸",
+    emoji="\u21a9\ufe0f",
     row=1,
   )
   async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
     await interaction.response.edit_message(
-      content="ÐÐ°Ð»Ð°ÑÑÑÐ²Ð°Ð½Ð½Ñ Ð¾Ð¿Ð»Ð°ÑÐ¸ Ð·Ð°ÐºÑÐ¸ÑÐ¾.",
+      content="\u041d\u0430\u043b\u0430\u0448\u0442\u0443\u0432\u0430\u043d\u043d\u044f \u043e\u043f\u043b\u0430\u0442\u0438 \u0437\u0430\u043a\u0440\u0438\u0442\u043e.",
       embed=None,
       view=None,
     )
@@ -2413,7 +2413,7 @@ class CustomPaymentView(discord.ui.View):
 class CorrectionPerformerSelect(discord.ui.UserSelect):
   def __init__(self, bot_instance: "ContractBot", message_id: int):
     super().__init__(
-      placeholder="ÐÐ±ÐµÑÑÑÑ Ð¿ÑÐ°Ð²Ð¸Ð»ÑÐ½Ð¸Ñ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²ÑÑÐ²",
+      placeholder="\u041e\u0431\u0435\u0440\u0456\u0442\u044c \u043f\u0440\u0430\u0432\u0438\u043b\u044c\u043d\u0438\u0445 \u0432\u0438\u043a\u043e\u043d\u0430\u0432\u0446\u0456\u0432",
       min_values=1,
       max_values=25,
     )
@@ -2422,7 +2422,7 @@ class CorrectionPerformerSelect(discord.ui.UserSelect):
 
   async def callback(self, interaction: discord.Interaction):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.edit_message(content="â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", view=None)
+      await interaction.response.edit_message(content="\u274c \u041d\u0435\u043c\u0430\u0454 \u043f\u0440\u0430\u0432\u0430.", view=None)
       return
 
     new_ids = [u.id for u in self.values if not getattr(u, "bot", False)]
@@ -2430,7 +2430,7 @@ class CorrectionPerformerSelect(discord.ui.UserSelect):
 
     if not row_before or not db.update_completed_participants(self.message_id, new_ids):
       await interaction.response.edit_message(
-        content="â ÐÐ¼ÑÐ½Ð¸ÑÐ¸ Ð¼Ð¾Ð¶Ð½Ð° ÑÑÐ»ÑÐºÐ¸ Ð½ÐµÐ¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ.",
+        content="\u274c \u0417\u043c\u0456\u043d\u0438\u0442\u0438 \u043c\u043e\u0436\u043d\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u043d\u0435\u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0439 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442.",
         view=None,
       )
       return
@@ -2439,18 +2439,18 @@ class CorrectionPerformerSelect(discord.ui.UserSelect):
 
     await audit_log(
       interaction.guild,
-      "âï¸ ÐÐ¼ÑÐ½ÐµÐ½Ð¾ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²ÑÑÐ²",
+      "\u270f\ufe0f \u0417\u043c\u0456\u043d\u0435\u043d\u043e \u0432\u0438\u043a\u043e\u043d\u0430\u0432\u0446\u0456\u0432",
       (
-        f"ÐÐ°Ð¿Ð¸Ñ: **#{row_before['id']}**\n"
-        f"ÐÑÐ»Ð¾: {mentions(parse_ids(row_before['participant_ids']))}\n"
-        f"Ð¡ÑÐ°Ð»Ð¾: {mentions(new_ids)}\n"
-        f"ÐÐ¼ÑÐ½Ð¸Ð²/Ð»Ð°: <@{interaction.user.id}>"
+        f"\u0417\u0430\u043f\u0438\u0441: **#{row_before['id']}**\n"
+        f"\u0411\u0443\u043b\u043e: {mentions(parse_ids(row_before['participant_ids']))}\n"
+        f"\u0421\u0442\u0430\u043b\u043e: {mentions(new_ids)}\n"
+        f"\u0417\u043c\u0456\u043d\u0438\u0432/\u043b\u0430: <@{interaction.user.id}>"
       ),
       discord.Color.orange(),
     )
 
     await interaction.response.edit_message(
-      content=f"â ÐÐ¸ÐºÐ¾Ð½Ð°Ð²ÑÑÐ² Ð¾Ð½Ð¾Ð²Ð»ÐµÐ½Ð¾: {mentions(new_ids)}",
+      content=f"\u2705 \u0412\u0438\u043a\u043e\u043d\u0430\u0432\u0446\u0456\u0432 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043e: {mentions(new_ids)}",
       view=None,
     )
 
@@ -2481,13 +2481,13 @@ class CorrectionContractSelect(discord.ui.Select):
       discord.SelectOption(
         label=row["name"][:100],
         value=str(row["id"]),
-        description=f"{format_money_dollars(row['price'])} $ â¢ ÐÐ {row['cooldown']}"[:100],
+        description=f"{format_money_dollars(row['price'])} $ \u2022 \u041a\u0414 {row['cooldown']}"[:100],
       )
       for row in rows
     ]
 
     super().__init__(
-      placeholder=f"ÐÐ±ÐµÑÑÑÑ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ â¢ {self.page + 1}/{self.total_pages}",
+      placeholder=f"\u041e\u0431\u0435\u0440\u0456\u0442\u044c \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u2022 {self.page + 1}/{self.total_pages}",
       min_values=1,
       max_values=1,
       options=options,
@@ -2496,7 +2496,7 @@ class CorrectionContractSelect(discord.ui.Select):
 
   async def callback(self, interaction: discord.Interaction):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.edit_message(content="â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", view=None)
+      await interaction.response.edit_message(content="\u274c \u041d\u0435\u043c\u0430\u0454 \u043f\u0440\u0430\u0432\u0430.", view=None)
       return
 
     row_before = db.get_completed_by_message(self.message_id)
@@ -2509,7 +2509,7 @@ class CorrectionContractSelect(discord.ui.Select):
       or not db.update_completed_contract_type(self.message_id, contract_type)
     ):
       await interaction.response.edit_message(
-        content="â ÐÐ¼ÑÐ½Ð¸ÑÐ¸ Ð¼Ð¾Ð¶Ð½Ð° ÑÑÐ»ÑÐºÐ¸ Ð½ÐµÐ¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ.",
+        content="\u274c \u0417\u043c\u0456\u043d\u0438\u0442\u0438 \u043c\u043e\u0436\u043d\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u043d\u0435\u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0439 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442.",
         view=None,
       )
       return
@@ -2518,20 +2518,20 @@ class CorrectionContractSelect(discord.ui.Select):
 
     await audit_log(
       interaction.guild,
-      "âï¸ ÐÐ¼ÑÐ½ÐµÐ½Ð¾ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ Ñ Ð·Ð°Ð¿Ð¸ÑÑ",
+      "\u270f\ufe0f \u0417\u043c\u0456\u043d\u0435\u043d\u043e \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0443 \u0437\u0430\u043f\u0438\u0441\u0456",
       (
-        f"ÐÐ°Ð¿Ð¸Ñ: **#{row_before['id']}**\n"
-        f"ÐÑÐ»Ð¾: **{row_before['contract_name']}** â "
+        f"\u0417\u0430\u043f\u0438\u0441: **#{row_before['id']}**\n"
+        f"\u0411\u0443\u043b\u043e: **{row_before['contract_name']}** \u2014 "
         f"{format_money_dollars(row_before['price'])} $\n"
-        f"Ð¡ÑÐ°Ð»Ð¾: **{contract_type['name']}** â "
+        f"\u0421\u0442\u0430\u043b\u043e: **{contract_type['name']}** \u2014 "
         f"{format_money_dollars(contract_type['price'])} $\n"
-        f"ÐÐ¼ÑÐ½Ð¸Ð²/Ð»Ð°: <@{interaction.user.id}>"
+        f"\u0417\u043c\u0456\u043d\u0438\u0432/\u043b\u0430: <@{interaction.user.id}>"
       ),
       discord.Color.orange(),
     )
 
     await interaction.response.edit_message(
-      content=f"â ÐÐ¾Ð½ÑÑÐ°ÐºÑ Ð·Ð¼ÑÐ½ÐµÐ½Ð¾ Ð½Ð° **{contract_type['name']}**.",
+      content=f"\u2705 \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0437\u043c\u0456\u043d\u0435\u043d\u043e \u043d\u0430 **{contract_type['name']}**.",
       view=None,
     )
 
@@ -2547,7 +2547,7 @@ class CorrectionContractView(discord.ui.View):
     self.page_label.label = f"{self.page + 1}/{self.total_pages}"
     self.next_page.disabled = self.page >= self.total_pages - 1
 
-  @discord.ui.button(label="ÐÐ°Ð·Ð°Ð´", emoji="âï¸", style=discord.ButtonStyle.secondary, row=1)
+  @discord.ui.button(label="\u041d\u0430\u0437\u0430\u0434", emoji="\u25c0\ufe0f", style=discord.ButtonStyle.secondary, row=1)
   async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
     await interaction.response.edit_message(
       view=CorrectionContractView(self.bot_instance, self.message_id, self.page - 1)
@@ -2557,7 +2557,7 @@ class CorrectionContractView(discord.ui.View):
   async def page_label(self, interaction: discord.Interaction, button: discord.ui.Button):
     pass
 
-  @discord.ui.button(label="ÐÐ°Ð»Ñ", emoji="â¶ï¸", style=discord.ButtonStyle.secondary, row=1)
+  @discord.ui.button(label="\u0414\u0430\u043b\u0456", emoji="\u25b6\ufe0f", style=discord.ButtonStyle.secondary, row=1)
   async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
     await interaction.response.edit_message(
       view=CorrectionContractView(self.bot_instance, self.message_id, self.page + 1)
@@ -2570,23 +2570,23 @@ class CorrectionMenuView(discord.ui.View):
     self.bot_instance = bot_instance
     self.message_id = message_id
 
-  @discord.ui.button(label="ÐÐ¸ÐºÐ¾Ð½Ð°Ð²ÑÑ", emoji="ð¥", style=discord.ButtonStyle.primary)
+  @discord.ui.button(label="\u0412\u0438\u043a\u043e\u043d\u0430\u0432\u0446\u0456", emoji="\U0001f465", style=discord.ButtonStyle.primary)
   async def performers(self, interaction: discord.Interaction, button: discord.ui.Button):
     await interaction.response.edit_message(
-      content="ð¥ ÐÐ±ÐµÑÑÑÑ Ð¿ÑÐ°Ð²Ð¸Ð»ÑÐ½Ð¸Ð¹ ÑÐ¿Ð¸ÑÐ¾Ðº Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²ÑÑÐ²:",
+      content="\U0001f465 \u041e\u0431\u0435\u0440\u0456\u0442\u044c \u043f\u0440\u0430\u0432\u0438\u043b\u044c\u043d\u0438\u0439 \u0441\u043f\u0438\u0441\u043e\u043a \u0432\u0438\u043a\u043e\u043d\u0430\u0432\u0446\u0456\u0432:",
       view=CorrectionPerformerView(self.bot_instance, self.message_id),
     )
 
-  @discord.ui.button(label="ÐÐ¾Ð½ÑÑÐ°ÐºÑ", emoji="ð", style=discord.ButtonStyle.primary)
+  @discord.ui.button(label="\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442", emoji="\U0001f4cb", style=discord.ButtonStyle.primary)
   async def contract(self, interaction: discord.Interaction, button: discord.ui.Button):
     await interaction.response.edit_message(
-      content="ð ÐÐ±ÐµÑÑÑÑ Ð¿ÑÐ°Ð²Ð¸Ð»ÑÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ:",
+      content="\U0001f4cb \u041e\u0431\u0435\u0440\u0456\u0442\u044c \u043f\u0440\u0430\u0432\u0438\u043b\u044c\u043d\u0438\u0439 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442:",
       view=CorrectionContractView(self.bot_instance, self.message_id),
     )
 
-  @discord.ui.button(label="ÐÐ°Ð·Ð°Ð´", emoji="â©ï¸", style=discord.ButtonStyle.secondary)
+  @discord.ui.button(label="\u041d\u0430\u0437\u0430\u0434", emoji="\u21a9\ufe0f", style=discord.ButtonStyle.secondary)
   async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
-    await interaction.response.edit_message(content="Ð ÐµÐ´Ð°Ð³ÑÐ²Ð°Ð½Ð½Ñ Ð·Ð°ÐºÑÐ¸ÑÐ¾.", view=None)
+    await interaction.response.edit_message(content="\u0420\u0435\u0434\u0430\u0433\u0443\u0432\u0430\u043d\u043d\u044f \u0437\u0430\u043a\u0440\u0438\u0442\u043e.", view=None)
 
 
 class AnnulPaidConfirmView(discord.ui.View):
@@ -2596,9 +2596,9 @@ class AnnulPaidConfirmView(discord.ui.View):
     self.message_id = message_id
 
   @discord.ui.button(
-    label="Ð¢Ð°Ðº, Ð°Ð½ÑÐ»ÑÐ²Ð°ÑÐ¸",
+    label="\u0422\u0430\u043a, \u0430\u043d\u0443\u043b\u044e\u0432\u0430\u0442\u0438",
     style=discord.ButtonStyle.danger,
-    emoji="ð«",
+    emoji="\U0001f6ab",
   )
   async def confirm(
     self,
@@ -2607,7 +2607,7 @@ class AnnulPaidConfirmView(discord.ui.View):
   ):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
       await interaction.response.edit_message(
-        content="â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.",
+        content="\u274c \u041d\u0435\u043c\u0430\u0454 \u043f\u0440\u0430\u0432\u0430.",
         view=None,
       )
       return
@@ -2615,13 +2615,13 @@ class AnnulPaidConfirmView(discord.ui.View):
     row_before = db.get_completed_by_message(self.message_id)
     if not row_before or row_before["status"] != "paid":
       await interaction.response.edit_message(
-        content="â ÐÐ½ÑÐ»ÑÐ²Ð°ÑÐ¸ Ð¼Ð¾Ð¶Ð½Ð° ÑÑÐ»ÑÐºÐ¸ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ.",
+        content="\u274c \u0410\u043d\u0443\u043b\u044e\u0432\u0430\u0442\u0438 \u043c\u043e\u0436\u043d\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0439 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442.",
         view=None,
       )
       return
 
     await interaction.response.edit_message(
-      content="â³ ÐÐ½ÑÐ»ÑÑ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ...",
+      content="\u23f3 \u0410\u043d\u0443\u043b\u044e\u044e \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442...",
       view=None,
     )
 
@@ -2632,7 +2632,7 @@ class AnnulPaidConfirmView(discord.ui.View):
 
     if not ok:
       await interaction.edit_original_response(
-        content="â ÐÐµ Ð²Ð´Ð°Ð»Ð¾ÑÑ Ð°Ð½ÑÐ»ÑÐ²Ð°ÑÐ¸ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ.",
+        content="\u274c \u041d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f \u0430\u043d\u0443\u043b\u044e\u0432\u0430\u0442\u0438 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442.",
         view=None,
       )
       return
@@ -2641,31 +2641,31 @@ class AnnulPaidConfirmView(discord.ui.View):
 
     await audit_log(
       interaction.guild,
-      "ð« ÐÐ¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ Ð°Ð½ÑÐ»ÑÐ¾Ð²Ð°Ð½Ð¾",
+      "\U0001f6ab \u041e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0439 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0430\u043d\u0443\u043b\u044c\u043e\u0432\u0430\u043d\u043e",
       (
-        f"ÐÐ°Ð¿Ð¸Ñ: **#{row_before['id']}**\n"
-        f"ÐÐ¾Ð½ÑÑÐ°ÐºÑ: **{row_before['contract_name']}**\n"
-        f"Ð¡ÑÐ¼Ð°: **{format_money_dollars(row_before['price'])} $**\n"
-        f"ÐÑÐ»Ð¾ Ð² ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ: **{format_cents(row_before['fomo_cents'] or 0)}**\n"
-        f"ÐÑÐ»Ð¾ ÑÑÐ°ÑÐ½Ð¸ÐºÐ°Ð¼: **{format_cents(row_before['net_cents'] or 0)}**\n"
-        f"ÐÐ½ÑÐ»ÑÐ²Ð°Ð²/Ð»Ð°: <@{interaction.user.id}>"
+        f"\u0417\u0430\u043f\u0438\u0441: **#{row_before['id']}**\n"
+        f"\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442: **{row_before['contract_name']}**\n"
+        f"\u0421\u0443\u043c\u0430: **{format_money_dollars(row_before['price'])} $**\n"
+        f"\u0411\u0443\u043b\u043e \u0432 \u0411\u0430\u043d\u043a \u0441\u0456\u043c'\u0457: **{format_cents(row_before['fomo_cents'] or 0)}**\n"
+        f"\u0411\u0443\u043b\u043e \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c: **{format_cents(row_before['net_cents'] or 0)}**\n"
+        f"\u0410\u043d\u0443\u043b\u044e\u0432\u0430\u0432/\u043b\u0430: <@{interaction.user.id}>"
       ),
       discord.Color.red(),
     )
 
     await interaction.edit_original_response(
       content=(
-        "â ÐÐ¾Ð½ÑÑÐ°ÐºÑ Ð°Ð½ÑÐ»ÑÐ¾Ð²Ð°Ð½Ð¾.\n"
-        "ÐÐ¾Ð³Ð¾ Ð³ÑÐ¾ÑÑ ÑÐ° Ð±Ð°Ð»Ð¸ Ð±ÑÐ»ÑÑÐµ Ð½Ðµ Ð²ÑÐ°ÑÐ¾Ð²ÑÑÑÑÑÑ Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÑÑ, "
-        "Ð°Ð»Ðµ Ð·Ð°Ð¿Ð¸Ñ Ð·Ð°Ð»Ð¸ÑÐ¸Ð²ÑÑ Ð² ÑÑÑÐ¾ÑÑÑ."
+        "\u2705 \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0430\u043d\u0443\u043b\u044c\u043e\u0432\u0430\u043d\u043e.\n"
+        "\u0419\u043e\u0433\u043e \u0433\u0440\u043e\u0448\u0456 \u0442\u0430 \u0431\u0430\u043b\u0438 \u0431\u0456\u043b\u044c\u0448\u0435 \u043d\u0435 \u0432\u0440\u0430\u0445\u043e\u0432\u0443\u044e\u0442\u044c\u0441\u044f \u0443 \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u0446\u0456, "
+        "\u0430\u043b\u0435 \u0437\u0430\u043f\u0438\u0441 \u0437\u0430\u043b\u0438\u0448\u0438\u0432\u0441\u044f \u0432 \u0456\u0441\u0442\u043e\u0440\u0456\u0457."
       ),
       view=None,
     )
 
   @discord.ui.button(
-    label="ÐÐ°Ð·Ð°Ð´",
+    label="\u041d\u0430\u0437\u0430\u0434",
     style=discord.ButtonStyle.secondary,
-    emoji="â©ï¸",
+    emoji="\u21a9\ufe0f",
   )
   async def back(
     self,
@@ -2673,7 +2673,7 @@ class AnnulPaidConfirmView(discord.ui.View):
     button: discord.ui.Button,
   ):
     await interaction.response.edit_message(
-      content="ÐÐ½ÑÐ»ÑÐ²Ð°Ð½Ð½Ñ ÑÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¾.",
+      content="\u0410\u043d\u0443\u043b\u044e\u0432\u0430\u043d\u043d\u044f \u0441\u043a\u0430\u0441\u043e\u0432\u0430\u043d\u043e.",
       view=None,
     )
 
@@ -2684,28 +2684,28 @@ class UnpaidCompletedView(discord.ui.View):
     self.bot_instance = bot_instance
 
   @discord.ui.button(
-    label="ÐÐ¿Ð»Ð°ÑÐ°",
+    label="\u041e\u043f\u043b\u0430\u0442\u0430",
     style=discord.ButtonStyle.success,
-    emoji="ðµ",
+    emoji="\U0001f4b5",
     custom_id="contract_v3:paid",
     row=0,
   )
   async def paid(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
       await interaction.response.send_message(
-        "â ÐÐ¿Ð»Ð°ÑÑÐ²Ð°ÑÐ¸ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ¸ Ð¼Ð¾Ð¶Ðµ ÑÑÐ»ÑÐºÐ¸ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð¾.",
+        "\u274c \u041e\u043f\u043b\u0430\u0447\u0443\u0432\u0430\u0442\u0438 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438 \u043c\u043e\u0436\u0435 \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u043e.",
         ephemeral=True,
       )
       return
 
     if interaction.message is None:
-      await interaction.response.send_message("â ÐÐµ Ð·Ð½Ð°Ð¹ÑÐ¾Ð² Ð·Ð°Ð¿Ð¸Ñ.", ephemeral=True)
+      await interaction.response.send_message("\u274c \u041d\u0435 \u0437\u043d\u0430\u0439\u0448\u043e\u0432 \u0437\u0430\u043f\u0438\u0441.", ephemeral=True)
       return
 
     row = db.get_completed_by_message(interaction.message.id)
     if not row or row["status"] != "unpaid":
       await interaction.response.send_message(
-        "â ÐÐ¾Ð½ÑÑÐ°ÐºÑ ÑÐ¶Ðµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ Ð°Ð±Ð¾ ÑÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¸Ð¹.",
+        "\u274c \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0443\u0436\u0435 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0439 \u0430\u0431\u043e \u0441\u043a\u0430\u0441\u043e\u0432\u0430\u043d\u0438\u0439.",
         ephemeral=True,
       )
       return
@@ -2725,9 +2725,9 @@ class UnpaidCompletedView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="ÐÐ° ÑÐ°Ð¼Ñ",
+    label="\u041d\u0430 \u0444\u0430\u043c\u0443",
     style=discord.ButtonStyle.primary,
-    emoji="ð ",
+    emoji="\U0001f3e0",
     custom_id="contract_v3:family",
     row=0,
   )
@@ -2738,14 +2738,14 @@ class UnpaidCompletedView(discord.ui.View):
   ):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
       await interaction.response.send_message(
-        "â ÐÐ¿Ð»Ð°ÑÑÐ²Ð°ÑÐ¸ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ¸ Ð¼Ð¾Ð¶Ðµ ÑÑÐ»ÑÐºÐ¸ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð¾.",
+        "\u274c \u041e\u043f\u043b\u0430\u0447\u0443\u0432\u0430\u0442\u0438 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438 \u043c\u043e\u0436\u0435 \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u043e.",
         ephemeral=True,
       )
       return
 
     if interaction.message is None:
       await interaction.response.send_message(
-        "â ÐÐµ Ð·Ð½Ð°Ð¹ÑÐ¾Ð² Ð·Ð°Ð¿Ð¸Ñ.",
+        "\u274c \u041d\u0435 \u0437\u043d\u0430\u0439\u0448\u043e\u0432 \u0437\u0430\u043f\u0438\u0441.",
         ephemeral=True,
       )
       return
@@ -2753,7 +2753,7 @@ class UnpaidCompletedView(discord.ui.View):
     row = db.get_completed_by_message(interaction.message.id)
     if not row or row["status"] != "unpaid":
       await interaction.response.send_message(
-        "â ÐÐ¾Ð½ÑÑÐ°ÐºÑ ÑÐ¶Ðµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ Ð°Ð±Ð¾ ÑÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¸Ð¹.",
+        "\u274c \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0443\u0436\u0435 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0439 \u0430\u0431\u043e \u0441\u043a\u0430\u0441\u043e\u0432\u0430\u043d\u0438\u0439.",
         ephemeral=True,
       )
       return
@@ -2773,9 +2773,9 @@ class UnpaidCompletedView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="ÐÐ°Ð»Ð°ÑÑÑÐ²Ð°ÑÐ¸ Ð¾Ð¿Ð»Ð°ÑÑ",
+    label="\u041d\u0430\u043b\u0430\u0448\u0442\u0443\u0432\u0430\u0442\u0438 \u043e\u043f\u043b\u0430\u0442\u0443",
     style=discord.ButtonStyle.primary,
-    emoji="âï¸",
+    emoji="\u2699\ufe0f",
     custom_id="contract_v4:custompay",
     row=0,
   )
@@ -2786,19 +2786,19 @@ class UnpaidCompletedView(discord.ui.View):
   ):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
       await interaction.response.send_message(
-        "â ÐÐ°Ð»Ð°ÑÑÐ¾Ð²ÑÐ²Ð°ÑÐ¸ Ð¾Ð¿Ð»Ð°ÑÑ Ð¼Ð¾Ð¶Ðµ ÑÑÐ»ÑÐºÐ¸ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð¾.",
+        "\u274c \u041d\u0430\u043b\u0430\u0448\u0442\u043e\u0432\u0443\u0432\u0430\u0442\u0438 \u043e\u043f\u043b\u0430\u0442\u0443 \u043c\u043e\u0436\u0435 \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u043e.",
         ephemeral=True,
       )
       return
 
     if interaction.message is None or interaction.guild is None:
-      await interaction.response.send_message("â ÐÐµ Ð·Ð½Ð°Ð¹ÑÐ¾Ð² Ð·Ð°Ð¿Ð¸Ñ.", ephemeral=True)
+      await interaction.response.send_message("\u274c \u041d\u0435 \u0437\u043d\u0430\u0439\u0448\u043e\u0432 \u0437\u0430\u043f\u0438\u0441.", ephemeral=True)
       return
 
     row = db.get_completed_by_message(interaction.message.id)
     if not row or row["status"] != "unpaid":
       await interaction.response.send_message(
-        "â ÐÐ¾Ð½ÑÑÐ°ÐºÑ ÑÐ¶Ðµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ Ð°Ð±Ð¾ ÑÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¸Ð¹.",
+        "\u274c \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0443\u0436\u0435 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0439 \u0430\u0431\u043e \u0441\u043a\u0430\u0441\u043e\u0432\u0430\u043d\u0438\u0439.",
         ephemeral=True,
       )
       return
@@ -2807,10 +2807,10 @@ class UnpaidCompletedView(discord.ui.View):
 
     await interaction.response.send_message(
       (
-        "âï¸ **ÐÐ°Ð»Ð°ÑÑÑÐ²Ð°ÑÐ¸ Ð¾Ð¿Ð»Ð°ÑÑ**\n"
-        "ÐÐ±ÐµÑÑÑÑ, ÐºÐ¾Ð³Ð¾ Ð½Ðµ Ð¿Ð¾ÑÑÑÐ±Ð½Ð¾ Ð¾Ð¿Ð»Ð°ÑÑÐ²Ð°ÑÐ¸.\n\n"
-        "**Ð Ð¾Ð·Ð´ÑÐ»Ð¸ÑÐ¸ Ð¼ÑÐ¶ ÑÐµÑÑÐ¾Ñ** â 85% Ð´ÑÐ»Ð¸ÑÑÑÑ Ð¼ÑÐ¶ ÑÐ¸Ð¼Ð¸, ÑÑÐ¾ Ð·Ð°Ð»Ð¸ÑÐ¸Ð²ÑÑ.\n"
-        "**Ð§Ð°ÑÑÐºÑ Ð² ÑÑÐ¼'Ñ** â ÑÐ°ÑÑÐºÐ° Ð²Ð¸ÐºÐ»ÑÑÐµÐ½Ð¸Ñ Ð¿ÐµÑÐµÑÐ¾Ð´Ð¸ÑÑ Ñ ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ."
+        "\u2699\ufe0f **\u041d\u0430\u043b\u0430\u0448\u0442\u0443\u0432\u0430\u0442\u0438 \u043e\u043f\u043b\u0430\u0442\u0443**\n"
+        "\u041e\u0431\u0435\u0440\u0456\u0442\u044c, \u043a\u043e\u0433\u043e \u043d\u0435 \u043f\u043e\u0442\u0440\u0456\u0431\u043d\u043e \u043e\u043f\u043b\u0430\u0447\u0443\u0432\u0430\u0442\u0438.\n\n"
+        "**\u0420\u043e\u0437\u0434\u0456\u043b\u0438\u0442\u0438 \u043c\u0456\u0436 \u0440\u0435\u0448\u0442\u043e\u044e** \u2014 85% \u0434\u0456\u043b\u0438\u0442\u044c\u0441\u044f \u043c\u0456\u0436 \u0442\u0438\u043c\u0438, \u0445\u0442\u043e \u0437\u0430\u043b\u0438\u0448\u0438\u0432\u0441\u044f.\n"
+        "**\u0427\u0430\u0441\u0442\u043a\u0443 \u0432 \u0441\u0456\u043c'\u044e** \u2014 \u0447\u0430\u0441\u0442\u043a\u0430 \u0432\u0438\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0445 \u043f\u0435\u0440\u0435\u0445\u043e\u0434\u0438\u0442\u044c \u0443 \u0411\u0430\u043d\u043a \u0441\u0456\u043c'\u0457."
       ),
       view=CustomPaymentView(
         self.bot_instance,
@@ -2822,59 +2822,59 @@ class UnpaidCompletedView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="ÐÐ¸Ð¿ÑÐ°Ð²Ð¸ÑÐ¸",
+    label="\u0412\u0438\u043f\u0440\u0430\u0432\u0438\u0442\u0438",
     style=discord.ButtonStyle.secondary,
-    emoji="âï¸",
+    emoji="\u270f\ufe0f",
     custom_id="contract_v4:edit",
     row=1,
   )
   async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
       await interaction.response.send_message(
-        "â ÐÐ¸Ð¿ÑÐ°Ð²Ð»ÑÑÐ¸ Ð·Ð°Ð¿Ð¸ÑÐ¸ Ð¼Ð¾Ð¶Ðµ ÑÑÐ»ÑÐºÐ¸ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð¾.",
+        "\u274c \u0412\u0438\u043f\u0440\u0430\u0432\u043b\u044f\u0442\u0438 \u0437\u0430\u043f\u0438\u0441\u0438 \u043c\u043e\u0436\u0435 \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u043e.",
         ephemeral=True,
       )
       return
 
     if interaction.message is None:
-      await interaction.response.send_message("â ÐÐµ Ð·Ð½Ð°Ð¹ÑÐ¾Ð² Ð·Ð°Ð¿Ð¸Ñ.", ephemeral=True)
+      await interaction.response.send_message("\u274c \u041d\u0435 \u0437\u043d\u0430\u0439\u0448\u043e\u0432 \u0437\u0430\u043f\u0438\u0441.", ephemeral=True)
       return
 
     row = db.get_completed_by_message(interaction.message.id)
     if not row or row["status"] != "unpaid":
       await interaction.response.send_message(
-        "â ÐÐ¸Ð¿ÑÐ°Ð²Ð»ÑÑÐ¸ Ð¼Ð¾Ð¶Ð½Ð° ÑÑÐ»ÑÐºÐ¸ Ð½ÐµÐ¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ.",
+        "\u274c \u0412\u0438\u043f\u0440\u0430\u0432\u043b\u044f\u0442\u0438 \u043c\u043e\u0436\u043d\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u043d\u0435\u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0439 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442.",
         ephemeral=True,
       )
       return
 
     await interaction.response.send_message(
-      "âï¸ Ð©Ð¾ Ð¿Ð¾ÑÑÑÐ±Ð½Ð¾ Ð²Ð¸Ð¿ÑÐ°Ð²Ð¸ÑÐ¸?",
+      "\u270f\ufe0f \u0429\u043e \u043f\u043e\u0442\u0440\u0456\u0431\u043d\u043e \u0432\u0438\u043f\u0440\u0430\u0432\u0438\u0442\u0438?",
       view=CorrectionMenuView(self.bot_instance, interaction.message.id),
       ephemeral=True,
     )
 
   @discord.ui.button(
-    label="Ð¡ÐºÐ°ÑÑÐ²Ð°ÑÐ¸",
+    label="\u0421\u043a\u0430\u0441\u0443\u0432\u0430\u0442\u0438",
     style=discord.ButtonStyle.danger,
-    emoji="ðï¸",
+    emoji="\U0001f5d1\ufe0f",
     custom_id="contract_v3:cancel",
     row=1,
   )
   async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
       await interaction.response.send_message(
-        "â Ð¡ÐºÐ°ÑÐ¾Ð²ÑÐ²Ð°ÑÐ¸ Ð·Ð°Ð¿Ð¸ÑÐ¸ Ð¼Ð¾Ð¶Ðµ ÑÑÐ»ÑÐºÐ¸ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð¾.",
+        "\u274c \u0421\u043a\u0430\u0441\u043e\u0432\u0443\u0432\u0430\u0442\u0438 \u0437\u0430\u043f\u0438\u0441\u0438 \u043c\u043e\u0436\u0435 \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u043e.",
         ephemeral=True,
       )
       return
 
     if interaction.message is None:
-      await interaction.response.send_message("â ÐÐµ Ð·Ð½Ð°Ð¹ÑÐ¾Ð² Ð·Ð°Ð¿Ð¸Ñ.", ephemeral=True)
+      await interaction.response.send_message("\u274c \u041d\u0435 \u0437\u043d\u0430\u0439\u0448\u043e\u0432 \u0437\u0430\u043f\u0438\u0441.", ephemeral=True)
       return
 
     await interaction.response.send_message(
-      "â ï¸ Ð¡ÐºÐ°ÑÑÐ²Ð°ÑÐ¸ ÑÐµÐ¹ Ð·Ð°Ð¿Ð¸Ñ? ÐÑÐ½ Ð±ÑÐ´Ðµ Ð²Ð¸ÐºÐ»ÑÑÐµÐ½Ð¸Ð¹ Ð·Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ¸.",
+      "\u26a0\ufe0f \u0421\u043a\u0430\u0441\u0443\u0432\u0430\u0442\u0438 \u0446\u0435\u0439 \u0437\u0430\u043f\u0438\u0441? \u0412\u0456\u043d \u0431\u0443\u0434\u0435 \u0432\u0438\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0439 \u0437\u0456 \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0438.",
       view=CancelCompletedConfirmView(self.bot_instance, interaction.message.id),
       ephemeral=True,
     )
@@ -2893,25 +2893,25 @@ class ContractTypeModal(discord.ui.Modal):
     row = db.get_contract_type(type_id) if type_id else None
 
     super().__init__(
-      title="ÐÐ¾Ð´Ð°ÑÐ¸ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ" if mode == "add" else "Ð ÐµÐ´Ð°Ð³ÑÐ²Ð°ÑÐ¸ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ",
+      title="\u0414\u043e\u0434\u0430\u0442\u0438 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442" if mode == "add" else "\u0420\u0435\u0434\u0430\u0433\u0443\u0432\u0430\u0442\u0438 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442",
       timeout=300,
     )
 
     self.name_input = discord.ui.TextInput(
-      label="ÐÐ°Ð·Ð²Ð° ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ",
-      placeholder="ÐÐ°Ð¿ÑÐ¸ÐºÐ»Ð°Ð´: ÐÐ°Ð¹ÑÑÑÐ¸ Ð±Ð°ÐºÑÐ²",
+      label="\u041d\u0430\u0437\u0432\u0430 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443",
+      placeholder="\u041d\u0430\u043f\u0440\u0438\u043a\u043b\u0430\u0434: \u041c\u0430\u0439\u0441\u0442\u0440\u0438 \u0431\u0430\u043a\u0456\u0432",
       default=row["name"] if row else None,
       max_length=100,
     )
     self.price_input = discord.ui.TextInput(
-      label="Ð¦ÑÐ½Ð° ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ",
-      placeholder="ÐÐ°Ð¿ÑÐ¸ÐºÐ»Ð°Ð´: 100000 Ð°Ð±Ð¾ 100Ðº",
+      label="\u0426\u0456\u043d\u0430 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443",
+      placeholder="\u041d\u0430\u043f\u0440\u0438\u043a\u043b\u0430\u0434: 100000 \u0430\u0431\u043e 100\u043a",
       default=str(row["price"]) if row else None,
       max_length=20,
     )
     self.cooldown_input = discord.ui.TextInput(
-      label="ÐÐ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ",
-      placeholder="ÐÐ°Ð¿ÑÐ¸ÐºÐ»Ð°Ð´: 4 Ð³Ð¾Ð´",
+      label="\u041a\u0414 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443",
+      placeholder="\u041d\u0430\u043f\u0440\u0438\u043a\u043b\u0430\u0434: 4 \u0433\u043e\u0434",
       default=row["cooldown"] if row else None,
       max_length=50,
     )
@@ -2922,14 +2922,14 @@ class ContractTypeModal(discord.ui.Modal):
 
   async def on_submit(self, interaction: discord.Interaction):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.send_message("â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", ephemeral=True)
+      await interaction.response.send_message("\u274c \u041d\u0435\u043c\u0430\u0454 \u043f\u0440\u0430\u0432\u0430.", ephemeral=True)
       return
 
     try:
       price = parse_money(str(self.price_input))
     except ValueError:
       await interaction.response.send_message(
-        "â ÐÐµÐºÐ¾ÑÐµÐºÑÐ½Ð° ÑÑÐ½Ð°. ÐÑÐ¸ÐºÐ»Ð°Ð´Ð¸: `100000`, `100Ðº`, `1.2Ð¼`.",
+        "\u274c \u041d\u0435\u043a\u043e\u0440\u0435\u043a\u0442\u043d\u0430 \u0446\u0456\u043d\u0430. \u041f\u0440\u0438\u043a\u043b\u0430\u0434\u0438: `100000`, `100\u043a`, `1.2\u043c`.",
         ephemeral=True,
       )
       return
@@ -2941,17 +2941,17 @@ class ContractTypeModal(discord.ui.Modal):
       row = db.create_contract_type(name, price, cooldown, interaction.user.id)
       await audit_log(
         interaction.guild,
-        "â ÐÐ¾Ð´Ð°Ð½Ð¾ ÑÐ¸Ð¿ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ",
+        "\u2795 \u0414\u043e\u0434\u0430\u043d\u043e \u0442\u0438\u043f \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443",
         (
           f"**{row['name']}**\n"
-          f"Ð¦ÑÐ½Ð°: **{format_money_dollars(row['price'])} $**\n"
-          f"ÐÐ: **{row['cooldown']}**\n"
-          f"ÐÐ¾Ð´Ð°Ð²/Ð»Ð°: <@{interaction.user.id}>"
+          f"\u0426\u0456\u043d\u0430: **{format_money_dollars(row['price'])} $**\n"
+          f"\u041a\u0414: **{row['cooldown']}**\n"
+          f"\u0414\u043e\u0434\u0430\u0432/\u043b\u0430: <@{interaction.user.id}>"
         ),
         discord.Color.green(),
       )
       await interaction.response.send_message(
-        f"â ÐÐ¾Ð´Ð°Ð½Ð¾: **{row['name']}** â {format_money_dollars(row['price'])} $ â ÐÐ {row['cooldown']}",
+        f"\u2705 \u0414\u043e\u0434\u0430\u043d\u043e: **{row['name']}** \u2014 {format_money_dollars(row['price'])} $ \u2014 \u041a\u0414 {row['cooldown']}",
         ephemeral=True,
       )
       return
@@ -2959,7 +2959,7 @@ class ContractTypeModal(discord.ui.Modal):
     ok = db.update_contract_type(self.type_id, name, price, cooldown)
     if not ok:
       await interaction.response.send_message(
-        "â ÐÐµ Ð²Ð´Ð°Ð»Ð¾ÑÑ Ð·Ð±ÐµÑÐµÐ³ÑÐ¸. ÐÐ¾Ð¶Ð»Ð¸Ð²Ð¾, ÐºÐ¾Ð½ÑÑÐ°ÐºÑ Ð· ÑÐ°ÐºÐ¾Ñ Ð½Ð°Ð·Ð²Ð¾Ñ Ð²Ð¶Ðµ ÑÑÐ½ÑÑ.",
+        "\u274c \u041d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f \u0437\u0431\u0435\u0440\u0435\u0433\u0442\u0438. \u041c\u043e\u0436\u043b\u0438\u0432\u043e, \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0437 \u0442\u0430\u043a\u043e\u044e \u043d\u0430\u0437\u0432\u043e\u044e \u0432\u0436\u0435 \u0456\u0441\u043d\u0443\u0454.",
         ephemeral=True,
       )
       return
@@ -2967,17 +2967,17 @@ class ContractTypeModal(discord.ui.Modal):
     row = db.get_contract_type(self.type_id)
     await audit_log(
       interaction.guild,
-      "âï¸ ÐÐ½Ð¾Ð²Ð»ÐµÐ½Ð¾ ÑÐ¸Ð¿ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ",
+      "\u270f\ufe0f \u041e\u043d\u043e\u0432\u043b\u0435\u043d\u043e \u0442\u0438\u043f \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443",
       (
         f"**{row['name']}**\n"
-        f"Ð¦ÑÐ½Ð°: **{format_money_dollars(row['price'])} $**\n"
-        f"ÐÐ: **{row['cooldown']}**\n"
-        f"ÐÐ¼ÑÐ½Ð¸Ð²/Ð»Ð°: <@{interaction.user.id}>"
+        f"\u0426\u0456\u043d\u0430: **{format_money_dollars(row['price'])} $**\n"
+        f"\u041a\u0414: **{row['cooldown']}**\n"
+        f"\u0417\u043c\u0456\u043d\u0438\u0432/\u043b\u0430: <@{interaction.user.id}>"
       ),
       discord.Color.orange(),
     )
     await interaction.response.send_message(
-      f"â ÐÐ½Ð¾Ð²Ð»ÐµÐ½Ð¾: **{row['name']}** â {format_money_dollars(row['price'])} $ â ÐÐ {row['cooldown']}",
+      f"\u2705 \u041e\u043d\u043e\u0432\u043b\u0435\u043d\u043e: **{row['name']}** \u2014 {format_money_dollars(row['price'])} $ \u2014 \u041a\u0414 {row['cooldown']}",
       ephemeral=True,
     )
 
@@ -2996,8 +2996,8 @@ def admin_picker_page_data(page: int, page_size: int = 25):
 
 def admin_picker_text(page: int, total_pages: int) -> str:
   return (
-    "ð **ÐÐµÑÑÐ²Ð°Ð½Ð½Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ°Ð¼Ð¸**\n"
-    f"ÐÐ±ÐµÑÑÑÑ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ Ð·Ñ ÑÐ¿Ð¸ÑÐºÑ â¢ ÑÑÐ¾ÑÑÐ½ÐºÐ° **{page + 1}/{total_pages}**"
+    "\U0001f4cb **\u041a\u0435\u0440\u0443\u0432\u0430\u043d\u043d\u044f \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0430\u043c\u0438**\n"
+    f"\u041e\u0431\u0435\u0440\u0456\u0442\u044c \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0437\u0456 \u0441\u043f\u0438\u0441\u043a\u0443 \u2022 \u0441\u0442\u043e\u0440\u0456\u043d\u043a\u0430 **{page + 1}/{total_pages}**"
   )
 
 
@@ -3012,7 +3012,7 @@ class AdminManageSelect(discord.ui.Select):
         label=row["name"][:100],
         value=str(row["id"]),
         description=(
-          f"{format_money_dollars(row['price'])} $ â¢ ÐÐ {row['cooldown']}"
+          f"{format_money_dollars(row['price'])} $ \u2022 \u041a\u0414 {row['cooldown']}"
         )[:100],
       )
       for row in rows
@@ -3021,14 +3021,14 @@ class AdminManageSelect(discord.ui.Select):
     if not options:
       options = [
         discord.SelectOption(
-          label="ÐÐ¾Ð½ÑÑÐ°ÐºÑÑÐ² ÑÐµ Ð½ÐµÐ¼Ð°Ñ",
+          label="\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432 \u0449\u0435 \u043d\u0435\u043c\u0430\u0454",
           value="none",
-          description="Ð¡Ð¿Ð¾ÑÐ°ÑÐºÑ Ð½Ð°ÑÐ¸ÑÐ½ÑÑÑ Â«ÐÐ¾Ð´Ð°ÑÐ¸Â»",
+          description="\u0421\u043f\u043e\u0447\u0430\u0442\u043a\u0443 \u043d\u0430\u0442\u0438\u0441\u043d\u0456\u0442\u044c \u00ab\u0414\u043e\u0434\u0430\u0442\u0438\u00bb",
         )
       ]
 
     super().__init__(
-      placeholder=f"ÐÐ¾Ð½ÑÑÐ°ÐºÑÐ¸ â¢ {page + 1}/{total_pages}",
+      placeholder=f"\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438 \u2022 {page + 1}/{total_pages}",
       options=options,
       min_values=1,
       max_values=1,
@@ -3038,7 +3038,7 @@ class AdminManageSelect(discord.ui.Select):
 
   async def callback(self, interaction: discord.Interaction):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.send_message("â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", ephemeral=True)
+      await interaction.response.send_message("\u274c \u041d\u0435\u043c\u0430\u0454 \u043f\u0440\u0430\u0432\u0430.", ephemeral=True)
       return
 
     type_id = int(self.values[0])
@@ -3046,23 +3046,23 @@ class AdminManageSelect(discord.ui.Select):
 
     if not row or not row["active"]:
       await interaction.response.edit_message(
-        content="â Ð¦ÐµÐ¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ ÑÐ¶Ðµ Ð½ÐµÐ´Ð¾ÑÑÑÐ¿Ð½Ð¸Ð¹.",
+        content="\u274c \u0426\u0435\u0439 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0443\u0436\u0435 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0438\u0439.",
         embed=None,
         view=AdminManagePickerView(self.page),
       )
       return
 
     embed = discord.Embed(
-      title=f"âï¸ {row['name']}",
+      title=f"\u2699\ufe0f {row['name']}",
       color=discord.Color.blurple(),
     )
     embed.add_field(
-      name="ð° Ð¦ÑÐ½Ð°",
+      name="\U0001f4b0 \u0426\u0456\u043d\u0430",
       value=f"{format_money_dollars(row['price'])} $",
       inline=True,
     )
     embed.add_field(
-      name="â³ ÐÐ",
+      name="\u23f3 \u041a\u0414",
       value=row["cooldown"],
       inline=True,
     )
@@ -3086,9 +3086,9 @@ class AdminManagePickerView(discord.ui.View):
     self.next_page.disabled = self.page >= self.total_pages - 1
 
   @discord.ui.button(
-    label="ÐÐ°Ð·Ð°Ð´",
+    label="\u041d\u0430\u0437\u0430\u0434",
     style=discord.ButtonStyle.secondary,
-    emoji="âï¸",
+    emoji="\u25c0\ufe0f",
     row=1,
   )
   async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -3111,9 +3111,9 @@ class AdminManagePickerView(discord.ui.View):
     pass
 
   @discord.ui.button(
-    label="ÐÐ°Ð»Ñ",
+    label="\u0414\u0430\u043b\u0456",
     style=discord.ButtonStyle.secondary,
-    emoji="â¶ï¸",
+    emoji="\u25b6\ufe0f",
     row=1,
   )
   async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -3132,32 +3132,32 @@ class DeleteTypeConfirmView(discord.ui.View):
     super().__init__(timeout=60)
     self.type_id = type_id
 
-  @discord.ui.button(label="Ð¢Ð°Ðº, Ð²Ð¸Ð´Ð°Ð»Ð¸ÑÐ¸", style=discord.ButtonStyle.danger, emoji="ðï¸")
+  @discord.ui.button(label="\u0422\u0430\u043a, \u0432\u0438\u0434\u0430\u043b\u0438\u0442\u0438", style=discord.ButtonStyle.danger, emoji="\U0001f5d1\ufe0f")
   async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.edit_message(content="â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", view=None)
+      await interaction.response.edit_message(content="\u274c \u041d\u0435\u043c\u0430\u0454 \u043f\u0440\u0430\u0432\u0430.", view=None)
       return
 
     row = db.get_contract_type(self.type_id)
     db.archive_contract_type(self.type_id)
     await audit_log(
       interaction.guild,
-      "ðï¸ Ð¢Ð¸Ð¿ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ Ð¿ÑÐ¸Ð±ÑÐ°Ð½Ð¾",
+      "\U0001f5d1\ufe0f \u0422\u0438\u043f \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443 \u043f\u0440\u0438\u0431\u0440\u0430\u043d\u043e",
       (
         f"**{row['name'] if row else self.type_id}**\n"
-        f"ÐÑÐ¸Ð±ÑÐ°Ð²/Ð»Ð°: <@{interaction.user.id}>"
+        f"\u041f\u0440\u0438\u0431\u0440\u0430\u0432/\u043b\u0430: <@{interaction.user.id}>"
       ),
       discord.Color.red(),
     )
     await interaction.response.edit_message(
-      content="â ÐÐ¾Ð½ÑÑÐ°ÐºÑ Ð¿ÑÐ¸Ð±ÑÐ°Ð½Ð¾ Ð· Ð¿ÐµÑÐµÐ»ÑÐºÑ. Ð¡ÑÐ°ÑÑ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð½Ð½Ñ Ð·Ð°Ð»Ð¸ÑÐ¸Ð»Ð¸ÑÑ Ð² ÑÑÑÐ¾ÑÑÑ.",
+      content="\u2705 \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u043f\u0440\u0438\u0431\u0440\u0430\u043d\u043e \u0437 \u043f\u0435\u0440\u0435\u043b\u0456\u043a\u0443. \u0421\u0442\u0430\u0440\u0456 \u0432\u0438\u043a\u043e\u043d\u0430\u043d\u043d\u044f \u0437\u0430\u043b\u0438\u0448\u0438\u043b\u0438\u0441\u044f \u0432 \u0456\u0441\u0442\u043e\u0440\u0456\u0457.",
       embed=None,
       view=None,
     )
 
-  @discord.ui.button(label="ÐÑ", style=discord.ButtonStyle.secondary)
+  @discord.ui.button(label="\u041d\u0456", style=discord.ButtonStyle.secondary)
   async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
-    await interaction.response.edit_message(content="ÐÐ¸Ð´Ð°Ð»ÐµÐ½Ð½Ñ Ð²ÑÐ´Ð¼ÑÐ½ÐµÐ½Ð¾.", embed=None, view=None)
+    await interaction.response.edit_message(content="\u0412\u0438\u0434\u0430\u043b\u0435\u043d\u043d\u044f \u0432\u0456\u0434\u043c\u0456\u043d\u0435\u043d\u043e.", embed=None, view=None)
 
 
 class ManageOneTypeView(discord.ui.View):
@@ -3166,32 +3166,32 @@ class ManageOneTypeView(discord.ui.View):
     self.type_id = type_id
     self.return_page = return_page
 
-  @discord.ui.button(label="Ð ÐµÐ´Ð°Ð³ÑÐ²Ð°ÑÐ¸", style=discord.ButtonStyle.primary, emoji="âï¸")
+  @discord.ui.button(label="\u0420\u0435\u0434\u0430\u0433\u0443\u0432\u0430\u0442\u0438", style=discord.ButtonStyle.primary, emoji="\u270f\ufe0f")
   async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.send_message("â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", ephemeral=True)
+      await interaction.response.send_message("\u274c \u041d\u0435\u043c\u0430\u0454 \u043f\u0440\u0430\u0432\u0430.", ephemeral=True)
       return
 
-    # Ð¢ÑÑ ÑÐ¾ÑÐ¼Ð° Ð·Ð°Ð»Ð¸ÑÐ°ÑÑÑÑÑ, Ð±Ð¾ Discord Ð´Ð¾Ð·Ð²Ð¾Ð»ÑÑ Ð²Ð²Ð¾Ð´Ð¸ÑÐ¸ Ð½Ð°Ð·Ð²Ñ/ÑÑÐ½Ñ/ÐÐ
-    # ÑÐ°Ð¼Ðµ ÑÐµÑÐµÐ· Modal. ÐÐ»Ðµ Ð¿Ð¾ÑÑÐºÑ ÑÐµÑÐµÐ· Ð¾ÐºÑÐµÐ¼Ðµ Ð²ÑÐºÐ½Ð¾ Ð±ÑÐ»ÑÑÐµ Ð½ÐµÐ¼Ð°Ñ.
+    # \u0422\u0443\u0442 \u0444\u043e\u0440\u043c\u0430 \u0437\u0430\u043b\u0438\u0448\u0430\u0454\u0442\u044c\u0441\u044f, \u0431\u043e Discord \u0434\u043e\u0437\u0432\u043e\u043b\u044f\u0454 \u0432\u0432\u043e\u0434\u0438\u0442\u0438 \u043d\u0430\u0437\u0432\u0443/\u0446\u0456\u043d\u0443/\u041a\u0414
+    # \u0441\u0430\u043c\u0435 \u0447\u0435\u0440\u0435\u0437 Modal. \u0410\u043b\u0435 \u043f\u043e\u0448\u0443\u043a\u0443 \u0447\u0435\u0440\u0435\u0437 \u043e\u043a\u0440\u0435\u043c\u0435 \u0432\u0456\u043a\u043d\u043e \u0431\u0456\u043b\u044c\u0448\u0435 \u043d\u0435\u043c\u0430\u0454.
     await interaction.response.send_modal(
       ContractTypeModal("edit", interaction.user.id, self.type_id)
     )
 
-  @discord.ui.button(label="ÐÐ¸Ð´Ð°Ð»Ð¸ÑÐ¸", style=discord.ButtonStyle.danger, emoji="ðï¸")
+  @discord.ui.button(label="\u0412\u0438\u0434\u0430\u043b\u0438\u0442\u0438", style=discord.ButtonStyle.danger, emoji="\U0001f5d1\ufe0f")
   async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.send_message("â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", ephemeral=True)
+      await interaction.response.send_message("\u274c \u041d\u0435\u043c\u0430\u0454 \u043f\u0440\u0430\u0432\u0430.", ephemeral=True)
       return
 
     row = db.get_contract_type(self.type_id)
     await interaction.response.edit_message(
-      content=f"â ï¸ ÐÑÐ¸Ð±ÑÐ°ÑÐ¸ **{row['name']}** Ð· Ð¿ÐµÑÐµÐ»ÑÐºÑ?",
+      content=f"\u26a0\ufe0f \u041f\u0440\u0438\u0431\u0440\u0430\u0442\u0438 **{row['name']}** \u0437 \u043f\u0435\u0440\u0435\u043b\u0456\u043a\u0443?",
       embed=None,
       view=DeleteTypeConfirmView(self.type_id),
     )
 
-  @discord.ui.button(label="ÐÐ¾ ÑÐ¿Ð¸ÑÐºÑ", style=discord.ButtonStyle.secondary, emoji="â©ï¸")
+  @discord.ui.button(label="\u0414\u043e \u0441\u043f\u0438\u0441\u043a\u0443", style=discord.ButtonStyle.secondary, emoji="\u21a9\ufe0f")
   async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
     _, page, total_pages = admin_picker_page_data(self.return_page)
     await interaction.response.edit_message(
@@ -3206,42 +3206,42 @@ class ResetRatingConfirmView(discord.ui.View):
     super().__init__(timeout=60)
 
   @discord.ui.button(
-    label="Ð¢Ð°Ðº, Ð¾Ð±Ð½ÑÐ»Ð¸ÑÐ¸ ÑÐµÐ¹ÑÐ¸Ð½Ð³",
+    label="\u0422\u0430\u043a, \u043e\u0431\u043d\u0443\u043b\u0438\u0442\u0438 \u0440\u0435\u0439\u0442\u0438\u043d\u0433",
     style=discord.ButtonStyle.danger,
-    emoji="â»ï¸",
+    emoji="\u267b\ufe0f",
   )
   async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.edit_message(content="â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", view=None)
+      await interaction.response.edit_message(content="\u274c \u041d\u0435\u043c\u0430\u0454 \u043f\u0440\u0430\u0432\u0430.", view=None)
       return
 
     if interaction.guild is None:
-      await interaction.response.edit_message(content="â Ð¦Ðµ Ð¿ÑÐ°ÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð½Ð° ÑÐµÑÐ²ÐµÑÑ.", view=None)
+      await interaction.response.edit_message(content="\u274c \u0426\u0435 \u043f\u0440\u0430\u0446\u044e\u0454 \u0442\u0456\u043b\u044c\u043a\u0438 \u043d\u0430 \u0441\u0435\u0440\u0432\u0435\u0440\u0456.", view=None)
       return
 
     reset_at = utc_now_iso()
     db.set_setting(interaction.guild.id, "rating_reset_at", reset_at)
     reset_ts = iso_to_unix(reset_at)
 
-    when = f"<t:{reset_ts}:f>" if reset_ts else "Ð·Ð°ÑÐ°Ð·"
+    when = f"<t:{reset_ts}:f>" if reset_ts else "\u0437\u0430\u0440\u0430\u0437"
     await audit_log(
       interaction.guild,
-      "â»ï¸ Ð ÐµÐ¹ÑÐ¸Ð½Ð³ Ð¾Ð±Ð½ÑÐ»ÐµÐ½Ð¾",
-      f"ÐÐ±Ð½ÑÐ»Ð¸Ð²/Ð»Ð°: <@{interaction.user.id}>",
+      "\u267b\ufe0f \u0420\u0435\u0439\u0442\u0438\u043d\u0433 \u043e\u0431\u043d\u0443\u043b\u0435\u043d\u043e",
+      f"\u041e\u0431\u043d\u0443\u043b\u0438\u0432/\u043b\u0430: <@{interaction.user.id}>",
       discord.Color.red(),
     )
     await interaction.response.edit_message(
       content=(
-        f"â Ð ÐµÐ¹ÑÐ¸Ð½Ð³ Ð¾Ð±Ð½ÑÐ»ÐµÐ½Ð¾ {when}.\n"
-        "Ð¡ÑÐ°ÑÑ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ¸ ÑÐ° ÑÑÐ½Ð°Ð½ÑÐ¸ Ð½Ðµ Ð·Ð¼ÑÐ½ÐµÐ½Ñ. "
-        "Ð ÑÑÐ¾Ð³Ð¾ Ð¼Ð¾Ð¼ÐµÐ½ÑÑ Ð· Ð½ÑÐ»Ñ ÑÐ°ÑÑÑÑÑÑÑ ÑÑÐ»ÑÐºÐ¸ ÑÐµÐ¹ÑÐ¸Ð½Ð³ Ð·Ð° Ð±Ð°Ð»Ð°Ð¼Ð¸."
+        f"\u2705 \u0420\u0435\u0439\u0442\u0438\u043d\u0433 \u043e\u0431\u043d\u0443\u043b\u0435\u043d\u043e {when}.\n"
+        "\u0421\u0442\u0430\u0440\u0456 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438 \u0442\u0430 \u0444\u0456\u043d\u0430\u043d\u0441\u0438 \u043d\u0435 \u0437\u043c\u0456\u043d\u0435\u043d\u0456. "
+        "\u0417 \u0446\u044c\u043e\u0433\u043e \u043c\u043e\u043c\u0435\u043d\u0442\u0443 \u0437 \u043d\u0443\u043b\u044f \u0440\u0430\u0445\u0443\u0454\u0442\u044c\u0441\u044f \u0442\u0456\u043b\u044c\u043a\u0438 \u0440\u0435\u0439\u0442\u0438\u043d\u0433 \u0437\u0430 \u0431\u0430\u043b\u0430\u043c\u0438."
       ),
       view=None,
     )
 
-  @discord.ui.button(label="ÐÑ", style=discord.ButtonStyle.secondary)
+  @discord.ui.button(label="\u041d\u0456", style=discord.ButtonStyle.secondary)
   async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-    await interaction.response.edit_message(content="ÐÐ±Ð½ÑÐ»ÐµÐ½Ð½Ñ ÑÐµÐ¹ÑÐ¸Ð½Ð³Ñ ÑÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¾.", view=None)
+    await interaction.response.edit_message(content="\u041e\u0431\u043d\u0443\u043b\u0435\u043d\u043d\u044f \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443 \u0441\u043a\u0430\u0441\u043e\u0432\u0430\u043d\u043e.", view=None)
 
 
 class ResetEarningsConfirmView(discord.ui.View):
@@ -3249,18 +3249,18 @@ class ResetEarningsConfirmView(discord.ui.View):
     super().__init__(timeout=60)
 
   @discord.ui.button(
-    label="Ð¢Ð°Ðº, Ð¾Ð±Ð½ÑÐ»Ð¸ÑÐ¸ Ð·Ð°ÑÐ¾Ð±ÑÑÐ¾Ðº",
+    label="\u0422\u0430\u043a, \u043e\u0431\u043d\u0443\u043b\u0438\u0442\u0438 \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a",
     style=discord.ButtonStyle.danger,
-    emoji="ð¸",
+    emoji="\U0001f4b8",
   )
   async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.edit_message(content="â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", view=None)
+      await interaction.response.edit_message(content="\u274c \u041d\u0435\u043c\u0430\u0454 \u043f\u0440\u0430\u0432\u0430.", view=None)
       return
 
     if interaction.guild is None:
       await interaction.response.edit_message(
-        content="â Ð¦Ðµ Ð¿ÑÐ°ÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð½Ð° ÑÐµÑÐ²ÐµÑÑ.",
+        content="\u274c \u0426\u0435 \u043f\u0440\u0430\u0446\u044e\u0454 \u0442\u0456\u043b\u044c\u043a\u0438 \u043d\u0430 \u0441\u0435\u0440\u0432\u0435\u0440\u0456.",
         view=None,
       )
       return
@@ -3268,29 +3268,29 @@ class ResetEarningsConfirmView(discord.ui.View):
     reset_at = utc_now_iso()
     db.set_setting(interaction.guild.id, "earnings_reset_at", reset_at)
     reset_ts = iso_to_unix(reset_at)
-    when = f"<t:{reset_ts}:f>" if reset_ts else "Ð·Ð°ÑÐ°Ð·"
+    when = f"<t:{reset_ts}:f>" if reset_ts else "\u0437\u0430\u0440\u0430\u0437"
 
     await audit_log(
       interaction.guild,
-      "ð¸ ÐÐ°ÑÐ¾Ð±ÑÑÐ¾Ðº Ð¾Ð±Ð½ÑÐ»ÐµÐ½Ð¾",
-      f"ÐÐ±Ð½ÑÐ»Ð¸Ð²/Ð»Ð°: <@{interaction.user.id}>",
+      "\U0001f4b8 \u0417\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a \u043e\u0431\u043d\u0443\u043b\u0435\u043d\u043e",
+      f"\u041e\u0431\u043d\u0443\u043b\u0438\u0432/\u043b\u0430: <@{interaction.user.id}>",
       discord.Color.red(),
     )
 
     await interaction.response.edit_message(
       content=(
-        f"â ÐÐ°ÑÐ¾Ð±ÑÑÐ¾Ðº Ð¾Ð±Ð½ÑÐ»ÐµÐ½Ð¾ {when}.\n"
-        "ÐÑÑÐ¾ÑÑÑ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ² ÑÐ° Ð¾Ð¿Ð»Ð°Ñ Ð½Ðµ Ð²Ð¸Ð´Ð°Ð»ÐµÐ½Ð°. "
-        "Ð ÑÑÐ¾Ð³Ð¾ Ð¼Ð¾Ð¼ÐµÐ½ÑÑ Ð· Ð½ÑÐ»Ñ ÑÐ°ÑÑÑÑÑÑÑ Ð·Ð°Ð³Ð°Ð»ÑÐ½Ð¸Ð¹ Ð·Ð°ÑÐ¾Ð±ÑÑÐ¾Ðº, "
-        "ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ ÑÐ° Ð·Ð°ÑÐ¾Ð±ÑÑÐ¾Ðº ÐºÐ¾Ð¶Ð½Ð¾Ð³Ð¾ ÑÑÐ°ÑÐ½Ð¸ÐºÐ°."
+        f"\u2705 \u0417\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a \u043e\u0431\u043d\u0443\u043b\u0435\u043d\u043e {when}.\n"
+        "\u0406\u0441\u0442\u043e\u0440\u0456\u044f \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432 \u0442\u0430 \u043e\u043f\u043b\u0430\u0442 \u043d\u0435 \u0432\u0438\u0434\u0430\u043b\u0435\u043d\u0430. "
+        "\u0417 \u0446\u044c\u043e\u0433\u043e \u043c\u043e\u043c\u0435\u043d\u0442\u0443 \u0437 \u043d\u0443\u043b\u044f \u0440\u0430\u0445\u0443\u044e\u0442\u044c\u0441\u044f \u0437\u0430\u0433\u0430\u043b\u044c\u043d\u0438\u0439 \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a, "
+        "\u0411\u0430\u043d\u043a \u0441\u0456\u043c'\u0457 \u0442\u0430 \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a \u043a\u043e\u0436\u043d\u043e\u0433\u043e \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430."
       ),
       view=None,
     )
 
-  @discord.ui.button(label="ÐÑ", style=discord.ButtonStyle.secondary)
+  @discord.ui.button(label="\u041d\u0456", style=discord.ButtonStyle.secondary)
   async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
     await interaction.response.edit_message(
-      content="ÐÐ±Ð½ÑÐ»ÐµÐ½Ð½Ñ Ð·Ð°ÑÐ¾Ð±ÑÑÐºÑ ÑÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¾.",
+      content="\u041e\u0431\u043d\u0443\u043b\u0435\u043d\u043d\u044f \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043a\u0443 \u0441\u043a\u0430\u0441\u043e\u0432\u0430\u043d\u043e.",
       view=None,
     )
 
@@ -3299,27 +3299,27 @@ class ContractAdminPanelView(discord.ui.View):
   def __init__(self):
     super().__init__(timeout=300)
 
-  @discord.ui.button(label="ÐÐ¾Ð´Ð°ÑÐ¸", style=discord.ButtonStyle.success, emoji="â")
+  @discord.ui.button(label="\u0414\u043e\u0434\u0430\u0442\u0438", style=discord.ButtonStyle.success, emoji="\u2795")
   async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.send_message("â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", ephemeral=True)
+      await interaction.response.send_message("\u274c \u041d\u0435\u043c\u0430\u0454 \u043f\u0440\u0430\u0432\u0430.", ephemeral=True)
       return
     await interaction.response.send_modal(ContractTypeModal("add", interaction.user.id))
 
   @discord.ui.button(
-    label="ÐÐµÑÑÐ²Ð°ÑÐ¸ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ°Ð¼Ð¸",
+    label="\u041a\u0435\u0440\u0443\u0432\u0430\u0442\u0438 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0430\u043c\u0438",
     style=discord.ButtonStyle.primary,
-    emoji="ð",
+    emoji="\U0001f4cb",
   )
   async def manage_contracts(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.send_message("â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", ephemeral=True)
+      await interaction.response.send_message("\u274c \u041d\u0435\u043c\u0430\u0454 \u043f\u0440\u0430\u0432\u0430.", ephemeral=True)
       return
 
     rows, page, total_pages = admin_picker_page_data(0)
     if not rows:
       await interaction.response.send_message(
-        "ÐÐ¾ÐºÐ¸ ÑÐ¾ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ² Ð½ÐµÐ¼Ð°Ñ. Ð¡Ð¿Ð¾ÑÐ°ÑÐºÑ Ð½Ð°ÑÐ¸ÑÐ½ÑÑÑ **â ÐÐ¾Ð´Ð°ÑÐ¸**.",
+        "\u041f\u043e\u043a\u0438 \u0449\u043e \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432 \u043d\u0435\u043c\u0430\u0454. \u0421\u043f\u043e\u0447\u0430\u0442\u043a\u0443 \u043d\u0430\u0442\u0438\u0441\u043d\u0456\u0442\u044c **\u2795 \u0414\u043e\u0434\u0430\u0442\u0438**.",
         ephemeral=True,
       )
       return
@@ -3332,39 +3332,39 @@ class ContractAdminPanelView(discord.ui.View):
 
 
   @discord.ui.button(
-    label="ÐÐ±Ð½ÑÐ»Ð¸ÑÐ¸ ÑÐµÐ¹ÑÐ¸Ð½Ð³",
+    label="\u041e\u0431\u043d\u0443\u043b\u0438\u0442\u0438 \u0440\u0435\u0439\u0442\u0438\u043d\u0433",
     style=discord.ButtonStyle.danger,
-    emoji="â»ï¸",
+    emoji="\u267b\ufe0f",
   )
   async def reset_rating(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.send_message("â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", ephemeral=True)
+      await interaction.response.send_message("\u274c \u041d\u0435\u043c\u0430\u0454 \u043f\u0440\u0430\u0432\u0430.", ephemeral=True)
       return
 
     await interaction.response.send_message(
-      "â ï¸ ÐÐ±Ð½ÑÐ»Ð¸ÑÐ¸ Ð¿Ð¾ÑÐ¾ÑÐ½Ð¸Ð¹ ÑÐµÐ¹ÑÐ¸Ð½Ð³?\n"
-      "ÐÐ¾Ð½ÑÑÐ°ÐºÑÐ¸, Ð²Ð¸Ð¿Ð»Ð°ÑÐ¸ ÑÐ° Ð·Ð°ÑÐ¾Ð±ÑÑÐ¾Ðº Ð·Ð°Ð»Ð¸ÑÐ°ÑÑÑÑ Ð±ÐµÐ· Ð·Ð¼ÑÐ½. "
-      "Ð Ð½ÑÐ»Ñ Ð¿Ð¾ÑÐ½ÑÑÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð±Ð°Ð»Ð¸ ÑÐµÐ¹ÑÐ¸Ð½Ð³Ñ.",
+      "\u26a0\ufe0f \u041e\u0431\u043d\u0443\u043b\u0438\u0442\u0438 \u043f\u043e\u0442\u043e\u0447\u043d\u0438\u0439 \u0440\u0435\u0439\u0442\u0438\u043d\u0433?\n"
+      "\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438, \u0432\u0438\u043f\u043b\u0430\u0442\u0438 \u0442\u0430 \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a \u0437\u0430\u043b\u0438\u0448\u0430\u0442\u044c\u0441\u044f \u0431\u0435\u0437 \u0437\u043c\u0456\u043d. "
+      "\u0417 \u043d\u0443\u043b\u044f \u043f\u043e\u0447\u043d\u0443\u0442\u044c\u0441\u044f \u0442\u0456\u043b\u044c\u043a\u0438 \u0431\u0430\u043b\u0438 \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443.",
       view=ResetRatingConfirmView(),
       ephemeral=True,
     )
 
 
   @discord.ui.button(
-    label="ÐÐ±Ð½ÑÐ»Ð¸ÑÐ¸ Ð·Ð°ÑÐ¾Ð±ÑÑÐ¾Ðº",
+    label="\u041e\u0431\u043d\u0443\u043b\u0438\u0442\u0438 \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a",
     style=discord.ButtonStyle.danger,
-    emoji="ð¸",
+    emoji="\U0001f4b8",
   )
   async def reset_earnings(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.send_message("â ÐÐµÐ¼Ð°Ñ Ð¿ÑÐ°Ð²Ð°.", ephemeral=True)
+      await interaction.response.send_message("\u274c \u041d\u0435\u043c\u0430\u0454 \u043f\u0440\u0430\u0432\u0430.", ephemeral=True)
       return
 
     await interaction.response.send_message(
-      "â ï¸ ÐÐ±Ð½ÑÐ»Ð¸ÑÐ¸ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÑ Ð·Ð°ÑÐ¾Ð±ÑÑÐºÑ?\n"
-      "ÐÐ¾Ð½ÑÑÐ°ÐºÑÐ¸ Ð¹ ÑÑÑÐ¾ÑÑÑ Ð¾Ð¿Ð»Ð°Ñ Ð·Ð°Ð»Ð¸ÑÐ°ÑÑÑÑ Ð² Ð±Ð°Ð·Ñ. "
-      "ÐÐ»Ðµ Ð·Ð°Ð³Ð°Ð»ÑÐ½Ð¸Ð¹ Ð·Ð°ÑÐ¾Ð±ÑÑÐ¾Ðº, ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ ÑÐ° Ð·Ð°ÑÐ¾Ð±ÑÑÐ¾Ðº ÑÑÐ°ÑÐ½Ð¸ÐºÑÐ² "
-      "Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÑÑ Ð¿Ð¾ÑÐ½ÑÑÑÑÑ Ð· Ð½ÑÐ»Ñ.",
+      "\u26a0\ufe0f \u041e\u0431\u043d\u0443\u043b\u0438\u0442\u0438 \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0443 \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043a\u0443?\n"
+      "\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438 \u0439 \u0456\u0441\u0442\u043e\u0440\u0456\u044f \u043e\u043f\u043b\u0430\u0442 \u0437\u0430\u043b\u0438\u0448\u0430\u0442\u044c\u0441\u044f \u0432 \u0431\u0430\u0437\u0456. "
+      "\u0410\u043b\u0435 \u0437\u0430\u0433\u0430\u043b\u044c\u043d\u0438\u0439 \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a, \u0411\u0430\u043d\u043a \u0441\u0456\u043c'\u0457 \u0442\u0430 \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432 "
+      "\u0443 \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u0446\u0456 \u043f\u043e\u0447\u043d\u0443\u0442\u044c\u0441\u044f \u0437 \u043d\u0443\u043b\u044f.",
       view=ResetEarningsConfirmView(),
       ephemeral=True,
     )
@@ -3398,35 +3398,35 @@ def build_public_rating_embed(guild_id: int) -> discord.Embed:
 
   reset_ts = iso_to_unix(rating_reset_at) if rating_reset_at else None
   subtitle = (
-    f"ÐÐ¾ÑÐ¾ÑÐ½Ð¸Ð¹ ÑÐµÐ¹ÑÐ¸Ð½Ð³ â¢ Ð· <t:{reset_ts}:d>"
+    f"\u041f\u043e\u0442\u043e\u0447\u043d\u0438\u0439 \u0440\u0435\u0439\u0442\u0438\u043d\u0433 \u2022 \u0437 <t:{reset_ts}:d>"
     if reset_ts
-    else "ÐÐ¾ÑÐ¾ÑÐ½Ð¸Ð¹ ÑÐµÐ¹ÑÐ¸Ð½Ð³ â¢ Ð²ÑÐ´ Ð¿Ð¾ÑÐ°ÑÐºÑ"
+    else "\u041f\u043e\u0442\u043e\u0447\u043d\u0438\u0439 \u0440\u0435\u0439\u0442\u0438\u043d\u0433 \u2022 \u0432\u0456\u0434 \u043f\u043e\u0447\u0430\u0442\u043a\u0443"
   )
 
   embed = discord.Embed(
-    title="ð Ð ÐµÐ¹ÑÐ¸Ð½Ð³ ÑÑÐ°ÑÐ½Ð¸ÐºÑÐ²",
+    title="\U0001f3c6 \u0420\u0435\u0439\u0442\u0438\u043d\u0433 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432",
     description=subtitle,
     color=discord.Color.gold(),
   )
 
   if not ranking:
     embed.add_field(
-      name="Ð ÐµÐ¹ÑÐ¸Ð½Ð³",
-      value="ÐÐ¾ÐºÐ¸ Ð½ÐµÐ¼Ð°Ñ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð½Ð¸Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ².",
+      name="\u0420\u0435\u0439\u0442\u0438\u043d\u0433",
+      value="\u041f\u043e\u043a\u0438 \u043d\u0435\u043c\u0430\u0454 \u0432\u0438\u043a\u043e\u043d\u0430\u043d\u0438\u0445 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432.",
       inline=False,
     )
     return embed
 
   lines = [
-    f"**{idx}.** <@{uid}> â **{format_points_with_word(points[uid])}**"
+    f"**{idx}.** <@{uid}> \u2014 **{format_points_with_word(points[uid])}**"
     for idx, uid in enumerate(ranking[:25], start=1)
   ]
   embed.add_field(
-    name="Ð¢Ð°Ð±Ð»Ð¸ÑÑ",
+    name="\u0422\u0430\u0431\u043b\u0438\u0446\u044f",
     value="\n".join(lines),
     inline=False,
   )
-  embed.set_footer(text="Ð£ ÑÐµÐ¹ÑÐ¸Ð½Ð³Ñ Ð¿Ð¾ÐºÐ°Ð·ÑÑÑÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð±Ð°Ð»Ð¸.")
+  embed.set_footer(text="\u0423 \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443 \u043f\u043e\u043a\u0430\u0437\u0443\u044e\u0442\u044c\u0441\u044f \u0442\u0456\u043b\u044c\u043a\u0438 \u0431\u0430\u043b\u0438.")
   return embed
 
 
@@ -3560,45 +3560,45 @@ def build_my_stats_embed(guild_id: int, user_id: int) -> discord.Embed:
 
   period_lines = []
   period_lines.append(
-    f"ð Ð ÐµÐ¹ÑÐ¸Ð½Ð³: Ð· <t:{rating_ts}:d>"
+    f"\U0001f3c6 \u0420\u0435\u0439\u0442\u0438\u043d\u0433: \u0437 <t:{rating_ts}:d>"
     if rating_ts
-    else "ð Ð ÐµÐ¹ÑÐ¸Ð½Ð³: Ð²ÑÐ´ Ð¿Ð¾ÑÐ°ÑÐºÑ"
+    else "\U0001f3c6 \u0420\u0435\u0439\u0442\u0438\u043d\u0433: \u0432\u0456\u0434 \u043f\u043e\u0447\u0430\u0442\u043a\u0443"
   )
   period_lines.append(
-    f"ðµ Ð¤ÑÐ½Ð°Ð½ÑÐ¸: Ð· <t:{earnings_ts}:d>"
+    f"\U0001f4b5 \u0424\u0456\u043d\u0430\u043d\u0441\u0438: \u0437 <t:{earnings_ts}:d>"
     if earnings_ts
-    else "ðµ Ð¤ÑÐ½Ð°Ð½ÑÐ¸: Ð²ÑÐ´ Ð¿Ð¾ÑÐ°ÑÐºÑ"
+    else "\U0001f4b5 \u0424\u0456\u043d\u0430\u043d\u0441\u0438: \u0432\u0456\u0434 \u043f\u043e\u0447\u0430\u0442\u043a\u0443"
   )
 
   embed = discord.Embed(
-    title="ð¤ ÐÐ¾Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° â¢ ÐÐ¾ÑÐ¾ÑÐ½Ð¸Ð¹ Ð¿ÐµÑÑÐ¾Ð´",
+    title="\U0001f464 \u041c\u043e\u044f \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u2022 \u041f\u043e\u0442\u043e\u0447\u043d\u0438\u0439 \u043f\u0435\u0440\u0456\u043e\u0434",
     description="\n".join(period_lines),
     color=discord.Color.blurple(),
   )
 
   embed.add_field(
-    name="ð Ð ÐµÐ¹ÑÐ¸Ð½Ð³",
+    name="\U0001f3c6 \u0420\u0435\u0439\u0442\u0438\u043d\u0433",
     value=(
-      (f"ÐÑÑÑÐµ: **#{position}**\n" if position else "ÐÑÑÑÐµ: **â**\n")
-      + f"ÐÐ°Ð»Ð¸: **{format_points_with_word(points[user_id])}**\n"
-      + f"Ð£ÑÐ°ÑÑÐµÐ¹: **{participations[user_id]}**"
+      (f"\u041c\u0456\u0441\u0446\u0435: **#{position}**\n" if position else "\u041c\u0456\u0441\u0446\u0435: **\u2014**\n")
+      + f"\u0411\u0430\u043b\u0438: **{format_points_with_word(points[user_id])}**\n"
+      + f"\u0423\u0447\u0430\u0441\u0442\u0435\u0439: **{participations[user_id]}**"
     ),
     inline=True,
   )
 
   embed.add_field(
-    name="ðµ ÐÐ°ÑÐ¾Ð±ÑÑÐ¾Ðº",
+    name="\U0001f4b5 \u0417\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a",
     value=(
-      f"ÐÑÑÐ¸Ð¼Ð°Ð½Ð¾: **{format_cents(personal_earnings)}**\n"
-      f"ÐÐ¿Ð»Ð°ÑÐµÐ½Ð¸Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ²: **{len(paid_period_rows)}**"
+      f"\u041e\u0442\u0440\u0438\u043c\u0430\u043d\u043e: **{format_cents(personal_earnings)}**\n"
+      f"\u041e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0445 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432: **{len(paid_period_rows)}**"
     ),
     inline=True,
   )
 
   embed.add_field(
-    name="â³ ÐÐ°ÑÐ°Ð·",
+    name="\u23f3 \u0417\u0430\u0440\u0430\u0437",
     value=(
-      f"ÐÑÑÐºÑÑÑÑ Ð¾Ð¿Ð»Ð°ÑÐ¸: **{len(unpaid_now_rows)}**"
+      f"\u041e\u0447\u0456\u043a\u0443\u044e\u0442\u044c \u043e\u043f\u043b\u0430\u0442\u0438: **{len(unpaid_now_rows)}**"
     ),
     inline=False,
   )
@@ -3628,36 +3628,36 @@ def build_my_history_embed(guild_id: int, user_id: int) -> discord.Embed:
   personal_earnings = earnings["member_earnings"].get(user_id, 0)
 
   embed = discord.Embed(
-    title="ðï¸ ÐÐ¾Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° â¢ ÐÑÑÐ¾ÑÑÑ",
-    description="ÐÐ° Ð²ÐµÑÑ ÑÐ°Ñ. ÐÐ±Ð½ÑÐ»ÐµÐ½Ð½Ñ ÑÐµÐ¹ÑÐ¸Ð½Ð³Ñ Ð°Ð±Ð¾ Ð³ÑÐ¾ÑÐµÐ¹ Ð½Ð° ÑÑ Ð²ÐºÐ»Ð°Ð´ÐºÑ Ð½Ðµ Ð²Ð¿Ð»Ð¸Ð²Ð°ÑÑÑ.",
+    title="\U0001f5c2\ufe0f \u041c\u043e\u044f \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u2022 \u0406\u0441\u0442\u043e\u0440\u0456\u044f",
+    description="\u0417\u0430 \u0432\u0435\u0441\u044c \u0447\u0430\u0441. \u041e\u0431\u043d\u0443\u043b\u0435\u043d\u043d\u044f \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443 \u0430\u0431\u043e \u0433\u0440\u043e\u0448\u0435\u0439 \u043d\u0430 \u0446\u044e \u0432\u043a\u043b\u0430\u0434\u043a\u0443 \u043d\u0435 \u0432\u043f\u043b\u0438\u0432\u0430\u044e\u0442\u044c.",
     color=discord.Color.dark_teal(),
   )
 
   embed.add_field(
-    name="ð Ð ÐµÐ¹ÑÐ¸Ð½Ð³ Ð·Ð° Ð²ÐµÑÑ ÑÐ°Ñ",
+    name="\U0001f3c6 \u0420\u0435\u0439\u0442\u0438\u043d\u0433 \u0437\u0430 \u0432\u0435\u0441\u044c \u0447\u0430\u0441",
     value=(
-      (f"ÐÑÑÑÐµ: **#{position}**\n" if position else "ÐÑÑÑÐµ: **â**\n")
-      + f"ÐÐ°Ð»Ð¸: **{format_points_with_word(points[user_id])}**\n"
-      + f"Ð£ÑÐ°ÑÑÐµÐ¹: **{participations[user_id]}**"
+      (f"\u041c\u0456\u0441\u0446\u0435: **#{position}**\n" if position else "\u041c\u0456\u0441\u0446\u0435: **\u2014**\n")
+      + f"\u0411\u0430\u043b\u0438: **{format_points_with_word(points[user_id])}**\n"
+      + f"\u0423\u0447\u0430\u0441\u0442\u0435\u0439: **{participations[user_id]}**"
     ),
     inline=True,
   )
 
   embed.add_field(
-    name="ðµ ÐÐ°ÑÐ¾Ð±ÑÑÐ¾Ðº Ð·Ð° Ð²ÐµÑÑ ÑÐ°Ñ",
+    name="\U0001f4b5 \u0417\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a \u0437\u0430 \u0432\u0435\u0441\u044c \u0447\u0430\u0441",
     value=(
-      f"ÐÑÑÐ¸Ð¼Ð°Ð½Ð¾: **{format_cents(personal_earnings)}**\n"
-      f"ÐÐ¾Ð½ÑÑÐ°ÐºÑÑÐ² Ð¿Ð¾Ð²Ð½ÑÑÑÑ Ð½Ð° ÑÐ°Ð¼Ñ: **{full_family_count}**"
+      f"\u041e\u0442\u0440\u0438\u043c\u0430\u043d\u043e: **{format_cents(personal_earnings)}**\n"
+      f"\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432 \u043f\u043e\u0432\u043d\u0456\u0441\u0442\u044e \u043d\u0430 \u0444\u0430\u043c\u0443: **{full_family_count}**"
     ),
     inline=True,
   )
 
   embed.add_field(
-    name="ð ÐÐ¾Ð½ÑÑÐ°ÐºÑÐ¸ Ð·Ð° Ð²ÐµÑÑ ÑÐ°Ñ",
+    name="\U0001f4cb \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438 \u0437\u0430 \u0432\u0435\u0441\u044c \u0447\u0430\u0441",
     value=(
-      f"Ð£ÑÐ°ÑÑÐµÐ¹: **{len(involved_rows)}**\n"
-      f"ÐÐ¿Ð»Ð°ÑÐµÐ½Ð¾: **{len(paid_rows)}**\n"
-      f"ÐÐµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¾ Ð·Ð°ÑÐ°Ð·: **{len(unpaid_rows)}**"
+      f"\u0423\u0447\u0430\u0441\u0442\u0435\u0439: **{len(involved_rows)}**\n"
+      f"\u041e\u043f\u043b\u0430\u0447\u0435\u043d\u043e: **{len(paid_rows)}**\n"
+      f"\u041d\u0435 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u043e \u0437\u0430\u0440\u0430\u0437: **{len(unpaid_rows)}**"
     ),
     inline=False,
   )
@@ -3703,21 +3703,21 @@ def build_my_daily_stats_embed(guild_id: int, user_id: int, page: int = 0):
   slice_rows = stats[page * page_size:(page + 1) * page_size]
 
   embed = discord.Embed(
-    title="ð ÐÑÐ¹ Ð·Ð°ÑÐ¾Ð±ÑÑÐ¾Ðº â¢ ÐÐ¾ Ð´Ð½ÑÑ",
+    title="\U0001f4c5 \u041c\u0456\u0439 \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a \u2022 \u041f\u043e \u0434\u043d\u044f\u0445",
     color=discord.Color.blurple(),
   )
 
   if not slice_rows:
-    embed.description = "ÐÐ¾ÐºÐ¸ Ð½ÐµÐ¼Ð°Ñ Ð²Ð¸Ð¿Ð»Ð°Ñ."
+    embed.description = "\u041f\u043e\u043a\u0438 \u043d\u0435\u043c\u0430\u0454 \u0432\u0438\u043f\u043b\u0430\u0442."
   else:
     lines = [
-      f"**{format_day(stat['day'])}** â {format_cents(stat['amount'])} â¢ Ð²Ð¸Ð¿Ð»Ð°Ñ: {stat['payments']}"
+      f"**{format_day(stat['day'])}** \u2014 {format_cents(stat['amount'])} \u2022 \u0432\u0438\u043f\u043b\u0430\u0442: {stat['payments']}"
       for stat in slice_rows
     ]
     embed.description = "\n".join(lines)
 
   embed.set_footer(
-    text=f"Ð§Ð°ÑÐ¾Ð²Ð° Ð·Ð¾Ð½Ð°: {TIMEZONE_NAME} â¢ Ð¡ÑÐ¾ÑÑÐ½ÐºÐ° {page + 1}/{total_pages}"
+    text=f"\u0427\u0430\u0441\u043e\u0432\u0430 \u0437\u043e\u043d\u0430: {TIMEZONE_NAME} \u2022 \u0421\u0442\u043e\u0440\u0456\u043d\u043a\u0430 {page + 1}/{total_pages}"
   )
   return embed, page, total_pages
 
@@ -3749,8 +3749,8 @@ class MyStatsView(discord.ui.View):
     self.next_page.disabled = self.mode != "daily" or self.page >= self.total_pages - 1
 
   @discord.ui.button(
-    label="ÐÐ¾ÑÐ¾ÑÐ½Ð°",
-    emoji="ð¤",
+    label="\u041f\u043e\u0442\u043e\u0447\u043d\u0430",
+    emoji="\U0001f464",
     style=discord.ButtonStyle.primary,
     row=0,
   )
@@ -3765,8 +3765,8 @@ class MyStatsView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="ÐÐ¾ Ð´Ð½ÑÑ",
-    emoji="ð",
+    label="\u041f\u043e \u0434\u043d\u044f\u0445",
+    emoji="\U0001f4c5",
     style=discord.ButtonStyle.primary,
     row=0,
   )
@@ -3786,8 +3786,8 @@ class MyStatsView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="ÐÑÑÐ¾ÑÑÑ",
-    emoji="ðï¸",
+    label="\u0406\u0441\u0442\u043e\u0440\u0456\u044f",
+    emoji="\U0001f5c2\ufe0f",
     style=discord.ButtonStyle.secondary,
     row=0,
   )
@@ -3802,8 +3802,8 @@ class MyStatsView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="ÐÐ°Ð·Ð°Ð´",
-    emoji="âï¸",
+    label="\u041d\u0430\u0437\u0430\u0434",
+    emoji="\u25c0\ufe0f",
     style=discord.ButtonStyle.secondary,
     row=1,
   )
@@ -3823,8 +3823,8 @@ class MyStatsView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="ÐÐ°Ð»Ñ",
-    emoji="â¶ï¸",
+    label="\u0414\u0430\u043b\u0456",
+    emoji="\u25b6\ufe0f",
     style=discord.ButtonStyle.secondary,
     row=1,
   )
@@ -3891,53 +3891,53 @@ def build_admin_general_stats_embed(guild_id: int) -> discord.Embed:
 
   description_lines = [
     (
-      f"ð Ð ÐµÐ¹ÑÐ¸Ð½Ð³: Ð· <t:{rating_ts}:d>"
+      f"\U0001f3c6 \u0420\u0435\u0439\u0442\u0438\u043d\u0433: \u0437 <t:{rating_ts}:d>"
       if rating_ts
-      else "ð Ð ÐµÐ¹ÑÐ¸Ð½Ð³: Ð²ÑÐ´ Ð¿Ð¾ÑÐ°ÑÐºÑ"
+      else "\U0001f3c6 \u0420\u0435\u0439\u0442\u0438\u043d\u0433: \u0432\u0456\u0434 \u043f\u043e\u0447\u0430\u0442\u043a\u0443"
     ),
     (
-      f"ðµ Ð¤ÑÐ½Ð°Ð½ÑÐ¸: Ð· <t:{earnings_ts}:d>"
+      f"\U0001f4b5 \u0424\u0456\u043d\u0430\u043d\u0441\u0438: \u0437 <t:{earnings_ts}:d>"
       if earnings_ts
-      else "ðµ Ð¤ÑÐ½Ð°Ð½ÑÐ¸: Ð²ÑÐ´ Ð¿Ð¾ÑÐ°ÑÐºÑ"
+      else "\U0001f4b5 \u0424\u0456\u043d\u0430\u043d\u0441\u0438: \u0432\u0456\u0434 \u043f\u043e\u0447\u0430\u0442\u043a\u0443"
     ),
   ]
 
   embed = discord.Embed(
-    title="ð Ð¡ÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° â¢ ÐÐ¾ÑÐ¾ÑÐ½Ð¸Ð¹ Ð¿ÐµÑÑÐ¾Ð´",
+    title="\U0001f4ca \u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u2022 \u041f\u043e\u0442\u043e\u0447\u043d\u0438\u0439 \u043f\u0435\u0440\u0456\u043e\u0434",
     description="\n".join(description_lines),
     color=discord.Color.blurple(),
   )
 
   embed.add_field(
-    name="ð ÐÐ¾Ð½ÑÑÐ°ÐºÑÐ¸",
+    name="\U0001f4cb \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438",
     value=(
-      f"ÐÐ¿Ð»Ð°ÑÐµÐ½Ð¾ Ð² Ð¿ÐµÑÑÐ¾Ð´Ñ: **{len(paid_rows)}**\n"
-      f"ÐÐµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¾ Ð·Ð°ÑÐ°Ð·: **{len(unpaid_rows)}**\n"
-      f"ÐÐ¾Ð²Ð½ÑÑÑÑ Ð½Ð° ÑÐ°Ð¼Ñ: **{full_family_count}**"
+      f"\u041e\u043f\u043b\u0430\u0447\u0435\u043d\u043e \u0432 \u043f\u0435\u0440\u0456\u043e\u0434\u0456: **{len(paid_rows)}**\n"
+      f"\u041d\u0435 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u043e \u0437\u0430\u0440\u0430\u0437: **{len(unpaid_rows)}**\n"
+      f"\u041f\u043e\u0432\u043d\u0456\u0441\u0442\u044e \u043d\u0430 \u0444\u0430\u043c\u0443: **{full_family_count}**"
     ),
     inline=True,
   )
 
   embed.add_field(
-    name="ð¥ ÐÐºÑÐ¸Ð²Ð½ÑÑÑÑ",
+    name="\U0001f465 \u0410\u043a\u0442\u0438\u0432\u043d\u0456\u0441\u0442\u044c",
     value=(
-      f"Ð£ÑÐ°ÑÐ½Ð¸ÐºÑÐ² Ñ ÑÐµÐ¹ÑÐ¸Ð½Ð³Ñ: **{len(active_users)}**\n"
-      f"Ð£ÑÐ°ÑÑÐµÐ¹ Ñ ÑÐµÐ¹ÑÐ¸Ð½Ð³Ñ: **{sum(participations.values())}**\n"
-      f"Ð¡ÐµÑÐµÐ´Ð½Ñ ÐºÐ¾Ð¼Ð°Ð½Ð´Ð°: **{avg_team:.1f}**\n"
-      f"ÐÐ¿Ð»Ð°Ñ Ð· Ð²Ð¸Ð½ÑÑÐºÐ°Ð¼Ð¸: **{exception_count}**\n"
-      f"ÐÐ°Ð»Ð°ÑÑÐ¾Ð²Ð°Ð½Ð¸Ñ Ð¾Ð¿Ð»Ð°Ñ: **{custom_count}**"
+      f"\u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432 \u0443 \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443: **{len(active_users)}**\n"
+      f"\u0423\u0447\u0430\u0441\u0442\u0435\u0439 \u0443 \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443: **{sum(participations.values())}**\n"
+      f"\u0421\u0435\u0440\u0435\u0434\u043d\u044f \u043a\u043e\u043c\u0430\u043d\u0434\u0430: **{avg_team:.1f}**\n"
+      f"\u041e\u043f\u043b\u0430\u0442 \u0437 \u0432\u0438\u043d\u044f\u0442\u043a\u0430\u043c\u0438: **{exception_count}**\n"
+      f"\u041d\u0430\u043b\u0430\u0448\u0442\u043e\u0432\u0430\u043d\u0438\u0445 \u043e\u043f\u043b\u0430\u0442: **{custom_count}**"
     ),
     inline=True,
   )
 
   embed.add_field(
-    name="ð° Ð¤ÑÐ½Ð°Ð½ÑÐ¸",
+    name="\U0001f4b0 \u0424\u0456\u043d\u0430\u043d\u0441\u0438",
     value=(
-      f"ÐÐ°Ð³Ð°Ð»Ð¾Ð¼ Ð¿Ð¾ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ°Ñ: **{format_cents(gross)}**\n"
-      f"ÐÐ° ÑÐ°Ð¼Ñ: **{format_cents(family)}**\n"
-      f"Ð£ÑÐ°ÑÐ½Ð¸ÐºÐ°Ð¼: **{format_cents(members)}**\n"
-      f"ÐÑÑÐºÑÑ Ð¾Ð¿Ð»Ð°ÑÐ¸: **{format_cents(unpaid)}**\n"
-      f"Ð¡ÐµÑÐµÐ´Ð½ÑÐ¹ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ: **{format_cents(avg_contract)}**"
+      f"\u0417\u0430\u0433\u0430\u043b\u043e\u043c \u043f\u043e \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0430\u0445: **{format_cents(gross)}**\n"
+      f"\u041d\u0430 \u0444\u0430\u043c\u0443: **{format_cents(family)}**\n"
+      f"\u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c: **{format_cents(members)}**\n"
+      f"\u041e\u0447\u0456\u043a\u0443\u0454 \u043e\u043f\u043b\u0430\u0442\u0438: **{format_cents(unpaid)}**\n"
+      f"\u0421\u0435\u0440\u0435\u0434\u043d\u0456\u0439 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0439 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442: **{format_cents(avg_contract)}**"
     ),
     inline=False,
   )
@@ -4003,53 +4003,53 @@ def build_admin_history_embed(guild_id: int) -> discord.Embed:
   )[:5]
 
   embed = discord.Embed(
-    title="ðï¸ Ð¡ÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° â¢ ÐÑÑÐ¾ÑÑÑ",
-    description="ÐÐ° Ð²ÐµÑÑ ÑÐ°Ñ. ÐÐ±Ð½ÑÐ»ÐµÐ½Ð½Ñ ÑÐµÐ¹ÑÐ¸Ð½Ð³Ñ ÑÐ° Ð³ÑÐ¾ÑÐµÐ¹ ÑÑ Ð´Ð°Ð½Ñ Ð½Ðµ ÑÑÐ¸ÑÐ°ÑÑÑ.",
+    title="\U0001f5c2\ufe0f \u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u2022 \u0406\u0441\u0442\u043e\u0440\u0456\u044f",
+    description="\u0417\u0430 \u0432\u0435\u0441\u044c \u0447\u0430\u0441. \u041e\u0431\u043d\u0443\u043b\u0435\u043d\u043d\u044f \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443 \u0442\u0430 \u0433\u0440\u043e\u0448\u0435\u0439 \u0446\u0456 \u0434\u0430\u043d\u0456 \u043d\u0435 \u0441\u0442\u0438\u0440\u0430\u044e\u0442\u044c.",
     color=discord.Color.dark_teal(),
   )
 
   embed.add_field(
-    name="ð ÐÐ¾Ð½ÑÑÐ°ÐºÑÐ¸ Ð·Ð° Ð²ÐµÑÑ ÑÐ°Ñ",
+    name="\U0001f4cb \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438 \u0437\u0430 \u0432\u0435\u0441\u044c \u0447\u0430\u0441",
     value=(
-      f"ÐÑÑÐ¾Ð³Ð¾ Ð´ÑÐ¹ÑÐ½Ð¸Ñ: **{len(valid_rows)}**\n"
-      f"ÐÐ¿Ð»Ð°ÑÐµÐ½Ð¾: **{len(paid_rows)}**\n"
-      f"ÐÐµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¾ Ð·Ð°ÑÐ°Ð·: **{len(unpaid_rows)}**\n"
-      f"Ð¡ÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¾: **{len(cancelled)}**\n"
-      f"ÐÐ½ÑÐ»ÑÐ¾Ð²Ð°Ð½Ð¾ Ð¿ÑÑÐ»Ñ Ð¾Ð¿Ð»Ð°ÑÐ¸: **{len(annulled)}**"
+      f"\u0412\u0441\u044c\u043e\u0433\u043e \u0434\u0456\u0439\u0441\u043d\u0438\u0445: **{len(valid_rows)}**\n"
+      f"\u041e\u043f\u043b\u0430\u0447\u0435\u043d\u043e: **{len(paid_rows)}**\n"
+      f"\u041d\u0435 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u043e \u0437\u0430\u0440\u0430\u0437: **{len(unpaid_rows)}**\n"
+      f"\u0421\u043a\u0430\u0441\u043e\u0432\u0430\u043d\u043e: **{len(cancelled)}**\n"
+      f"\u0410\u043d\u0443\u043b\u044c\u043e\u0432\u0430\u043d\u043e \u043f\u0456\u0441\u043b\u044f \u043e\u043f\u043b\u0430\u0442\u0438: **{len(annulled)}**"
     ),
     inline=True,
   )
 
   embed.add_field(
-    name="ð¥ ÐÐºÑÐ¸Ð²Ð½ÑÑÑÑ Ð·Ð° Ð²ÐµÑÑ ÑÐ°Ñ",
+    name="\U0001f465 \u0410\u043a\u0442\u0438\u0432\u043d\u0456\u0441\u0442\u044c \u0437\u0430 \u0432\u0435\u0441\u044c \u0447\u0430\u0441",
     value=(
-      f"Ð£ÑÐ°ÑÐ½Ð¸ÐºÑÐ²: **{len(active_users)}**\n"
-      f"Ð£ÑÐ°ÑÑÐµÐ¹: **{sum(participations.values())}**\n"
-      f"Ð¡ÐµÑÐµÐ´Ð½Ñ ÐºÐ¾Ð¼Ð°Ð½Ð´Ð°: **{avg_team:.1f}**\n"
-      f"ÐÐ¿Ð»Ð°Ñ Ð· Ð²Ð¸Ð½ÑÑÐºÐ°Ð¼Ð¸: **{exception_count}**\n"
-      f"ÐÐ¾Ð²Ð½ÑÑÑÑ Ð½Ð° ÑÐ°Ð¼Ñ: **{full_family_count}**"
+      f"\u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432: **{len(active_users)}**\n"
+      f"\u0423\u0447\u0430\u0441\u0442\u0435\u0439: **{sum(participations.values())}**\n"
+      f"\u0421\u0435\u0440\u0435\u0434\u043d\u044f \u043a\u043e\u043c\u0430\u043d\u0434\u0430: **{avg_team:.1f}**\n"
+      f"\u041e\u043f\u043b\u0430\u0442 \u0437 \u0432\u0438\u043d\u044f\u0442\u043a\u0430\u043c\u0438: **{exception_count}**\n"
+      f"\u041f\u043e\u0432\u043d\u0456\u0441\u0442\u044e \u043d\u0430 \u0444\u0430\u043c\u0443: **{full_family_count}**"
     ),
     inline=True,
   )
 
   embed.add_field(
-    name="ð° Ð¤ÑÐ½Ð°Ð½ÑÐ¸ Ð·Ð° Ð²ÐµÑÑ ÑÐ°Ñ",
+    name="\U0001f4b0 \u0424\u0456\u043d\u0430\u043d\u0441\u0438 \u0437\u0430 \u0432\u0435\u0441\u044c \u0447\u0430\u0441",
     value=(
-      f"ÐÐ°Ð³Ð°Ð»Ð¾Ð¼ Ð¿Ð¾ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ°Ñ: **{format_cents(gross)}**\n"
-      f"ÐÐ° ÑÐ°Ð¼Ñ: **{format_cents(family)}**\n"
-      f"Ð£ÑÐ°ÑÐ½Ð¸ÐºÐ°Ð¼: **{format_cents(members)}**\n"
-      f"ÐÐµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¾ Ð·Ð°ÑÐ°Ð·: **{format_cents(unpaid)}**"
+      f"\u0417\u0430\u0433\u0430\u043b\u043e\u043c \u043f\u043e \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0430\u0445: **{format_cents(gross)}**\n"
+      f"\u041d\u0430 \u0444\u0430\u043c\u0443: **{format_cents(family)}**\n"
+      f"\u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c: **{format_cents(members)}**\n"
+      f"\u041d\u0435 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u043e \u0437\u0430\u0440\u0430\u0437: **{format_cents(unpaid)}**"
     ),
     inline=False,
   )
 
   if rating_users:
     rating_lines = [
-      f"**{idx}.** <@{uid}> â **{format_points_with_word(points[uid])}**"
+      f"**{idx}.** <@{uid}> \u2014 **{format_points_with_word(points[uid])}**"
       for idx, uid in enumerate(rating_users[:5], start=1)
     ]
     embed.add_field(
-      name="ð Ð¢Ð¾Ð¿ ÑÐµÐ¹ÑÐ¸Ð½Ð³Ñ Ð·Ð° Ð²ÐµÑÑ ÑÐ°Ñ",
+      name="\U0001f3c6 \u0422\u043e\u043f \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443 \u0437\u0430 \u0432\u0435\u0441\u044c \u0447\u0430\u0441",
       value="\n".join(rating_lines),
       inline=False,
     )
@@ -4057,13 +4057,13 @@ def build_admin_history_embed(guild_id: int) -> discord.Embed:
   if top_contracts:
     contract_lines = [
       (
-        f"**{idx}. {name}** â {format_cents(stat['gross'])} "
-        f"â¢ {stat['count']} ÑÐ°Ð·(Ð¸)"
+        f"**{idx}. {name}** \u2014 {format_cents(stat['gross'])} "
+        f"\u2022 {stat['count']} \u0440\u0430\u0437(\u0438)"
       )
       for idx, (name, stat) in enumerate(top_contracts, start=1)
     ]
     embed.add_field(
-      name="ð Ð¢Ð¾Ð¿ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ² Ð·Ð° Ð²ÐµÑÑ ÑÐ°Ñ",
+      name="\U0001f4cb \u0422\u043e\u043f \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432 \u0437\u0430 \u0432\u0435\u0441\u044c \u0447\u0430\u0441",
       value="\n".join(contract_lines),
       inline=False,
     )
@@ -4109,30 +4109,30 @@ def build_contract_stats_embed(guild_id: int, page: int = 0):
   slice_rows = stats[page * page_size:(page + 1) * page_size]
 
   embed = discord.Embed(
-    title="ð Ð¡ÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° â¢ ÐÐ¾ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ°Ñ",
+    title="\U0001f4cb \u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u2022 \u041f\u043e \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0430\u0445",
     description=(
-      "ÐÐ»Ñ ÐºÐ¾Ð¶Ð½Ð¾Ð³Ð¾ ÑÐ¸Ð¿Ñ: Ð·Ð°Ð³Ð°Ð»ÑÐ½Ð¸Ð¹ Ð¾Ð±Ð¾ÑÐ¾Ñ Ñ ÑÐºÑÐ»ÑÐºÐ¸ Ð· Ð½ÑÐ¾Ð³Ð¾ Ð¿ÑÑÐ»Ð¾ Ð½Ð° ÑÐ°Ð¼Ñ."
+      "\u0414\u043b\u044f \u043a\u043e\u0436\u043d\u043e\u0433\u043e \u0442\u0438\u043f\u0443: \u0437\u0430\u0433\u0430\u043b\u044c\u043d\u0438\u0439 \u043e\u0431\u043e\u0440\u043e\u0442 \u0456 \u0441\u043a\u0456\u043b\u044c\u043a\u0438 \u0437 \u043d\u044c\u043e\u0433\u043e \u043f\u0456\u0448\u043b\u043e \u043d\u0430 \u0444\u0430\u043c\u0443."
     ),
     color=discord.Color.blurple(),
   )
 
   if not slice_rows:
-    embed.description = "Ð©Ðµ Ð½ÐµÐ¼Ð°Ñ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ²."
+    embed.description = "\u0429\u0435 \u043d\u0435\u043c\u0430\u0454 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0445 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432."
   else:
     for stat in slice_rows:
       embed.add_field(
         name=stat["name"],
         value=(
-          f"ÐÐ¿Ð»Ð°ÑÐµÐ½Ð¾: **{stat['count']}**\n"
-          f"ÐÐ°Ð³Ð°Ð»Ð¾Ð¼: **{format_cents(stat['gross'])}**\n"
-          f"ÐÐ° ÑÐ°Ð¼Ñ: **{format_cents(stat['family'])}**\n"
-          f"Ð£ÑÐ°ÑÐ½Ð¸ÐºÐ°Ð¼: **{format_cents(stat['members'])}**\n"
-          f"Ð Ð²Ð¸Ð½ÑÑÐºÐ°Ð¼Ð¸: **{stat['exceptions']}**"
+          f"\u041e\u043f\u043b\u0430\u0447\u0435\u043d\u043e: **{stat['count']}**\n"
+          f"\u0417\u0430\u0433\u0430\u043b\u043e\u043c: **{format_cents(stat['gross'])}**\n"
+          f"\u041d\u0430 \u0444\u0430\u043c\u0443: **{format_cents(stat['family'])}**\n"
+          f"\u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c: **{format_cents(stat['members'])}**\n"
+          f"\u0417 \u0432\u0438\u043d\u044f\u0442\u043a\u0430\u043c\u0438: **{stat['exceptions']}**"
         ),
         inline=True,
       )
 
-  embed.set_footer(text=f"Ð¡ÑÐ¾ÑÑÐ½ÐºÐ° {page + 1}/{total_pages}")
+  embed.set_footer(text=f"\u0421\u0442\u043e\u0440\u0456\u043d\u043a\u0430 {page + 1}/{total_pages}")
   return embed, page, total_pages
 
 
@@ -4191,21 +4191,21 @@ def build_daily_stats_embed(guild_id: int, page: int = 0):
   reset_ts = iso_to_unix(reset_at) if reset_at else None
 
   description = (
-    f"ÐÐ°ÑÐ¾Ð±ÑÑÐ¾Ðº Ð¿Ð¾ Ð´Ð½ÑÑ â¢ Ð· <t:{reset_ts}:d>"
+    f"\u0417\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a \u043f\u043e \u0434\u043d\u044f\u0445 \u2022 \u0437 <t:{reset_ts}:d>"
     if reset_ts
-    else "ÐÐ°ÑÐ¾Ð±ÑÑÐ¾Ðº Ð¿Ð¾ Ð´Ð½ÑÑ â¢ Ð²ÑÐ´ Ð¿Ð¾ÑÐ°ÑÐºÑ"
+    else "\u0417\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a \u043f\u043e \u0434\u043d\u044f\u0445 \u2022 \u0432\u0456\u0434 \u043f\u043e\u0447\u0430\u0442\u043a\u0443"
   )
 
   embed = discord.Embed(
-    title="ð Ð¡ÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° â¢ ÐÐ¾ Ð´Ð½ÑÑ",
+    title="\U0001f4c5 \u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u2022 \u041f\u043e \u0434\u043d\u044f\u0445",
     description=description,
     color=discord.Color.blurple(),
   )
 
   if not slice_rows:
     embed.add_field(
-      name="ÐÐµÐ¼Ð°Ñ Ð´Ð°Ð½Ð¸Ñ",
-      value="Ð©Ðµ Ð½ÐµÐ¼Ð°Ñ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ².",
+      name="\u041d\u0435\u043c\u0430\u0454 \u0434\u0430\u043d\u0438\u0445",
+      value="\u0429\u0435 \u043d\u0435\u043c\u0430\u0454 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0445 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432.",
       inline=False,
     )
   else:
@@ -4213,17 +4213,17 @@ def build_daily_stats_embed(guild_id: int, page: int = 0):
       embed.add_field(
         name=format_day(stat["day"]),
         value=(
-          f"ÐÐ¾Ð½ÑÑÐ°ÐºÑÑÐ²: **{stat['count']}**\n"
-          f"ÐÐ°Ð³Ð°Ð»Ð¾Ð¼: **{format_cents(stat['gross'])}**\n"
-          f"ÐÐ° ÑÐ°Ð¼Ñ: **{format_cents(stat['family'])}**\n"
-          f"Ð£ÑÐ°ÑÐ½Ð¸ÐºÐ°Ð¼: **{format_cents(stat['members'])}**\n"
-          f"ÐÐ¾Ð²Ð½ÑÑÑÑ Ð½Ð° ÑÐ°Ð¼Ñ: **{stat['full_family']}**"
+          f"\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432: **{stat['count']}**\n"
+          f"\u0417\u0430\u0433\u0430\u043b\u043e\u043c: **{format_cents(stat['gross'])}**\n"
+          f"\u041d\u0430 \u0444\u0430\u043c\u0443: **{format_cents(stat['family'])}**\n"
+          f"\u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c: **{format_cents(stat['members'])}**\n"
+          f"\u041f\u043e\u0432\u043d\u0456\u0441\u0442\u044e \u043d\u0430 \u0444\u0430\u043c\u0443: **{stat['full_family']}**"
         ),
         inline=False,
       )
 
   embed.set_footer(
-    text=f"Ð§Ð°ÑÐ¾Ð²Ð° Ð·Ð¾Ð½Ð°: {TIMEZONE_NAME} â¢ Ð¡ÑÐ¾ÑÑÐ½ÐºÐ° {page + 1}/{total_pages}"
+    text=f"\u0427\u0430\u0441\u043e\u0432\u0430 \u0437\u043e\u043d\u0430: {TIMEZONE_NAME} \u2022 \u0421\u0442\u043e\u0440\u0456\u043d\u043a\u0430 {page + 1}/{total_pages}"
   )
   return embed, page, total_pages
 
@@ -4237,10 +4237,10 @@ def build_member_stats_embed(
     earnings = earnings_data_for_guild(guild_id)
 
     embed = discord.Embed(
-      title="ð¥ Ð¡ÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° â¢ Ð£ÑÐ°ÑÐ½Ð¸ÐºÐ¸",
+      title="\U0001f465 \u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u2022 \u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0438",
       description=(
-        "ÐÐ¾ÑÐ¾ÑÐ½Ð¸Ð¹ ÑÐµÐ¹ÑÐ¸Ð½Ð³ Ñ ÑÐ¾Ð¿ Ð·Ð°ÑÐ¾Ð±ÑÑÐºÑ.\n"
-        "ÐÐ»Ñ Ð´ÐµÑÐ°Ð»ÑÐ½Ð¾Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ¸ Ð¾Ð±ÐµÑÑÑÑ ÐºÐ¾Ð½ÐºÑÐµÑÐ½Ñ Ð»ÑÐ´Ð¸Ð½Ñ Ð·Ñ ÑÐ¿Ð¸ÑÐºÑ Ð½Ð¸Ð¶ÑÐµ."
+        "\u041f\u043e\u0442\u043e\u0447\u043d\u0438\u0439 \u0440\u0435\u0439\u0442\u0438\u043d\u0433 \u0456 \u0442\u043e\u043f \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043a\u0443.\n"
+        "\u0414\u043b\u044f \u0434\u0435\u0442\u0430\u043b\u044c\u043d\u043e\u0457 \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0438 \u043e\u0431\u0435\u0440\u0456\u0442\u044c \u043a\u043e\u043d\u043a\u0440\u0435\u0442\u043d\u0443 \u043b\u044e\u0434\u0438\u043d\u0443 \u0437\u0456 \u0441\u043f\u0438\u0441\u043a\u0443 \u043d\u0438\u0436\u0447\u0435."
       ),
       color=discord.Color.blurple(),
     )
@@ -4248,21 +4248,21 @@ def build_member_stats_embed(
     if rating_users:
       rating_lines = [
         (
-          f"**{idx}.** <@{uid}> â "
+          f"**{idx}.** <@{uid}> \u2014 "
           f"**{format_points_with_word(points[uid])}** "
-          f"â¢ {participations[uid]} ÑÑÐ°ÑÑÐµÐ¹"
+          f"\u2022 {participations[uid]} \u0443\u0447\u0430\u0441\u0442\u0435\u0439"
         )
         for idx, uid in enumerate(rating_users[:10], start=1)
       ]
       embed.add_field(
-        name="ð ÐÐ¾ÑÐ¾ÑÐ½Ð¸Ð¹ ÑÐµÐ¹ÑÐ¸Ð½Ð³",
+        name="\U0001f3c6 \u041f\u043e\u0442\u043e\u0447\u043d\u0438\u0439 \u0440\u0435\u0439\u0442\u0438\u043d\u0433",
         value="\n".join(rating_lines),
         inline=False,
       )
     else:
       embed.add_field(
-        name="ð ÐÐ¾ÑÐ¾ÑÐ½Ð¸Ð¹ ÑÐµÐ¹ÑÐ¸Ð½Ð³",
-        value="ÐÐ¾ÐºÐ¸ Ð½ÐµÐ¼Ð°Ñ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð½Ð¸Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ² Ñ Ð¿Ð¾ÑÐ¾ÑÐ½Ð¾Ð¼Ñ Ð¿ÐµÑÑÐ¾Ð´Ñ.",
+        name="\U0001f3c6 \u041f\u043e\u0442\u043e\u0447\u043d\u0438\u0439 \u0440\u0435\u0439\u0442\u0438\u043d\u0433",
+        value="\u041f\u043e\u043a\u0438 \u043d\u0435\u043c\u0430\u0454 \u0432\u0438\u043a\u043e\u043d\u0430\u043d\u0438\u0445 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432 \u0443 \u043f\u043e\u0442\u043e\u0447\u043d\u043e\u043c\u0443 \u043f\u0435\u0440\u0456\u043e\u0434\u0456.",
         inline=False,
       )
 
@@ -4275,20 +4275,20 @@ def build_member_stats_embed(
     if earning_users:
       earning_lines = [
         (
-          f"**{idx}.** <@{uid}> â "
+          f"**{idx}.** <@{uid}> \u2014 "
           f"**{format_cents(earnings['member_earnings'][uid])}**"
         )
         for idx, uid in enumerate(earning_users[:5], start=1)
       ]
       embed.add_field(
-        name="ðµ Ð¢Ð¾Ð¿-5 Ð¿Ð¾ Ð·Ð°ÑÐ¾Ð±ÑÑÐºÑ",
+        name="\U0001f4b5 \u0422\u043e\u043f-5 \u043f\u043e \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043a\u0443",
         value="\n".join(earning_lines),
         inline=False,
       )
     else:
       embed.add_field(
-        name="ðµ Ð¢Ð¾Ð¿-5 Ð¿Ð¾ Ð·Ð°ÑÐ¾Ð±ÑÑÐºÑ",
-        value="ÐÐ¾ÐºÐ¸ Ð½ÐµÐ¼Ð°Ñ Ð²Ð¸Ð¿Ð»Ð°ÑÐµÐ½Ð¾Ð³Ð¾ Ð·Ð°ÑÐ¾Ð±ÑÑÐºÑ Ð² Ð¿Ð¾ÑÐ¾ÑÐ½Ð¾Ð¼Ñ Ð¿ÐµÑÑÐ¾Ð´Ñ.",
+        name="\U0001f4b5 \u0422\u043e\u043f-5 \u043f\u043e \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043a\u0443",
+        value="\u041f\u043e\u043a\u0438 \u043d\u0435\u043c\u0430\u0454 \u0432\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u043e\u0433\u043e \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043a\u0443 \u0432 \u043f\u043e\u0442\u043e\u0447\u043d\u043e\u043c\u0443 \u043f\u0435\u0440\u0456\u043e\u0434\u0456.",
         inline=False,
       )
 
@@ -4329,48 +4329,48 @@ def build_member_stats_embed(
   ]
 
   embed = discord.Embed(
-    title="ð¤ Ð¡ÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° ÑÑÐ°ÑÐ½Ð¸ÐºÐ°",
+    title="\U0001f464 \u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430",
     description=f"<@{user_id}>",
     color=discord.Color.blurple(),
   )
 
   embed.add_field(
-    name="ð ÐÐ¾ÑÐ¾ÑÐ½Ð¸Ð¹ ÑÐµÐ¹ÑÐ¸Ð½Ð³",
+    name="\U0001f3c6 \u041f\u043e\u0442\u043e\u0447\u043d\u0438\u0439 \u0440\u0435\u0439\u0442\u0438\u043d\u0433",
     value=(
-      (f"ÐÑÑÑÐµ: **#{position}**\n" if position else "ÐÑÑÑÐµ: **â**\n")
-      + f"ÐÐ°Ð»Ð¸: **{format_points_with_word(points[user_id])}**\n"
-      + f"Ð£ÑÐ°ÑÑÐµÐ¹: **{participations[user_id]}**"
+      (f"\u041c\u0456\u0441\u0446\u0435: **#{position}**\n" if position else "\u041c\u0456\u0441\u0446\u0435: **\u2014**\n")
+      + f"\u0411\u0430\u043b\u0438: **{format_points_with_word(points[user_id])}**\n"
+      + f"\u0423\u0447\u0430\u0441\u0442\u0435\u0439: **{participations[user_id]}**"
     ),
     inline=True,
   )
 
   embed.add_field(
-    name="ðµ ÐÐ¾ÑÐ¾ÑÐ½Ñ ÑÑÐ½Ð°Ð½ÑÐ¸",
+    name="\U0001f4b5 \u041f\u043e\u0442\u043e\u0447\u043d\u0456 \u0444\u0456\u043d\u0430\u043d\u0441\u0438",
     value=(
-      f"ÐÑÑÐ¸Ð¼Ð°Ð½Ð¾: **{format_cents(current_received)}**\n"
-      f"ÐÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð° Ð¾Ð¿Ð»Ð°ÑÐ°: **{format_cents(pending_debt)}**\n"
-      f"ÐÐ¿Ð»Ð°ÑÐµÐ½Ð¸Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ²: **{len(paid_period)}**\n"
-      f"ÐÑÑÐºÑÑÑÑ Ð¾Ð¿Ð»Ð°ÑÐ¸: **{len(unpaid_now)}**"
+      f"\u041e\u0442\u0440\u0438\u043c\u0430\u043d\u043e: **{format_cents(current_received)}**\n"
+      f"\u0412\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0430 \u043e\u043f\u043b\u0430\u0442\u0430: **{format_cents(pending_debt)}**\n"
+      f"\u041e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0445 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432: **{len(paid_period)}**\n"
+      f"\u041e\u0447\u0456\u043a\u0443\u044e\u0442\u044c \u043e\u043f\u043b\u0430\u0442\u0438: **{len(unpaid_now)}**"
     ),
     inline=True,
   )
 
   embed.add_field(
-    name="ð¦ ÐÑÐ¾Ð±Ð¸ÑÑÐ¸Ð¹ Ð²Ð½ÐµÑÐ¾Ðº Ñ ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ",
+    name="\U0001f3e6 \u041e\u0441\u043e\u0431\u0438\u0441\u0442\u0438\u0439 \u0432\u043d\u0435\u0441\u043e\u043a \u0443 \u0411\u0430\u043d\u043a \u0441\u0456\u043c'\u0457",
     value=(
-      f"ÐÐ¾ÑÐ¾ÑÐ½Ð¸Ð¹ Ð¿ÐµÑÑÐ¾Ð´: **{format_cents(current_family_contribution)}**\n"
-      f"ÐÐ° Ð²ÐµÑÑ ÑÐ°Ñ: **{format_cents(all_family_contribution)}**"
+      f"\u041f\u043e\u0442\u043e\u0447\u043d\u0438\u0439 \u043f\u0435\u0440\u0456\u043e\u0434: **{format_cents(current_family_contribution)}**\n"
+      f"\u0417\u0430 \u0432\u0435\u0441\u044c \u0447\u0430\u0441: **{format_cents(all_family_contribution)}**"
     ),
     inline=False,
   )
 
   embed.add_field(
-    name="ðï¸ ÐÐ° Ð²ÐµÑÑ ÑÐ°Ñ",
+    name="\U0001f5c2\ufe0f \u0417\u0430 \u0432\u0435\u0441\u044c \u0447\u0430\u0441",
     value=(
-      (f"ÐÑÑÑÐµ: **#{all_position}**\n" if all_position else "ÐÑÑÑÐµ: **â**\n")
-      + f"ÐÐ°Ð»Ð¸: **{format_points_with_word(all_points[user_id])}**\n"
-      + f"Ð£ÑÐ°ÑÑÐµÐ¹: **{all_participations[user_id]}**\n"
-      + f"ÐÑÑÐ¸Ð¼Ð°Ð½Ð¾: **{format_cents(all_received)}**"
+      (f"\u041c\u0456\u0441\u0446\u0435: **#{all_position}**\n" if all_position else "\u041c\u0456\u0441\u0446\u0435: **\u2014**\n")
+      + f"\u0411\u0430\u043b\u0438: **{format_points_with_word(all_points[user_id])}**\n"
+      + f"\u0423\u0447\u0430\u0441\u0442\u0435\u0439: **{all_participations[user_id]}**\n"
+      + f"\u041e\u0442\u0440\u0438\u043c\u0430\u043d\u043e: **{format_cents(all_received)}**"
     ),
     inline=False,
   )
@@ -4411,7 +4411,7 @@ class MemberStatsSelect(discord.ui.Select):
       discord.SelectOption(
         label=labels.get(uid, f"ID {uid}")[:100],
         value=str(uid),
-        description=f"Ð¡ÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° ÑÑÐ°ÑÐ½Ð¸ÐºÐ° â¢ {uid}"[:100],
+        description=f"\u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430 \u2022 {uid}"[:100],
       )
       for uid in user_ids
     ]
@@ -4419,13 +4419,13 @@ class MemberStatsSelect(discord.ui.Select):
     if not options:
       options = [
         discord.SelectOption(
-          label="Ð£ÑÐ°ÑÐ½Ð¸ÐºÑÐ² ÑÐµ Ð½ÐµÐ¼Ð°Ñ",
+          label="\u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432 \u0449\u0435 \u043d\u0435\u043c\u0430\u0454",
           value="none",
         )
       ]
 
     super().__init__(
-      placeholder="ÐÐ±ÐµÑÑÑÑ ÑÑÐ°ÑÐ½Ð¸ÐºÐ°",
+      placeholder="\u041e\u0431\u0435\u0440\u0456\u0442\u044c \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430",
       min_values=1,
       max_values=1,
       options=options,
@@ -4474,8 +4474,8 @@ class MemberStatsPickerView(discord.ui.View):
     self.next_page.disabled = page >= total_pages - 1
 
   @discord.ui.button(
-    label="ÐÐ°Ð·Ð°Ð´",
-    emoji="âï¸",
+    label="\u041d\u0430\u0437\u0430\u0434",
+    emoji="\u25c0\ufe0f",
     style=discord.ButtonStyle.secondary,
     row=1,
   )
@@ -4508,8 +4508,8 @@ class MemberStatsPickerView(discord.ui.View):
     pass
 
   @discord.ui.button(
-    label="ÐÐ°Ð»Ñ",
-    emoji="â¶ï¸",
+    label="\u0414\u0430\u043b\u0456",
+    emoji="\u25b6\ufe0f",
     style=discord.ButtonStyle.secondary,
     row=1,
   )
@@ -4529,8 +4529,8 @@ class MemberStatsPickerView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="ÐÐ¾ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ¸",
-    emoji="â©ï¸",
+    label="\u0414\u043e \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0438",
+    emoji="\u21a9\ufe0f",
     style=discord.ButtonStyle.secondary,
     row=2,
   )
@@ -4595,8 +4595,8 @@ class AdminStatsView(discord.ui.View):
     self.next_page.disabled = self.total_pages <= 1 or self.page >= self.total_pages - 1
 
   @discord.ui.button(
-    label="ÐÐ¾ÑÐ¾ÑÐ½Ð°",
-    emoji="ð",
+    label="\u041f\u043e\u0442\u043e\u0447\u043d\u0430",
+    emoji="\U0001f4ca",
     style=discord.ButtonStyle.primary,
     row=0,
   )
@@ -4611,8 +4611,8 @@ class AdminStatsView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="ÐÐ¾ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ°Ñ",
-    emoji="ð",
+    label="\u041f\u043e \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0430\u0445",
+    emoji="\U0001f4cb",
     style=discord.ButtonStyle.primary,
     row=0,
   )
@@ -4628,8 +4628,8 @@ class AdminStatsView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="ÐÐ¾ Ð´Ð½ÑÑ",
-    emoji="ð",
+    label="\u041f\u043e \u0434\u043d\u044f\u0445",
+    emoji="\U0001f4c5",
     style=discord.ButtonStyle.primary,
     row=0,
   )
@@ -4645,8 +4645,8 @@ class AdminStatsView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="Ð£ÑÐ°ÑÐ½Ð¸ÐºÐ¸",
-    emoji="ð¥",
+    label="\u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0438",
+    emoji="\U0001f465",
     style=discord.ButtonStyle.primary,
     row=0,
   )
@@ -4666,8 +4666,8 @@ class AdminStatsView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="ÐÑÑÐ¾ÑÑÑ",
-    emoji="ðï¸",
+    label="\u0406\u0441\u0442\u043e\u0440\u0456\u044f",
+    emoji="\U0001f5c2\ufe0f",
     style=discord.ButtonStyle.secondary,
     row=0,
   )
@@ -4682,8 +4682,8 @@ class AdminStatsView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="ÐÐ°Ð·Ð°Ð´",
-    emoji="âï¸",
+    label="\u041d\u0430\u0437\u0430\u0434",
+    emoji="\u25c0\ufe0f",
     style=discord.ButtonStyle.secondary,
     row=1,
   )
@@ -4712,8 +4712,8 @@ class AdminStatsView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="ÐÐ°Ð»Ñ",
-    emoji="â¶ï¸",
+    label="\u0414\u0430\u043b\u0456",
+    emoji="\u25b6\ufe0f",
     style=discord.ButtonStyle.secondary,
     row=1,
   )
@@ -4745,15 +4745,15 @@ class AdminStatsView(discord.ui.View):
 
 def build_main_panel_embed() -> discord.Embed:
   return discord.Embed(
-    title="ð ÐÐÐÐ¢Ð ÐÐÐ¢Ð Ð¡ÐÐâÐ",
+    title="\U0001f4cb \u041a\u041e\u041d\u0422\u0420\u0410\u041a\u0422\u0418 \u0421\u0406\u041c\u2019\u0407",
     description=(
-      "ÐÐ¸ÐºÐ¾Ð½Ð°Ð² ÐºÐ¾Ð½ÑÑÐ°ÐºÑ â Ð¾Ð±ÐµÑÐ¸ Ð¿Ð¾ÑÑÑÐ±Ð½Ñ ÐºÐ½Ð¾Ð¿ÐºÑ.\n\n"
-      "ð¤ **Ð¯ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²/Ð»Ð°** â ÑÐºÑÐ¾ Ð²Ð¸ÐºÐ¾Ð½ÑÐ²Ð°Ð²/Ð»Ð° ÑÐ°Ð¼/Ð°.\n"
-      "ð¥ **ÐÑÐ»ÑÐºÐ° Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²ÑÑÐ²** â ÑÐºÑÐ¾ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ ÑÐ¾Ð±Ð¸Ð»Ð¸ ÑÐ°Ð·Ð¾Ð¼.\n"
-      "ð **Ð ÐµÐ¹ÑÐ¸Ð½Ð³** â Ð¿Ð¾ÑÐ¾ÑÐ½Ð¸Ð¹ ÑÐµÐ¹ÑÐ¸Ð½Ð³ ÑÑÐ°ÑÐ½Ð¸ÐºÑÐ².\n"
-      "ð¤ **ÐÐ¾Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ°** â Ð¼Ð¾Ñ Ð±Ð°Ð»Ð¸, ÑÑÐ°ÑÑÑ ÑÐ° Ð·Ð°ÑÐ¾Ð±ÑÑÐ¾Ðº.\n"
-      "ð **ÐÐ¾ÑÑÐº** â Ð´Ð¾ÑÑÑÐ¿Ð½Ð¸Ð¹ Ð¿ÑÑÐ¼Ð¾ Ð²ÑÐµÑÐµÐ´Ð¸Ð½Ñ ÑÐ¿Ð¸ÑÐºÑ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ².\n\n"
-      "ÐÐ°Ð·Ð²Ð°, ÑÑÐ½Ð° ÑÐ° ÐÐ Ð¿ÑÐ´ÑÑÐ³ÑÑÑÑÑÑ Ð°Ð²ÑÐ¾Ð¼Ð°ÑÐ¸ÑÐ½Ð¾."
+      "\u0412\u0438\u043a\u043e\u043d\u0430\u0432 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u2014 \u043e\u0431\u0435\u0440\u0438 \u043f\u043e\u0442\u0440\u0456\u0431\u043d\u0443 \u043a\u043d\u043e\u043f\u043a\u0443.\n\n"
+      "\U0001f464 **\u042f \u0432\u0438\u043a\u043e\u043d\u0430\u0432/\u043b\u0430** \u2014 \u044f\u043a\u0449\u043e \u0432\u0438\u043a\u043e\u043d\u0443\u0432\u0430\u0432/\u043b\u0430 \u0441\u0430\u043c/\u0430.\n"
+      "\U0001f465 **\u041a\u0456\u043b\u044c\u043a\u0430 \u0432\u0438\u043a\u043e\u043d\u0430\u0432\u0446\u0456\u0432** \u2014 \u044f\u043a\u0449\u043e \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0440\u043e\u0431\u0438\u043b\u0438 \u0440\u0430\u0437\u043e\u043c.\n"
+      "\U0001f3c6 **\u0420\u0435\u0439\u0442\u0438\u043d\u0433** \u2014 \u043f\u043e\u0442\u043e\u0447\u043d\u0438\u0439 \u0440\u0435\u0439\u0442\u0438\u043d\u0433 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432.\n"
+      "\U0001f464 **\u041c\u043e\u044f \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430** \u2014 \u043c\u043e\u0457 \u0431\u0430\u043b\u0438, \u0443\u0447\u0430\u0441\u0442\u0456 \u0442\u0430 \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a.\n"
+      "\U0001f50e **\u041f\u043e\u0448\u0443\u043a** \u2014 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0438\u0439 \u043f\u0440\u044f\u043c\u043e \u0432\u0441\u0435\u0440\u0435\u0434\u0438\u043d\u0456 \u0441\u043f\u0438\u0441\u043a\u0443 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432.\n\n"
+      "\u041d\u0430\u0437\u0432\u0430, \u0446\u0456\u043d\u0430 \u0442\u0430 \u041a\u0414 \u043f\u0456\u0434\u0442\u044f\u0433\u0443\u044e\u0442\u044c\u0441\u044f \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u043d\u043e."
     ),
     color=discord.Color.blurple(),
   )
@@ -4764,8 +4764,8 @@ async def move_main_panel_to_bottom(
   channel: discord.TextChannel,
 ) -> Optional[discord.Message]:
   """
-  Ð¢ÑÐ¸Ð¼Ð°Ñ Ð¿Ð°Ð½ÐµÐ»Ñ Ð¾ÑÑÐ°Ð½Ð½ÑÐ¼ Ð¿Ð¾Ð²ÑÐ´Ð¾Ð¼Ð»ÐµÐ½Ð½ÑÐ¼ Ñ ÐºÐ°Ð½Ð°Ð»Ñ.
-  Ð¡ÑÐ°ÑÑ Ð¿Ð°Ð½ÐµÐ»Ñ Ð²Ð¸Ð´Ð°Ð»ÑÑÐ¼Ð¾; ÑÐºÑÐ¾ Discord Ð½Ðµ Ð´Ð°Ñ â Ð¿ÑÐ¸Ð±Ð¸ÑÐ°ÑÐ¼Ð¾ Ð· Ð½ÐµÑ ÐºÐ½Ð¾Ð¿ÐºÐ¸.
+  \u0422\u0440\u0438\u043c\u0430\u0454 \u043f\u0430\u043d\u0435\u043b\u044c \u043e\u0441\u0442\u0430\u043d\u043d\u0456\u043c \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f\u043c \u0443 \u043a\u0430\u043d\u0430\u043b\u0456.
+  \u0421\u0442\u0430\u0440\u0443 \u043f\u0430\u043d\u0435\u043b\u044c \u0432\u0438\u0434\u0430\u043b\u044f\u0454\u043c\u043e; \u044f\u043a\u0449\u043e Discord \u043d\u0435 \u0434\u0430\u0454 \u2014 \u043f\u0440\u0438\u0431\u0438\u0440\u0430\u0454\u043c\u043e \u0437 \u043d\u0435\u0457 \u043a\u043d\u043e\u043f\u043a\u0438.
   """
   old_panel_id = db.get_setting(guild.id, "panel_message_id")
 
@@ -4804,15 +4804,15 @@ class MainContractPanelView(discord.ui.View):
     self.bot_instance = bot_instance
 
   @discord.ui.button(
-    label="Ð¯ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²/Ð»Ð°",
+    label="\u042f \u0432\u0438\u043a\u043e\u043d\u0430\u0432/\u043b\u0430",
     style=discord.ButtonStyle.success,
-    emoji="ð¤",
+    emoji="\U0001f464",
     custom_id="contract_v34:self",
   )
   async def self_contract(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not db.active_contract_types(limit=1):
       await interaction.response.send_message(
-        "â ÐÐµÑÐµÐ»ÑÐº ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ² ÑÐµ Ð¿Ð¾ÑÐ¾Ð¶Ð½ÑÐ¹. ÐÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð¾ Ð¼Ð°Ñ Ð´Ð¾Ð´Ð°ÑÐ¸ ÑÑ ÑÐµÑÐµÐ· `/contracts_admin`.",
+        "\u274c \u041f\u0435\u0440\u0435\u043b\u0456\u043a \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432 \u0449\u0435 \u043f\u043e\u0440\u043e\u0436\u043d\u0456\u0439. \u041a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u043e \u043c\u0430\u0454 \u0434\u043e\u0434\u0430\u0442\u0438 \u0457\u0445 \u0447\u0435\u0440\u0435\u0437 `/contracts_admin`.",
         ephemeral=True,
       )
       return
@@ -4830,35 +4830,35 @@ class MainContractPanelView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="ÐÑÐ»ÑÐºÐ° Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²ÑÑÐ²",
+    label="\u041a\u0456\u043b\u044c\u043a\u0430 \u0432\u0438\u043a\u043e\u043d\u0430\u0432\u0446\u0456\u0432",
     style=discord.ButtonStyle.primary,
-    emoji="ð¥",
+    emoji="\U0001f465",
     custom_id="contract_v34:group",
   )
   async def group_contract(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not db.active_contract_types(limit=1):
       await interaction.response.send_message(
-        "â ÐÐµÑÐµÐ»ÑÐº ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ² ÑÐµ Ð¿Ð¾ÑÐ¾Ð¶Ð½ÑÐ¹. ÐÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð¾ Ð¼Ð°Ñ Ð´Ð¾Ð´Ð°ÑÐ¸ ÑÑ ÑÐµÑÐµÐ· `/contracts_admin`.",
+        "\u274c \u041f\u0435\u0440\u0435\u043b\u0456\u043a \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432 \u0449\u0435 \u043f\u043e\u0440\u043e\u0436\u043d\u0456\u0439. \u041a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u043e \u043c\u0430\u0454 \u0434\u043e\u0434\u0430\u0442\u0438 \u0457\u0445 \u0447\u0435\u0440\u0435\u0437 `/contracts_admin`.",
         ephemeral=True,
       )
       return
 
     await interaction.response.send_message(
-      "ð¥ ÐÐ±ÐµÑÑÑÑ ÑÑÑÑ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²ÑÑÐ² ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ:",
+      "\U0001f465 \u041e\u0431\u0435\u0440\u0456\u0442\u044c \u0443\u0441\u0456\u0445 \u0432\u0438\u043a\u043e\u043d\u0430\u0432\u0446\u0456\u0432 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443:",
       view=PerformerStepView(self.bot_instance, show_self_button=False),
       ephemeral=True,
     )
 
   @discord.ui.button(
-    label="Ð ÐµÐ¹ÑÐ¸Ð½Ð³",
+    label="\u0420\u0435\u0439\u0442\u0438\u043d\u0433",
     style=discord.ButtonStyle.secondary,
-    emoji="ð",
+    emoji="\U0001f3c6",
     custom_id="contract_v34:rating",
   )
   async def rating(self, interaction: discord.Interaction, button: discord.ui.Button):
     if interaction.guild is None:
       await interaction.response.send_message(
-        "â Ð¦Ðµ Ð¿ÑÐ°ÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð½Ð° ÑÐµÑÐ²ÐµÑÑ.",
+        "\u274c \u0426\u0435 \u043f\u0440\u0430\u0446\u044e\u0454 \u0442\u0456\u043b\u044c\u043a\u0438 \u043d\u0430 \u0441\u0435\u0440\u0432\u0435\u0440\u0456.",
         ephemeral=True,
       )
       return
@@ -4871,15 +4871,15 @@ class MainContractPanelView(discord.ui.View):
 
 
   @discord.ui.button(
-    label="ÐÐ¾Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ°",
+    label="\u041c\u043e\u044f \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430",
     style=discord.ButtonStyle.secondary,
-    emoji="ð¤",
+    emoji="\U0001f464",
     custom_id="contract_v4:mystats",
   )
   async def my_stats(self, interaction: discord.Interaction, button: discord.ui.Button):
     if interaction.guild is None:
       await interaction.response.send_message(
-        "â Ð¦Ðµ Ð¿ÑÐ°ÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð½Ð° ÑÐµÑÐ²ÐµÑÑ.",
+        "\u274c \u0426\u0435 \u043f\u0440\u0430\u0446\u044e\u0454 \u0442\u0456\u043b\u044c\u043a\u0438 \u043d\u0430 \u0441\u0435\u0440\u0432\u0435\u0440\u0456.",
         ephemeral=True,
       )
       return
@@ -4937,10 +4937,10 @@ def build_auto_rating_embeds(
   if not users:
     return [
       discord.Embed(
-        title="ð Ð ÐÐÐ¢ÐÐÐ ÐÐÐÐ¢Ð ÐÐÐ¢ÐÐ",
+        title="\U0001f3c6 \u0420\u0415\u0419\u0422\u0418\u041d\u0413 \u041a\u041e\u041d\u0422\u0420\u0410\u041a\u0422\u0406\u0412",
         description=(
           f"**{slot_label}**\n\n"
-          "Ð£ Ð¿Ð¾ÑÐ¾ÑÐ½Ð¾Ð¼Ñ ÑÐµÐ¹ÑÐ¸Ð½Ð³Ð¾Ð²Ð¾Ð¼Ñ Ð¿ÐµÑÑÐ¾Ð´Ñ ÑÐµ Ð½ÐµÐ¼Ð°Ñ ÑÑÐ°ÑÐ½Ð¸ÐºÑÐ²."
+          "\u0423 \u043f\u043e\u0442\u043e\u0447\u043d\u043e\u043c\u0443 \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u043e\u0432\u043e\u043c\u0443 \u043f\u0435\u0440\u0456\u043e\u0434\u0456 \u0449\u0435 \u043d\u0435\u043c\u0430\u0454 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432."
         ),
         color=discord.Color.gold(),
       )
@@ -4948,9 +4948,9 @@ def build_auto_rating_embeds(
 
   lines = [
     (
-      f"**{idx}.** <@{uid}> â "
+      f"**{idx}.** <@{uid}> \u2014 "
       f"**{format_points_with_word(points[uid])}** "
-      f"â¢ {participations[uid]} ÑÑÐ°ÑÑÐµÐ¹"
+      f"\u2022 {participations[uid]} \u0443\u0447\u0430\u0441\u0442\u0435\u0439"
     )
     for idx, uid in enumerate(users, start=1)
     if points[uid] > 0
@@ -4963,9 +4963,9 @@ def build_auto_rating_embeds(
   for idx, chunk in enumerate(chunks, start=1):
     embed = discord.Embed(
       title=(
-        "ð Ð ÐÐÐ¢ÐÐÐ ÐÐÐÐ¢Ð ÐÐÐ¢ÐÐ"
+        "\U0001f3c6 \u0420\u0415\u0419\u0422\u0418\u041d\u0413 \u041a\u041e\u041d\u0422\u0420\u0410\u041a\u0422\u0406\u0412"
         if idx == 1
-        else "ð Ð ÐÐÐ¢ÐÐÐ ÐÐÐÐ¢Ð ÐÐÐ¢ÐÐ â¢ Ð¿ÑÐ¾Ð´Ð¾Ð²Ð¶ÐµÐ½Ð½Ñ"
+        else "\U0001f3c6 \u0420\u0415\u0419\u0422\u0418\u041d\u0413 \u041a\u041e\u041d\u0422\u0420\u0410\u041a\u0422\u0406\u0412 \u2022 \u043f\u0440\u043e\u0434\u043e\u0432\u0436\u0435\u043d\u043d\u044f"
       ),
       description="\n".join(chunk),
       color=discord.Color.gold(),
@@ -4973,16 +4973,16 @@ def build_auto_rating_embeds(
 
     if idx == 1:
       embed.add_field(
-        name="ÐÐµÑÑÐ¾Ð´",
+        name="\u041f\u0435\u0440\u0456\u043e\u0434",
         value=slot_label,
         inline=False,
       )
 
     embed.set_footer(
       text=(
-        f"Ð£ ÑÐµÐ¹ÑÐ¸Ð½Ð³Ñ: {len(lines)} â¢ "
-        f"ÐÑÑÐ¾Ð³Ð¾ ÑÑÐ°ÑÑÐµÐ¹: {total_participations} â¢ "
-        f"Ð¡ÑÐ¾ÑÑÐ½ÐºÐ° {idx}/{len(chunks)}"
+        f"\u0423 \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443: {len(lines)} \u2022 "
+        f"\u0412\u0441\u044c\u043e\u0433\u043e \u0443\u0447\u0430\u0441\u0442\u0435\u0439: {total_participations} \u2022 "
+        f"\u0421\u0442\u043e\u0440\u0456\u043d\u043a\u0430 {idx}/{len(chunks)}"
       )
     )
     embeds.append(embed)
@@ -5053,45 +5053,45 @@ def build_family_daily_embed(
   )
 
   embed = discord.Embed(
-    title=f"ð ÐÐÐÐ¡Ð£ÐÐÐ Ð¡ÐÐ'Ð â¢ {target_day.strftime('%d.%m.%Y')}",
-    description="ÐÐ²ÑÐ¾Ð¼Ð°ÑÐ¸ÑÐ½Ð¸Ð¹ Ð·Ð²ÑÑ Ð·Ð° Ð·Ð°Ð²ÐµÑÑÐµÐ½Ð¸Ð¹ Ð´ÐµÐ½Ñ.",
+    title=f"\U0001f4ca \u041f\u0406\u0414\u0421\u0423\u041c\u041a\u0418 \u0421\u0406\u041c'\u0407 \u2022 {target_day.strftime('%d.%m.%Y')}",
+    description="\u0410\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u043d\u0438\u0439 \u0437\u0432\u0456\u0442 \u0437\u0430 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0438\u0439 \u0434\u0435\u043d\u044c.",
     color=discord.Color.blurple(),
   )
 
   embed.add_field(
-    name="ð ÐÐ¾Ð½ÑÑÐ°ÐºÑÐ¸",
+    name="\U0001f4cb \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438",
     value=(
-      f"ÐÐ¸ÐºÐ¾Ð½Ð°Ð½Ð¾: **{len(completed_today)}**\n"
-      f"ÐÐ¿Ð»Ð°ÑÐµÐ½Ð¾: **{len(paid_today)}**\n"
-      f"ÐÐ°Ð³Ð°Ð»ÑÐ½Ð° ÑÑÐ¼Ð° Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ñ: **{format_cents(gross_cents)}**"
+      f"\u0412\u0438\u043a\u043e\u043d\u0430\u043d\u043e: **{len(completed_today)}**\n"
+      f"\u041e\u043f\u043b\u0430\u0447\u0435\u043d\u043e: **{len(paid_today)}**\n"
+      f"\u0417\u0430\u0433\u0430\u043b\u044c\u043d\u0430 \u0441\u0443\u043c\u0430 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0445: **{format_cents(gross_cents)}**"
     ),
     inline=False,
   )
 
   embed.add_field(
-    name="ð¦ ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ",
+    name="\U0001f3e6 \u0411\u0430\u043d\u043a \u0441\u0456\u043c'\u0457",
     value=(
-      f"ÐÐ°Ð´ÑÐ¹ÑÐ»Ð¾: **{format_cents(family_cents)}**\n"
-      f"Ð Ð½Ð¸Ñ Ð¾ÑÐ¾Ð±Ð¸ÑÑÐ¸Ñ Ð²Ð½ÐµÑÐºÑÐ²: **{format_cents(personal_family_cents)}**"
+      f"\u041d\u0430\u0434\u0456\u0439\u0448\u043b\u043e: **{format_cents(family_cents)}**\n"
+      f"\u0417 \u043d\u0438\u0445 \u043e\u0441\u043e\u0431\u0438\u0441\u0442\u0438\u0445 \u0432\u043d\u0435\u0441\u043a\u0456\u0432: **{format_cents(personal_family_cents)}**"
     ),
     inline=True,
   )
 
   embed.add_field(
-    name="ðµ ÐÐ¸Ð¿Ð»Ð°ÑÐ¸",
+    name="\U0001f4b5 \u0412\u0438\u043f\u043b\u0430\u0442\u0438",
     value=(
-      f"Ð¤Ð°ÐºÑÐ¸ÑÐ½Ð¾ Ð²Ð¸Ð¿Ð»Ð°ÑÐµÐ½Ð¾: **{format_cents(paid_to_members_cents)}**\n"
-      f"Ð¡ÑÐ²Ð¾ÑÐµÐ½Ð¾ Ð²ÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð¸Ñ Ð¾Ð¿Ð»Ð°Ñ: **{format_cents(deferred_cents)}**\n"
-      f"ÐÐ°ÐºÑÐ¸ÑÐ¾ Ð²ÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð¸Ñ Ð¾Ð¿Ð»Ð°Ñ: **{format_cents(deferred_settled_cents)}**"
+      f"\u0424\u0430\u043a\u0442\u0438\u0447\u043d\u043e \u0432\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u043e: **{format_cents(paid_to_members_cents)}**\n"
+      f"\u0421\u0442\u0432\u043e\u0440\u0435\u043d\u043e \u0432\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0438\u0445 \u043e\u043f\u043b\u0430\u0442: **{format_cents(deferred_cents)}**\n"
+      f"\u0417\u0430\u043a\u0440\u0438\u0442\u043e \u0432\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0438\u0445 \u043e\u043f\u043b\u0430\u0442: **{format_cents(deferred_settled_cents)}**"
     ),
     inline=True,
   )
 
   embed.add_field(
-    name="ð¥ ÐÐºÑÐ¸Ð²Ð½ÑÑÑÑ",
+    name="\U0001f465 \u0410\u043a\u0442\u0438\u0432\u043d\u0456\u0441\u0442\u044c",
     value=(
-      f"Ð£Ð½ÑÐºÐ°Ð»ÑÐ½Ð¸Ñ Ð²Ð¸ÐºÐ¾Ð½Ð°Ð²ÑÑÐ²: **{unique_participants}**\n"
-      f"ÐÑÑÐ¾Ð³Ð¾ ÑÑÐ°ÑÑÐµÐ¹: **{participations_total}**"
+      f"\u0423\u043d\u0456\u043a\u0430\u043b\u044c\u043d\u0438\u0445 \u0432\u0438\u043a\u043e\u043d\u0430\u0432\u0446\u0456\u0432: **{unique_participants}**\n"
+      f"\u0412\u0441\u044c\u043e\u0433\u043e \u0443\u0447\u0430\u0441\u0442\u0435\u0439: **{participations_total}**"
     ),
     inline=False,
   )
@@ -5099,11 +5099,11 @@ def build_family_daily_embed(
   top_activity = participant_counter.most_common(5)
   if top_activity:
     activity_lines = [
-      f"**{idx}.** <@{uid}> â **{count}** ÑÑÐ°ÑÑÐµÐ¹"
+      f"**{idx}.** <@{uid}> \u2014 **{count}** \u0443\u0447\u0430\u0441\u0442\u0435\u0439"
       for idx, (uid, count) in enumerate(top_activity, start=1)
     ]
     embed.add_field(
-      name="ð ÐÐ°Ð¹Ð°ÐºÑÐ¸Ð²Ð½ÑÑÑ Ð·Ð° Ð´ÐµÐ½Ñ",
+      name="\U0001f3c6 \u041d\u0430\u0439\u0430\u043a\u0442\u0438\u0432\u043d\u0456\u0448\u0456 \u0437\u0430 \u0434\u0435\u043d\u044c",
       value="\n".join(activity_lines),
       inline=False,
     )
@@ -5111,16 +5111,16 @@ def build_family_daily_embed(
   top_earnings = earnings_counter.most_common(5)
   if top_earnings:
     earning_lines = [
-      f"**{idx}.** <@{uid}> â **{format_cents(amount)}**"
+      f"**{idx}.** <@{uid}> \u2014 **{format_cents(amount)}**"
       for idx, (uid, amount) in enumerate(top_earnings, start=1)
     ]
     embed.add_field(
-      name="ð° Ð¢Ð¾Ð¿-5 Ð·Ð°ÑÐ¾Ð±ÑÑÐºÑ Ð·Ð° Ð´ÐµÐ½Ñ",
+      name="\U0001f4b0 \u0422\u043e\u043f-5 \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043a\u0443 \u0437\u0430 \u0434\u0435\u043d\u044c",
       value="\n".join(earning_lines),
       inline=False,
     )
 
-  embed.set_footer(text=f"Ð§Ð°ÑÐ¾Ð²Ð° Ð·Ð¾Ð½Ð°: {TIMEZONE_NAME}")
+  embed.set_footer(text=f"\u0427\u0430\u0441\u043e\u0432\u0430 \u0437\u043e\u043d\u0430: {TIMEZONE_NAME}")
   return embed
 
 
@@ -5194,7 +5194,7 @@ async def scheduled_posts_loop(bot_instance: commands.Bot):
       ):
         await send_auto_rating(
           bot_instance,
-          f"{now.strftime('%d.%m.%Y')} â¢ ÑÐ°Ð½Ð¾Ðº",
+          f"{now.strftime('%d.%m.%Y')} \u2022 \u0440\u0430\u043d\u043e\u043a",
         )
         db.set_setting(
           GUILD_ID,
@@ -5211,7 +5211,7 @@ async def scheduled_posts_loop(bot_instance: commands.Bot):
       ):
         await send_auto_rating(
           bot_instance,
-          f"{now.strftime('%d.%m.%Y')} â¢ Ð²ÐµÑÑÑ",
+          f"{now.strftime('%d.%m.%Y')} \u2022 \u0432\u0435\u0447\u0456\u0440",
         )
         db.set_setting(
           GUILD_ID,
@@ -5300,11 +5300,11 @@ class ContractBot(commands.Bot):
 bot = ContractBot()
 
 
-@bot.tree.command(name="setup", description="Ð¡ÑÐ²Ð¾ÑÐ¸ÑÐ¸ Ð¿Ð°Ð½ÐµÐ»Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ²")
+@bot.tree.command(name="setup", description="\u0421\u0442\u0432\u043e\u0440\u0438\u0442\u0438 \u043f\u0430\u043d\u0435\u043b\u044c \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432")
 async def setup_panel(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
     await interaction.response.send_message(
-      "â Ð¦Ñ ÐºÐ¾Ð¼Ð°Ð½Ð´Ð° ÑÑÐ»ÑÐºÐ¸ Ð´Ð»Ñ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð°.",
+      "\u274c \u0426\u044f \u043a\u043e\u043c\u0430\u043d\u0434\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u0434\u043b\u044f \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u0430.",
       ephemeral=True,
     )
     return
@@ -5312,7 +5312,7 @@ async def setup_panel(interaction: discord.Interaction):
   guild = interaction.guild
   if guild is None:
     await interaction.response.send_message(
-      "â Ð¦Ðµ Ð¿ÑÐ°ÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð½Ð° ÑÐµÑÐ²ÐµÑÑ.",
+      "\u274c \u0426\u0435 \u043f\u0440\u0430\u0446\u044e\u0454 \u0442\u0456\u043b\u044c\u043a\u0438 \u043d\u0430 \u0441\u0435\u0440\u0432\u0435\u0440\u0456.",
       ephemeral=True,
     )
     return
@@ -5320,7 +5320,7 @@ async def setup_panel(interaction: discord.Interaction):
   channel = await get_target_channel(guild, interaction.channel_id)
   if not isinstance(channel, discord.TextChannel):
     await interaction.response.send_message(
-      "â ÐÐ°Ð½ÐµÐ»Ñ ÑÑÐµÐ±Ð° ÑÑÐ²Ð¾ÑÑÐ²Ð°ÑÐ¸ Ñ Ð·Ð²Ð¸ÑÐ°Ð¹Ð½Ð¾Ð¼Ñ ÑÐµÐºÑÑÐ¾Ð²Ð¾Ð¼Ñ ÐºÐ°Ð½Ð°Ð»Ñ.",
+      "\u274c \u041f\u0430\u043d\u0435\u043b\u044c \u0442\u0440\u0435\u0431\u0430 \u0441\u0442\u0432\u043e\u0440\u044e\u0432\u0430\u0442\u0438 \u0443 \u0437\u0432\u0438\u0447\u0430\u0439\u043d\u043e\u043c\u0443 \u0442\u0435\u043a\u0441\u0442\u043e\u0432\u043e\u043c\u0443 \u043a\u0430\u043d\u0430\u043b\u0456.",
       ephemeral=True,
     )
     return
@@ -5331,7 +5331,7 @@ async def setup_panel(interaction: discord.Interaction):
 
   if panel is None:
     await interaction.followup.send(
-      "â ÐÐµ Ð²Ð´Ð°Ð»Ð¾ÑÑ ÑÑÐ²Ð¾ÑÐ¸ÑÐ¸ Ð¿Ð°Ð½ÐµÐ»Ñ Ñ ÐºÐ°Ð½Ð°Ð»Ñ.",
+      "\u274c \u041d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f \u0441\u0442\u0432\u043e\u0440\u0438\u0442\u0438 \u043f\u0430\u043d\u0435\u043b\u044c \u0443 \u043a\u0430\u043d\u0430\u043b\u0456.",
       ephemeral=True,
     )
     return
@@ -5339,14 +5339,14 @@ async def setup_panel(interaction: discord.Interaction):
   log_note = (
     ""
     if LOG_CHANNEL_ID
-    else "\nâ ï¸ LOG_CHANNEL_ID Ð½Ðµ Ð·Ð°Ð´Ð°Ð½Ð¾ â Ð¶ÑÑÐ½Ð°Ð» Ð´ÑÐ¹ Ð¿Ð¾ÐºÐ¸ Ð²Ð¸Ð¼ÐºÐ½ÐµÐ½Ð¸Ð¹."
+    else "\n\u26a0\ufe0f LOG_CHANNEL_ID \u043d\u0435 \u0437\u0430\u0434\u0430\u043d\u043e \u2014 \u0436\u0443\u0440\u043d\u0430\u043b \u0434\u0456\u0439 \u043f\u043e\u043a\u0438 \u0432\u0438\u043c\u043a\u043d\u0435\u043d\u0438\u0439."
   )
 
   await interaction.followup.send(
     (
-      f"â ÐÐ°Ð½ÐµÐ»Ñ Ð³Ð¾ÑÐ¾Ð²Ð°: {panel.jump_url}\n"
-      "ÐÑ Ð±ÑÐ»ÑÑÐµ Ð½Ðµ ÑÑÐµÐ±Ð° ÑÑÐºÐ°ÑÐ¸ Ð² Ð·Ð°ÐºÑÑÐ¿Ð»ÐµÐ½Ð¸Ñ â Ð¿ÑÑÐ»Ñ ÐºÐ¾Ð¶Ð½Ð¾Ð³Ð¾ Ð½Ð¾Ð²Ð¾Ð³Ð¾ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ "
-      "Ð±Ð¾Ñ Ð°Ð²ÑÐ¾Ð¼Ð°ÑÐ¸ÑÐ½Ð¾ Ð¿ÐµÑÐµÐ½Ð¾ÑÐ¸ÑÑ Ð¿Ð°Ð½ÐµÐ»Ñ Ñ ÑÐ°Ð¼Ð¸Ð¹ Ð½Ð¸Ð· ÐºÐ°Ð½Ð°Ð»Ñ."
+      f"\u2705 \u041f\u0430\u043d\u0435\u043b\u044c \u0433\u043e\u0442\u043e\u0432\u0430: {panel.jump_url}\n"
+      "\u0407\u0457 \u0431\u0456\u043b\u044c\u0448\u0435 \u043d\u0435 \u0442\u0440\u0435\u0431\u0430 \u0448\u0443\u043a\u0430\u0442\u0438 \u0432 \u0437\u0430\u043a\u0440\u0456\u043f\u043b\u0435\u043d\u0438\u0445 \u2014 \u043f\u0456\u0441\u043b\u044f \u043a\u043e\u0436\u043d\u043e\u0433\u043e \u043d\u043e\u0432\u043e\u0433\u043e \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443 "
+      "\u0431\u043e\u0442 \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u043d\u043e \u043f\u0435\u0440\u0435\u043d\u043e\u0441\u0438\u0442\u044c \u043f\u0430\u043d\u0435\u043b\u044c \u0443 \u0441\u0430\u043c\u0438\u0439 \u043d\u0438\u0437 \u043a\u0430\u043d\u0430\u043b\u0443."
       f"{log_note}"
     ),
     ephemeral=True,
@@ -5355,21 +5355,21 @@ async def setup_panel(interaction: discord.Interaction):
 
 
 
-@bot.tree.command(name="contracts_admin", description="ÐÐµÑÑÐ²Ð°Ð½Ð½Ñ Ð¿ÐµÑÐµÐ»ÑÐºÐ¾Ð¼ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ²")
+@bot.tree.command(name="contracts_admin", description="\u041a\u0435\u0440\u0443\u0432\u0430\u043d\u043d\u044f \u043f\u0435\u0440\u0435\u043b\u0456\u043a\u043e\u043c \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432")
 async def contracts_admin(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
     await interaction.response.send_message(
-      "â Ð¦Ñ ÐºÐ¾Ð¼Ð°Ð½Ð´Ð° ÑÑÐ»ÑÐºÐ¸ Ð´Ð»Ñ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð°.",
+      "\u274c \u0426\u044f \u043a\u043e\u043c\u0430\u043d\u0434\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u0434\u043b\u044f \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u0430.",
       ephemeral=True,
     )
     return
 
   embed = discord.Embed(
-    title="âï¸ ÐÐµÑÑÐ²Ð°Ð½Ð½Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ°Ð¼Ð¸",
+    title="\u2699\ufe0f \u041a\u0435\u0440\u0443\u0432\u0430\u043d\u043d\u044f \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0430\u043c\u0438",
     description=(
-      "Ð¢ÑÑ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð¾ ÑÑÐ²Ð¾ÑÑÑ ÑÐ° ÑÐµÐ´Ð°Ð³ÑÑ Ð¿ÐµÑÐµÐ»ÑÐº ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ².\n"
-      "ÐÐ»Ñ ÐºÐ¾Ð¶Ð½Ð¾Ð³Ð¾ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ Ð·Ð±ÐµÑÑÐ³Ð°ÑÑÑÑÑ **Ð½Ð°Ð·Ð²Ð°, ÑÑÐ½Ð° ÑÐ° ÐÐ**.\n"
-      "Ð ÐµÐ¹ÑÐ¸Ð½Ð³ Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° Ð·Ð°ÑÐ¾Ð±ÑÑÐºÑ Ð¾Ð±Ð½ÑÐ»ÑÑÑÑÑÑ **Ð¾ÐºÑÐµÐ¼Ð¾**."
+      "\u0422\u0443\u0442 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u043e \u0441\u0442\u0432\u043e\u0440\u044e\u0454 \u0442\u0430 \u0440\u0435\u0434\u0430\u0433\u0443\u0454 \u043f\u0435\u0440\u0435\u043b\u0456\u043a \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432.\n"
+      "\u0414\u043b\u044f \u043a\u043e\u0436\u043d\u043e\u0433\u043e \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443 \u0437\u0431\u0435\u0440\u0456\u0433\u0430\u044e\u0442\u044c\u0441\u044f **\u043d\u0430\u0437\u0432\u0430, \u0446\u0456\u043d\u0430 \u0442\u0430 \u041a\u0414**.\n"
+      "\u0420\u0435\u0439\u0442\u0438\u043d\u0433 \u0456 \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043a\u0443 \u043e\u0431\u043d\u0443\u043b\u044f\u044e\u0442\u044c\u0441\u044f **\u043e\u043a\u0440\u0435\u043c\u043e**."
     ),
     color=discord.Color.blurple(),
   )
@@ -5384,10 +5384,10 @@ async def contracts_admin(interaction: discord.Interaction):
 
 @bot.tree.command(
   name="annul",
-  description="ÐÐ½ÑÐ»ÑÐ²Ð°ÑÐ¸ Ð²Ð¶Ðµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ Ð·Ð° Ð¹Ð¾Ð³Ð¾ ID",
+  description="\u0410\u043d\u0443\u043b\u044e\u0432\u0430\u0442\u0438 \u0432\u0436\u0435 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0439 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0437\u0430 \u0439\u043e\u0433\u043e ID",
 )
 @app_commands.describe(
-  contract_id="ID ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ, Ð²ÐºÐ°Ð·Ð°Ð½Ð¸Ð¹ Ð²Ð½Ð¸Ð·Ñ Ð¹Ð¾Ð³Ð¾ ÐºÐ°ÑÑÐºÐ¸",
+  contract_id="ID \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443, \u0432\u043a\u0430\u0437\u0430\u043d\u0438\u0439 \u0432\u043d\u0438\u0437\u0443 \u0439\u043e\u0433\u043e \u043a\u0430\u0440\u0442\u043a\u0438",
 )
 async def annul_contract(
   interaction: discord.Interaction,
@@ -5395,7 +5395,7 @@ async def annul_contract(
 ):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
     await interaction.response.send_message(
-      "â ÐÐ½ÑÐ»ÑÐ²Ð°ÑÐ¸ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ Ð¼Ð¾Ð¶Ðµ ÑÑÐ»ÑÐºÐ¸ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð¾.",
+      "\u274c \u0410\u043d\u0443\u043b\u044e\u0432\u0430\u0442\u0438 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0439 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u043c\u043e\u0436\u0435 \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u043e.",
       ephemeral=True,
     )
     return
@@ -5403,7 +5403,7 @@ async def annul_contract(
   guild = interaction.guild
   if guild is None:
     await interaction.response.send_message(
-      "â Ð¦Ðµ Ð¿ÑÐ°ÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð½Ð° ÑÐµÑÐ²ÐµÑÑ.",
+      "\u274c \u0426\u0435 \u043f\u0440\u0430\u0446\u044e\u0454 \u0442\u0456\u043b\u044c\u043a\u0438 \u043d\u0430 \u0441\u0435\u0440\u0432\u0435\u0440\u0456.",
       ephemeral=True,
     )
     return
@@ -5412,28 +5412,28 @@ async def annul_contract(
 
   if not row or row["guild_id"] != guild.id:
     await interaction.response.send_message(
-      f"â ÐÐ¾Ð½ÑÑÐ°ÐºÑ Ð· ID **{contract_id}** Ð½Ðµ Ð·Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾ Ð½Ð° ÑÑÐ¾Ð¼Ñ ÑÐµÑÐ²ÐµÑÑ.",
+      f"\u274c \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0437 ID **{contract_id}** \u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u043e \u043d\u0430 \u0446\u044c\u043e\u043c\u0443 \u0441\u0435\u0440\u0432\u0435\u0440\u0456.",
       ephemeral=True,
     )
     return
 
   if row["status"] == "annulled":
     await interaction.response.send_message(
-      f"â¹ï¸ ÐÐ¾Ð½ÑÑÐ°ÐºÑ **#{contract_id}** ÑÐ¶Ðµ Ð°Ð½ÑÐ»ÑÐ¾Ð²Ð°Ð½Ð¸Ð¹.",
+      f"\u2139\ufe0f \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 **#{contract_id}** \u0443\u0436\u0435 \u0430\u043d\u0443\u043b\u044c\u043e\u0432\u0430\u043d\u0438\u0439.",
       ephemeral=True,
     )
     return
 
   if row["status"] != "paid":
     status_names = {
-      "unpaid": "Ð½Ðµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹",
-      "cancelled": "ÑÐºÐ°ÑÐ¾Ð²Ð°Ð½Ð¸Ð¹",
+      "unpaid": "\u043d\u0435 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0439",
+      "cancelled": "\u0441\u043a\u0430\u0441\u043e\u0432\u0430\u043d\u0438\u0439",
     }
     status_name = status_names.get(row["status"], row["status"])
     await interaction.response.send_message(
       (
-        f"â ÐÐ¾Ð½ÑÑÐ°ÐºÑ **#{contract_id}** Ð·Ð°ÑÐ°Ð· **{status_name}**.\n"
-        "ÐÐ½ÑÐ»ÑÐ²Ð°ÑÐ¸ ÑÑÑÑ ÐºÐ¾Ð¼Ð°Ð½Ð´Ð¾Ñ Ð¼Ð¾Ð¶Ð½Ð° ÑÑÐ»ÑÐºÐ¸ Ð²Ð¶Ðµ Ð¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ð¹ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ."
+        f"\u274c \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 **#{contract_id}** \u0437\u0430\u0440\u0430\u0437 **{status_name}**.\n"
+        "\u0410\u043d\u0443\u043b\u044e\u0432\u0430\u0442\u0438 \u0446\u0456\u0454\u044e \u043a\u043e\u043c\u0430\u043d\u0434\u043e\u044e \u043c\u043e\u0436\u043d\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u0432\u0436\u0435 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0439 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442."
       ),
       ephemeral=True,
     )
@@ -5446,15 +5446,15 @@ async def annul_contract(
   )
 
   embed = discord.Embed(
-    title=f"ð« ÐÐ½ÑÐ»ÑÐ²Ð°Ð½Ð½Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ #{contract_id}",
+    title=f"\U0001f6ab \u0410\u043d\u0443\u043b\u044e\u0432\u0430\u043d\u043d\u044f \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443 #{contract_id}",
     description=(
-      "ÐÐµÑÐµÐ²ÑÑ ÐºÐ¾Ð½ÑÑÐ°ÐºÑ Ð¿ÐµÑÐµÐ´ Ð¿ÑÐ´ÑÐ²ÐµÑÐ´Ð¶ÐµÐ½Ð½ÑÐ¼.\n\n"
-      f"ð **{row['contract_name']}**\n"
-      f"ð° Ð¡ÑÐ¼Ð°: **{format_money_dollars(row['price'])} $**\n"
-      f"ð¥ ÐÐ¸ÐºÐ¾Ð½Ð°Ð²ÑÑ: {participant_text}\n"
-      f"ð¦ ÐÑÐ»Ð¾ Ð² ÐÐ°Ð½Ðº ÑÑÐ¼'Ñ: **{format_cents(row['fomo_cents'] or 0)}**\n"
-      f"ð¸ ÐÑÐ»Ð¾ ÑÑÐ°ÑÐ½Ð¸ÐºÐ°Ð¼: **{format_cents(row['net_cents'] or 0)}**\n\n"
-      f"[ÐÑÐ´ÐºÑÐ¸ÑÐ¸ Ð¿Ð¾Ð²ÑÐ´Ð¾Ð¼Ð»ÐµÐ½Ð½Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑ]({jump_url})"
+      "\u041f\u0435\u0440\u0435\u0432\u0456\u0440 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u043f\u0435\u0440\u0435\u0434 \u043f\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043d\u043d\u044f\u043c.\n\n"
+      f"\U0001f4cb **{row['contract_name']}**\n"
+      f"\U0001f4b0 \u0421\u0443\u043c\u0430: **{format_money_dollars(row['price'])} $**\n"
+      f"\U0001f465 \u0412\u0438\u043a\u043e\u043d\u0430\u0432\u0446\u0456: {participant_text}\n"
+      f"\U0001f3e6 \u0411\u0443\u043b\u043e \u0432 \u0411\u0430\u043d\u043a \u0441\u0456\u043c'\u0457: **{format_cents(row['fomo_cents'] or 0)}**\n"
+      f"\U0001f4b8 \u0411\u0443\u043b\u043e \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c: **{format_cents(row['net_cents'] or 0)}**\n\n"
+      f"[\u0412\u0456\u0434\u043a\u0440\u0438\u0442\u0438 \u043f\u043e\u0432\u0456\u0434\u043e\u043c\u043b\u0435\u043d\u043d\u044f \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443]({jump_url})"
     ),
     color=discord.Color.red(),
   )
@@ -5493,15 +5493,15 @@ class DebtUserSelect(discord.ui.Select):
         label=labels.get(row["user_id"], f"ID {row['user_id']}")[:100],
         value=str(row["user_id"]),
         description=(
-          f"ÐÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð¾: {format_cents(row['total_cents'])} â¢ "
-          f"ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ²: {row['debt_count']}"
+          f"\u0412\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u043e: {format_cents(row['total_cents'])} \u2022 "
+          f"\u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432: {row['debt_count']}"
         )[:100],
       )
       for row in rows[:25]
     ]
 
     super().__init__(
-      placeholder="ÐÐ±ÐµÑÑÑÑ Ð·Ð°Ð¼Ð°",
+      placeholder="\u041e\u0431\u0435\u0440\u0456\u0442\u044c \u0437\u0430\u043c\u0430",
       min_values=1,
       max_values=1,
       options=options,
@@ -5530,8 +5530,8 @@ class DebtPayView(discord.ui.View):
     self.user_id = user_id
 
   @discord.ui.button(
-    label="ÐÐ¿Ð»Ð°ÑÐ¸ÑÐ¸ Ð±Ð¾ÑÐ³",
-    emoji="ðµ",
+    label="\u041e\u043f\u043b\u0430\u0442\u0438\u0442\u0438 \u0431\u043e\u0440\u0433",
+    emoji="\U0001f4b5",
     style=discord.ButtonStyle.success,
   )
   async def pay(
@@ -5541,7 +5541,7 @@ class DebtPayView(discord.ui.View):
   ):
     if not isinstance(interaction.user, discord.Member) or not leader_member(interaction.user):
       await interaction.response.send_message(
-        "â ÐÑÐ¾Ð²Ð¾Ð´Ð¸ÑÐ¸ Ð²ÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ñ Ð²Ð¸Ð¿Ð»Ð°ÑÐ¸ Ð¼Ð¾Ð¶Ðµ ÑÑÐ»ÑÐºÐ¸ Ð»ÑÐ´ÐµÑ.",
+        "\u274c \u041f\u0440\u043e\u0432\u043e\u0434\u0438\u0442\u0438 \u0432\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0456 \u0432\u0438\u043f\u043b\u0430\u0442\u0438 \u043c\u043e\u0436\u0435 \u0442\u0456\u043b\u044c\u043a\u0438 \u043b\u0456\u0434\u0435\u0440.",
         ephemeral=True,
       )
       return
@@ -5549,7 +5549,7 @@ class DebtPayView(discord.ui.View):
     guild = interaction.guild
     if guild is None:
       await interaction.response.send_message(
-        "â Ð¦Ðµ Ð¿ÑÐ°ÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð½Ð° ÑÐµÑÐ²ÐµÑÑ.",
+        "\u274c \u0426\u0435 \u043f\u0440\u0430\u0446\u044e\u0454 \u0442\u0456\u043b\u044c\u043a\u0438 \u043d\u0430 \u0441\u0435\u0440\u0432\u0435\u0440\u0456.",
         ephemeral=True,
       )
       return
@@ -5560,7 +5560,7 @@ class DebtPayView(discord.ui.View):
     )
     if not debts:
       await interaction.response.edit_message(
-        content="â ÐÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð¾Ñ Ð¾Ð¿Ð»Ð°ÑÐ¸ Ð²Ð¶Ðµ Ð½ÐµÐ¼Ð°Ñ.",
+        content="\u2705 \u0412\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u043e\u0457 \u043e\u043f\u043b\u0430\u0442\u0438 \u0432\u0436\u0435 \u043d\u0435\u043c\u0430\u0454.",
         embed=None,
         view=None,
       )
@@ -5569,7 +5569,7 @@ class DebtPayView(discord.ui.View):
     total = sum(row["amount_cents"] for row in debts)
 
     await interaction.response.edit_message(
-      content="â³ ÐÑÐ¾Ð²Ð¾Ð´Ð¶Ñ Ð²ÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ñ Ð¾Ð¿Ð»Ð°ÑÑ...",
+      content="\u23f3 \u041f\u0440\u043e\u0432\u043e\u0434\u0436\u0443 \u0432\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0443 \u043e\u043f\u043b\u0430\u0442\u0443...",
       embed=None,
       view=None,
     )
@@ -5585,28 +5585,28 @@ class DebtPayView(discord.ui.View):
 
     await audit_log(
       guild,
-      "ðµ ÐÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ñ Ð¾Ð¿Ð»Ð°ÑÑ Ð¿ÑÐ¾Ð²ÐµÐ´ÐµÐ½Ð¾",
+      "\U0001f4b5 \u0412\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0443 \u043e\u043f\u043b\u0430\u0442\u0443 \u043f\u0440\u043e\u0432\u0435\u0434\u0435\u043d\u043e",
       (
-        f"ÐÐ°Ð¼: <@{self.user_id}>\n"
-        f"Ð¡ÑÐ¼Ð°: **{format_cents(total)}**\n"
-        f"ÐÐ¾Ð½ÑÑÐ°ÐºÑÑÐ²: **{len(settled)}**\n"
-        f"ÐÐ¿Ð»Ð°ÑÐ¸Ð²/Ð»Ð°: <@{interaction.user.id}>"
+        f"\u0417\u0430\u043c: <@{self.user_id}>\n"
+        f"\u0421\u0443\u043c\u0430: **{format_cents(total)}**\n"
+        f"\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432: **{len(settled)}**\n"
+        f"\u041e\u043f\u043b\u0430\u0442\u0438\u0432/\u043b\u0430: <@{interaction.user.id}>"
       ),
       discord.Color.green(),
     )
 
     await interaction.edit_original_response(
       content=(
-        f"â <@{self.user_id}> Ð²Ð¸Ð¿Ð»Ð°ÑÐµÐ½Ð¾ **{format_cents(total)}**.\n"
-        "ÐÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ñ Ð¾Ð¿Ð»Ð°ÑÑ Ð·Ð°ÐºÑÐ¸ÑÐ¾."
+        f"\u2705 <@{self.user_id}> \u0432\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u043e **{format_cents(total)}**.\n"
+        "\u0412\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0443 \u043e\u043f\u043b\u0430\u0442\u0443 \u0437\u0430\u043a\u0440\u0438\u0442\u043e."
       ),
       embed=None,
       view=None,
     )
 
   @discord.ui.button(
-    label="ÐÐ°Ð·Ð°Ð´",
-    emoji="â©ï¸",
+    label="\u041d\u0430\u0437\u0430\u0434",
+    emoji="\u21a9\ufe0f",
     style=discord.ButtonStyle.secondary,
   )
   async def back(
@@ -5630,24 +5630,24 @@ async def show_debt_user(
   label = await debt_user_label(guild, user_id)
 
   embed = discord.Embed(
-    title="ð° ÐÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð° Ð¾Ð¿Ð»Ð°ÑÐ°",
+    title="\U0001f4b0 \u0412\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0430 \u043e\u043f\u043b\u0430\u0442\u0430",
     description=(
-      f"**{label}** â¢ <@{user_id}>\n"
-      f"ÐÑÑÐ¾Ð³Ð¾ Ð²ÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð¾: **{format_cents(total)}**\n"
-      f"ÐÐ¾Ð½ÑÑÐ°ÐºÑÑÐ² Ñ Ð±Ð¾ÑÐ³Ñ: **{len(debts)}**"
+      f"**{label}** \u2022 <@{user_id}>\n"
+      f"\u0412\u0441\u044c\u043e\u0433\u043e \u0432\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u043e: **{format_cents(total)}**\n"
+      f"\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432 \u0443 \u0431\u043e\u0440\u0433\u0443: **{len(debts)}**"
     ),
     color=discord.Color.gold(),
   )
 
   if debts:
     lines = [
-      f"#{row['contract_id']} â¢ {row['contract_name']} â **{format_cents(row['amount_cents'])}**"
+      f"#{row['contract_id']} \u2022 {row['contract_name']} \u2014 **{format_cents(row['amount_cents'])}**"
       for row in debts[:10]
     ]
     if len(debts) > 10:
-      lines.append(f"â¦Ñ ÑÐµ {len(debts) - 10}")
+      lines.append(f"\u2026\u0456 \u0449\u0435 {len(debts) - 10}")
     embed.add_field(
-      name="ÐÐ¾Ð½ÑÑÐ°ÐºÑÐ¸",
+      name="\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438",
       value="\n".join(lines),
       inline=False,
     )
@@ -5671,8 +5671,8 @@ async def send_debts_list(
 
   if not rows:
     embed = discord.Embed(
-      title="ð° ÐÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ñ Ð¾Ð¿Ð»Ð°ÑÐ¸",
-      description="â ÐÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð¸Ñ Ð¾Ð¿Ð»Ð°Ñ Ð½ÐµÐ¼Ð°Ñ.",
+      title="\U0001f4b0 \u0412\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0456 \u043e\u043f\u043b\u0430\u0442\u0438",
+      description="\u2705 \u0412\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0438\u0445 \u043e\u043f\u043b\u0430\u0442 \u043d\u0435\u043c\u0430\u0454.",
       color=discord.Color.green(),
     )
     if edit:
@@ -5699,16 +5699,16 @@ async def send_debts_list(
 
   lines = [
     (
-      f"<@{row['user_id']}> â **{format_cents(row['total_cents'])}** "
-      f"â¢ {row['debt_count']} ÐºÐ¾Ð½ÑÑÐ°ÐºÑ(ÑÐ²)"
+      f"<@{row['user_id']}> \u2014 **{format_cents(row['total_cents'])}** "
+      f"\u2022 {row['debt_count']} \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442(\u0456\u0432)"
     )
     for row in rows[:25]
   ]
 
   embed = discord.Embed(
-    title="ð° ÐÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ñ Ð¾Ð¿Ð»Ð°ÑÐ¸",
+    title="\U0001f4b0 \u0412\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0456 \u043e\u043f\u043b\u0430\u0442\u0438",
     description=(
-      f"ÐÑÑÐ¾Ð³Ð¾ Ð²ÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ð¾: **{format_cents(total)}**\n\n"
+      f"\u0412\u0441\u044c\u043e\u0433\u043e \u0432\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u043e: **{format_cents(total)}**\n\n"
       + "\n".join(lines)
     ),
     color=discord.Color.gold(),
@@ -5732,12 +5732,12 @@ async def send_debts_list(
 
 @bot.tree.command(
   name="debts",
-  description="ÐÐ¾ÐºÐ°Ð·Ð°ÑÐ¸ Ð²ÑÐ´ÐºÐ»Ð°Ð´ÐµÐ½Ñ Ð²Ð¸Ð¿Ð»Ð°ÑÐ¸ Ð·Ð°Ð¼Ð°Ð¼ Ð·Ð° Ð²Ð¸ÐºÐ¾Ð½Ð°Ð½Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ¸",
+  description="\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u0438 \u0432\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0456 \u0432\u0438\u043f\u043b\u0430\u0442\u0438 \u0437\u0430\u043c\u0430\u043c \u0437\u0430 \u0432\u0438\u043a\u043e\u043d\u0430\u043d\u0456 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438",
 )
 async def debts(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
     await interaction.response.send_message(
-      "â ÐÐ¾Ð¼Ð°Ð½Ð´Ð° Ð´Ð¾ÑÑÑÐ¿Ð½Ð° ÑÑÐ»ÑÐºÐ¸ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ñ.",
+      "\u274c \u041a\u043e\u043c\u0430\u043d\u0434\u0430 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u0443.",
       ephemeral=True,
     )
     return
@@ -5749,19 +5749,19 @@ async def debts(interaction: discord.Interaction):
 
 @bot.tree.command(
   name="test-rating",
-  description="Ð¢ÐµÑÑÐ¾Ð²Ð¾ Ð²ÑÐ´Ð¿ÑÐ°Ð²Ð¸ÑÐ¸ Ð¿Ð¾ÑÐ¾ÑÐ½Ð¸Ð¹ ÑÐµÐ¹ÑÐ¸Ð½Ð³ Ñ ÐºÐ°Ð½Ð°Ð» ÑÐµÐ¹ÑÐ¸Ð½Ð³Ñ",
+  description="\u0422\u0435\u0441\u0442\u043e\u0432\u043e \u0432\u0456\u0434\u043f\u0440\u0430\u0432\u0438\u0442\u0438 \u043f\u043e\u0442\u043e\u0447\u043d\u0438\u0439 \u0440\u0435\u0439\u0442\u0438\u043d\u0433 \u0443 \u043a\u0430\u043d\u0430\u043b \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443",
 )
 async def test_rating(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
     await interaction.response.send_message(
-      "â ÐÐ¾Ð¼Ð°Ð½Ð´Ð° Ð´Ð¾ÑÑÑÐ¿Ð½Ð° ÑÑÐ»ÑÐºÐ¸ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ñ.",
+      "\u274c \u041a\u043e\u043c\u0430\u043d\u0434\u0430 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u0443.",
       ephemeral=True,
     )
     return
 
   if not RATING_CHANNEL_ID:
     await interaction.response.send_message(
-      "â ÐÐµ Ð·Ð°Ð´Ð°Ð½Ð¾ `RATING_CHANNEL_ID` Ñ Railway.",
+      "\u274c \u041d\u0435 \u0437\u0430\u0434\u0430\u043d\u043e `RATING_CHANNEL_ID` \u0443 Railway.",
       ephemeral=True,
     )
     return
@@ -5771,31 +5771,31 @@ async def test_rating(interaction: discord.Interaction):
   now = datetime.now(LOCAL_TZ)
   await send_auto_rating(
     bot,
-    f"{now.strftime('%d.%m.%Y')} â¢ ÑÐµÑÑ",
+    f"{now.strftime('%d.%m.%Y')} \u2022 \u0442\u0435\u0441\u0442",
   )
 
   await interaction.followup.send(
-    "â Ð¢ÐµÑÑÐ¾Ð²Ð¸Ð¹ ÑÐµÐ¹ÑÐ¸Ð½Ð³ Ð²ÑÐ´Ð¿ÑÐ°Ð²Ð»ÐµÐ½Ð¾ Ð² ÐºÐ°Ð½Ð°Ð» ÑÐµÐ¹ÑÐ¸Ð½Ð³Ñ.\n"
-    "ÐÐ²ÑÐ¾Ð¼Ð°ÑÐ¸ÑÐ½Ð¸Ð¹ Ð¿Ð¾ÑÑ Ð¾ 09:00 / 21:00 ÑÐ¸Ð¼ Ð½Ðµ Ð¿Ð¾Ð·Ð½Ð°ÑÐ°ÑÑÑÑÑ ÑÐº Ð²Ð¸ÐºÐ¾Ð½Ð°Ð½Ð¸Ð¹.",
+    "\u2705 \u0422\u0435\u0441\u0442\u043e\u0432\u0438\u0439 \u0440\u0435\u0439\u0442\u0438\u043d\u0433 \u0432\u0456\u0434\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e \u0432 \u043a\u0430\u043d\u0430\u043b \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443.\n"
+    "\u0410\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u043d\u0438\u0439 \u043f\u043e\u0441\u0442 \u043e 09:00 / 21:00 \u0446\u0438\u043c \u043d\u0435 \u043f\u043e\u0437\u043d\u0430\u0447\u0430\u0454\u0442\u044c\u0441\u044f \u044f\u043a \u0432\u0438\u043a\u043e\u043d\u0430\u043d\u0438\u0439.",
     ephemeral=True,
   )
 
 
 @bot.tree.command(
   name="test-family-stats",
-  description="Ð¢ÐµÑÑÐ¾Ð²Ð¾ Ð²ÑÐ´Ð¿ÑÐ°Ð²Ð¸ÑÐ¸ ÑÐ¾Ð´ÐµÐ½Ð½Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÑ ÑÑÐ¼'Ñ",
+  description="\u0422\u0435\u0441\u0442\u043e\u0432\u043e \u0432\u0456\u0434\u043f\u0440\u0430\u0432\u0438\u0442\u0438 \u0449\u043e\u0434\u0435\u043d\u043d\u0443 \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0443 \u0441\u0456\u043c'\u0457",
 )
 async def test_family_stats(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
     await interaction.response.send_message(
-      "â ÐÐ¾Ð¼Ð°Ð½Ð´Ð° Ð´Ð¾ÑÑÑÐ¿Ð½Ð° ÑÑÐ»ÑÐºÐ¸ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ñ.",
+      "\u274c \u041a\u043e\u043c\u0430\u043d\u0434\u0430 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u0443.",
       ephemeral=True,
     )
     return
 
   if not FAMILY_STATS_CHANNEL_ID:
     await interaction.response.send_message(
-      "â ÐÐµ Ð·Ð°Ð´Ð°Ð½Ð¾ `FAMILY_STATS_CHANNEL_ID` Ñ Railway.",
+      "\u274c \u041d\u0435 \u0437\u0430\u0434\u0430\u043d\u043e `FAMILY_STATS_CHANNEL_ID` \u0443 Railway.",
       ephemeral=True,
     )
     return
@@ -5811,19 +5811,19 @@ async def test_family_stats(interaction: discord.Interaction):
 
   await interaction.followup.send(
     (
-      "â Ð¢ÐµÑÑÐ¾Ð²Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÑ ÑÑÐ¼'Ñ Ð²ÑÐ´Ð¿ÑÐ°Ð²Ð»ÐµÐ½Ð¾.\n"
-      f"ÐÐµÑÑÐ¾Ð´: **{target_day.strftime('%d.%m.%Y')}**.\n"
-      "ÐÐ²ÑÐ¾Ð¼Ð°ÑÐ¸ÑÐ½Ð¸Ð¹ Ð·Ð²ÑÑ Ð¾ 00:00 ÑÐ¸Ð¼ Ð½Ðµ Ð¿Ð¾Ð·Ð½Ð°ÑÐ°ÑÑÑÑÑ ÑÐº Ð²Ð¸ÐºÐ¾Ð½Ð°Ð½Ð¸Ð¹."
+      "\u2705 \u0422\u0435\u0441\u0442\u043e\u0432\u0443 \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0443 \u0441\u0456\u043c'\u0457 \u0432\u0456\u0434\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e.\n"
+      f"\u041f\u0435\u0440\u0456\u043e\u0434: **{target_day.strftime('%d.%m.%Y')}**.\n"
+      "\u0410\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u043d\u0438\u0439 \u0437\u0432\u0456\u0442 \u043e 00:00 \u0446\u0438\u043c \u043d\u0435 \u043f\u043e\u0437\u043d\u0430\u0447\u0430\u0454\u0442\u044c\u0441\u044f \u044f\u043a \u0432\u0438\u043a\u043e\u043d\u0430\u043d\u0438\u0439."
     ),
     ephemeral=True,
   )
 
 
-@bot.tree.command(name="stats", description="Ð¡ÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ² Ð´Ð»Ñ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð°")
+@bot.tree.command(name="stats", description="\u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432 \u0434\u043b\u044f \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u0430")
 async def stats(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
     await interaction.response.send_message(
-      "â Ð¡ÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° Ð´Ð¾ÑÑÑÐ¿Ð½Ð° ÑÑÐ»ÑÐºÐ¸ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ñ.",
+      "\u274c \u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u0443.",
       ephemeral=True,
     )
     return
@@ -5831,7 +5831,7 @@ async def stats(interaction: discord.Interaction):
   guild = interaction.guild
   if guild is None:
     await interaction.response.send_message(
-      "â Ð¦Ðµ Ð¿ÑÐ°ÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð½Ð° ÑÐµÑÐ²ÐµÑÑ.",
+      "\u274c \u0426\u0435 \u043f\u0440\u0430\u0446\u044e\u0454 \u0442\u0456\u043b\u044c\u043a\u0438 \u043d\u0430 \u0441\u0435\u0440\u0432\u0435\u0440\u0456.",
       ephemeral=True,
     )
     return
@@ -5843,23 +5843,23 @@ async def stats(interaction: discord.Interaction):
   )
 
 
-@bot.tree.command(name="unpaid", description="ÐÐµÐ¾Ð¿Ð»Ð°ÑÐµÐ½Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ¸")
+@bot.tree.command(name="unpaid", description="\u041d\u0435\u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0456 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438")
 async def unpaid(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
     await interaction.response.send_message(
-      "â ÐÐ¾ÑÑÑÐ¿Ð½Ð¾ ÑÑÐ»ÑÐºÐ¸ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ñ.",
+      "\u274c \u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u0443.",
       ephemeral=True,
     )
     return
 
   guild = interaction.guild
   if guild is None:
-    await interaction.response.send_message("â Ð¦Ðµ Ð¿ÑÐ°ÑÑÑ ÑÑÐ»ÑÐºÐ¸ Ð½Ð° ÑÐµÑÐ²ÐµÑÑ.", ephemeral=True)
+    await interaction.response.send_message("\u274c \u0426\u0435 \u043f\u0440\u0430\u0446\u044e\u0454 \u0442\u0456\u043b\u044c\u043a\u0438 \u043d\u0430 \u0441\u0435\u0440\u0432\u0435\u0440\u0456.", ephemeral=True)
     return
 
   rows = db.unpaid_for_guild(guild.id)
   if not rows:
-    await interaction.response.send_message("â ÐÐµÐ¾Ð¿Ð»Ð°ÑÐµÐ½Ð¸Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ² Ð½ÐµÐ¼Ð°Ñ.", ephemeral=True)
+    await interaction.response.send_message("\u2705 \u041d\u0435\u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0445 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432 \u043d\u0435\u043c\u0430\u0454.", ephemeral=True)
     return
 
   lines = []
@@ -5867,12 +5867,12 @@ async def unpaid(interaction: discord.Interaction):
     participants = " ".join(f"<@{uid}>" for uid in parse_ids(row["participant_ids"]))
     jump_url = f"https://discord.com/channels/{guild.id}/{row['channel_id']}/{row['message_id']}"
     lines.append(
-      f"â¢ **{row['contract_name']}** â {format_money_dollars(row['price'])} $ â "
-      f"{participants} â [Ð²ÑÐ´ÐºÑÐ¸ÑÐ¸]({jump_url})"
+      f"\u2022 **{row['contract_name']}** \u2014 {format_money_dollars(row['price'])} $ \u2014 "
+      f"{participants} \u2014 [\u0432\u0456\u0434\u043a\u0440\u0438\u0442\u0438]({jump_url})"
     )
 
   embed = discord.Embed(
-    title="ð¸ ÐÐµÐ¾Ð¿Ð»Ð°ÑÐµÐ½Ñ ÐºÐ¾Ð½ÑÑÐ°ÐºÑÐ¸",
+    title="\U0001f4b8 \u041d\u0435\u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0456 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438",
     description="\n".join(lines),
     color=discord.Color.orange(),
   )

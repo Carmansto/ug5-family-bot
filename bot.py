@@ -3918,6 +3918,31 @@ def build_admin_general_stats_embed(guild_id: int) -> discord.Embed:
     inline=True,
   )
 
+  if pending_by_user:
+    pending_lines = [
+      f"<@{uid}> \u2014 **{format_cents(amount)}**"
+      for uid, amount in pending_by_user.most_common(10)
+    ]
+    if len(pending_by_user) > 10:
+      pending_lines.append(
+        f"\u2026\u0456 \u0449\u0435 {len(pending_by_user) - 10}"
+      )
+
+    embed.add_field(
+      name="\U0001f4b3 \u0412\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0456 \u043e\u043f\u043b\u0430\u0442\u0438 \u0437\u0430\u043c\u0430\u043c",
+      value=(
+        f"\u0417\u0430\u043b\u0438\u0448\u043e\u043a \u0434\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438: **{format_cents(pending_debt_cents)}**\n"
+        + "\n".join(pending_lines)
+      ),
+      inline=False,
+    )
+  else:
+    embed.add_field(
+      name="\U0001f4b3 \u0412\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0456 \u043e\u043f\u043b\u0430\u0442\u0438 \u0437\u0430\u043c\u0430\u043c",
+      value="\u2705 \u041d\u0430 \u043a\u0456\u043d\u0435\u0446\u044c \u0434\u043d\u044f \u0432\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0438\u0445 \u043e\u043f\u043b\u0430\u0442 \u043d\u0435\u043c\u0430\u0454.",
+      inline=False,
+    )
+
   embed.add_field(
     name="\U0001f465 \u0410\u043a\u0442\u0438\u0432\u043d\u0456\u0441\u0442\u044c",
     value=(
@@ -5045,6 +5070,32 @@ def build_family_daily_embed(
     for row in deferred_settled_today
   )
 
+  # Snapshot of outstanding deferred payments at the end of target_day.
+  pending_at_day_end = []
+  for row in debts:
+    created_day = local_date_from_iso(row["created_at"])
+    settled_day = (
+      local_date_from_iso(row["settled_at"])
+      if row["settled_at"]
+      else None
+    )
+
+    if (
+      created_day is not None
+      and created_day <= target_day
+      and (settled_day is None or settled_day > target_day)
+    ):
+      pending_at_day_end.append(row)
+
+  pending_debt_cents = sum(
+    row["amount_cents"] or 0
+    for row in pending_at_day_end
+  )
+
+  pending_by_user = Counter()
+  for row in pending_at_day_end:
+    pending_by_user[row["user_id"]] += row["amount_cents"] or 0
+
   contributions = db.family_contributions_for_guild(guild_id)
   personal_family_cents = sum(
     row["amount_cents"] or 0
@@ -5880,4 +5931,3 @@ async def unpaid(interaction: discord.Interaction):
 
 
 bot.run(TOKEN)
-

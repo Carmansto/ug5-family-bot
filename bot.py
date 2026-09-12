@@ -5745,6 +5745,80 @@ async def debts(interaction: discord.Interaction):
   await send_debts_list(interaction)
 
 
+
+
+@bot.tree.command(
+  name="test-rating",
+  description="Ð¢ÐµÑÑÐ¾Ð²Ð¾ Ð²ÑÐ´Ð¿ÑÐ°Ð²Ð¸ÑÐ¸ Ð¿Ð¾ÑÐ¾ÑÐ½Ð¸Ð¹ ÑÐµÐ¹ÑÐ¸Ð½Ð³ Ñ ÐºÐ°Ð½Ð°Ð» ÑÐµÐ¹ÑÐ¸Ð½Ð³Ñ",
+)
+async def test_rating(interaction: discord.Interaction):
+  if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
+    await interaction.response.send_message(
+      "â ÐÐ¾Ð¼Ð°Ð½Ð´Ð° Ð´Ð¾ÑÑÑÐ¿Ð½Ð° ÑÑÐ»ÑÐºÐ¸ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ñ.",
+      ephemeral=True,
+    )
+    return
+
+  if not RATING_CHANNEL_ID:
+    await interaction.response.send_message(
+      "â ÐÐµ Ð·Ð°Ð´Ð°Ð½Ð¾ `RATING_CHANNEL_ID` Ñ Railway.",
+      ephemeral=True,
+    )
+    return
+
+  await interaction.response.defer(ephemeral=True)
+
+  now = datetime.now(LOCAL_TZ)
+  await send_auto_rating(
+    bot,
+    f"{now.strftime('%d.%m.%Y')} â¢ ÑÐµÑÑ",
+  )
+
+  await interaction.followup.send(
+    "â Ð¢ÐµÑÑÐ¾Ð²Ð¸Ð¹ ÑÐµÐ¹ÑÐ¸Ð½Ð³ Ð²ÑÐ´Ð¿ÑÐ°Ð²Ð»ÐµÐ½Ð¾ Ð² ÐºÐ°Ð½Ð°Ð» ÑÐµÐ¹ÑÐ¸Ð½Ð³Ñ.\n"
+    "ÐÐ²ÑÐ¾Ð¼Ð°ÑÐ¸ÑÐ½Ð¸Ð¹ Ð¿Ð¾ÑÑ Ð¾ 09:00 / 21:00 ÑÐ¸Ð¼ Ð½Ðµ Ð¿Ð¾Ð·Ð½Ð°ÑÐ°ÑÑÑÑÑ ÑÐº Ð²Ð¸ÐºÐ¾Ð½Ð°Ð½Ð¸Ð¹.",
+    ephemeral=True,
+  )
+
+
+@bot.tree.command(
+  name="test-family-stats",
+  description="Ð¢ÐµÑÑÐ¾Ð²Ð¾ Ð²ÑÐ´Ð¿ÑÐ°Ð²Ð¸ÑÐ¸ ÑÐ¾Ð´ÐµÐ½Ð½Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÑ ÑÑÐ¼'Ñ",
+)
+async def test_family_stats(interaction: discord.Interaction):
+  if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
+    await interaction.response.send_message(
+      "â ÐÐ¾Ð¼Ð°Ð½Ð´Ð° Ð´Ð¾ÑÑÑÐ¿Ð½Ð° ÑÑÐ»ÑÐºÐ¸ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ñ.",
+      ephemeral=True,
+    )
+    return
+
+  if not FAMILY_STATS_CHANNEL_ID:
+    await interaction.response.send_message(
+      "â ÐÐµ Ð·Ð°Ð´Ð°Ð½Ð¾ `FAMILY_STATS_CHANNEL_ID` Ñ Railway.",
+      ephemeral=True,
+    )
+    return
+
+  await interaction.response.defer(ephemeral=True)
+
+  target_day = datetime.now(LOCAL_TZ).date() - timedelta(days=1)
+
+  await send_auto_family_stats(
+    bot,
+    target_day,
+  )
+
+  await interaction.followup.send(
+    (
+      "â Ð¢ÐµÑÑÐ¾Ð²Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÑ ÑÑÐ¼'Ñ Ð²ÑÐ´Ð¿ÑÐ°Ð²Ð»ÐµÐ½Ð¾.\n"
+      f"ÐÐµÑÑÐ¾Ð´: **{target_day.strftime('%d.%m.%Y')}**.\n"
+      "ÐÐ²ÑÐ¾Ð¼Ð°ÑÐ¸ÑÐ½Ð¸Ð¹ Ð·Ð²ÑÑ Ð¾ 00:00 ÑÐ¸Ð¼ Ð½Ðµ Ð¿Ð¾Ð·Ð½Ð°ÑÐ°ÑÑÑÑÑ ÑÐº Ð²Ð¸ÐºÐ¾Ð½Ð°Ð½Ð¸Ð¹."
+    ),
+    ephemeral=True,
+  )
+
+
 @bot.tree.command(name="stats", description="Ð¡ÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ° ÐºÐ¾Ð½ÑÑÐ°ÐºÑÑÐ² Ð´Ð»Ñ ÐºÐµÑÑÐ²Ð½Ð¸ÑÑÐ²Ð°")
 async def stats(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
@@ -5806,3 +5880,4 @@ async def unpaid(interaction: discord.Interaction):
 
 
 bot.run(TOKEN)
+

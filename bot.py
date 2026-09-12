@@ -5853,7 +5853,7 @@ async def test_family_stats(interaction: discord.Interaction):
 
   await interaction.response.defer(ephemeral=True)
 
-  target_day = datetime.now(LOCAL_TZ).date() - timedelta(days=1)
+  target_day = datetime.now(LOCAL_TZ).date()
 
   await send_auto_family_stats(
     bot,

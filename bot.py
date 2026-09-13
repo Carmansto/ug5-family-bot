@@ -30,6 +30,11 @@ RATING_MORNING_HOUR = int(os.getenv("RATING_MORNING_HOUR", "9") or 9)
 RATING_EVENING_HOUR = int(os.getenv("RATING_EVENING_HOUR", "21") or 21)
 FAMILY_STATS_HOUR = int(os.getenv("FAMILY_STATS_HOUR", "0") or 0)
 
+# Birthday module.
+BIRTHDAY_INPUT_CHANNEL_ID = int(os.getenv("BIRTHDAY_INPUT_CHANNEL_ID", "0") or 0)
+BIRTHDAY_ALERT_CHANNEL_ID = int(os.getenv("BIRTHDAY_ALERT_CHANNEL_ID", "0") or 0)
+BIRTHDAY_REMINDER_HOUR = int(os.getenv("BIRTHDAY_REMINDER_HOUR", "9") or 9)
+
 # Backward compatible with your current setup.
 ADMIN_ROLE_ID = int(os.getenv("ADMIN_ROLE_ID", "0") or 0)
 
@@ -556,6 +561,19 @@ class Database:
       amount_cents INTEGER NOT NULL,
       created_at TEXT NOT NULL,
       UNIQUE(contract_id, user_id)
+    )
+    """)
+
+    self.conn.execute("""
+    CREATE TABLE IF NOT EXISTS birthdays (
+      guild_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      day INTEGER NOT NULL,
+      month INTEGER NOT NULL,
+      year INTEGER,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (guild_id, user_id)
     )
     """)
 
@@ -1249,6 +1267,51 @@ class Database:
      AND c.status = 'paid'
     ORDER BY fc.id ASC
     """, (guild_id,)).fetchall()
+
+  def upsert_birthday(
+    self,
+    guild_id: int,
+    user_id: int,
+    day: int,
+    month: int,
+    year: Optional[int],
+  ):
+    now = utc_now_iso()
+    self.conn.execute("""
+    INSERT INTO birthdays
+    (guild_id, user_id, day, month, year, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(guild_id, user_id)
+    DO UPDATE SET
+      day = excluded.day,
+      month = excluded.month,
+      year = excluded.year,
+      updated_at = excluded.updated_at
+    """, (
+      guild_id,
+      user_id,
+      day,
+      month,
+      year,
+      now,
+      now,
+    ))
+    self.conn.commit()
+
+  def birthdays_for_guild(self, guild_id: int):
+    return self.conn.execute("""
+    SELECT *
+    FROM birthdays
+    WHERE guild_id = ?
+    ORDER BY month ASC, day ASC, user_id ASC
+    """, (guild_id,)).fetchall()
+
+  def get_birthday(self, guild_id: int, user_id: int):
+    return self.conn.execute("""
+    SELECT *
+    FROM birthdays
+    WHERE guild_id = ? AND user_id = ?
+    """, (guild_id, user_id)).fetchone()
 
   def get_setting(self, guild_id: int, key: str) -> Optional[str]:
     row = self.conn.execute("""
@@ -4897,6 +4960,364 @@ class MainContractPanelView(discord.ui.View):
 
 
 # ----------------------------
+# Birthday module
+# ----------------------------
+
+def parse_birthday_input(raw: str) -> tuple[int, int, Optional[int]]:
+  text = raw.strip()
+  match = re.fullmatch(
+    r"\s*(\d{1,2})[.\-/](\d{1,2})(?:[.\-/](\d{4}))?\s*",
+    text,
+  )
+  if not match:
+    raise ValueError("\u0412\u043a\u0430\u0436\u0456\u0442\u044c \u0434\u0430\u0442\u0443 \u0443 \u0444\u043e\u0440\u043c\u0430\u0442\u0456 \u0414\u0414.\u041c\u041c \u0430\u0431\u043e \u0414\u0414.\u041c\u041c.\u0420\u0420\u0420\u0420.")
+
+  day = int(match.group(1))
+  month = int(match.group(2))
+  year = int(match.group(3)) if match.group(3) else None
+
+  validation_year = year or 2000
+
+  try:
+    datetime(validation_year, month, day)
+  except ValueError:
+    raise ValueError("\u0422\u0430\u043a\u043e\u0457 \u0434\u0430\u0442\u0438 \u043d\u0435 \u0456\u0441\u043d\u0443\u0454.")
+
+  if year is not None:
+    current_year = datetime.now(LOCAL_TZ).year
+    if year < 1900 or year > current_year:
+      raise ValueError(
+        f"\u0420\u0456\u043a \u043c\u0430\u0454 \u0431\u0443\u0442\u0438 \u0432\u0456\u0434 1900 \u0434\u043e {current_year}."
+      )
+
+  return day, month, year
+
+
+def birthday_display(
+  day: int,
+  month: int,
+  year: Optional[int] = None,
+) -> str:
+  if year:
+    return f"{day:02d}.{month:02d}.{year}"
+  return f"{day:02d}.{month:02d}"
+
+
+def next_birthday_date(
+  month: int,
+  day: int,
+  today,
+):
+  # Works for 29 February too: searches until the next valid date.
+  for year in range(today.year, today.year + 9):
+    try:
+      candidate = datetime(year, month, day).date()
+    except ValueError:
+      continue
+
+    if candidate >= today:
+      return candidate
+
+  return None
+
+
+def birthday_days_until(
+  month: int,
+  day: int,
+  today,
+) -> Optional[int]:
+  target = next_birthday_date(month, day, today)
+  if target is None:
+    return None
+  return (target - today).days
+
+
+def build_birthday_panel_embed() -> discord.Embed:
+  embed = discord.Embed(
+    title="\U0001f382 \u0414\u043d\u0456 \u043d\u0430\u0440\u043e\u0434\u0436\u0435\u043d\u043d\u044f",
+    description=(
+      "**\u0412\u043a\u0430\u0436\u0456\u0442\u044c \u0441\u0432\u043e\u044e \u0434\u0430\u0442\u0443 \u043d\u0430\u0440\u043e\u0434\u0436\u0435\u043d\u043d\u044f**, \u0449\u043e\u0431 \u043c\u0438 \u043c\u043e\u0433\u043b\u0438 \u0432\u0430\u0441 \u043f\u0440\u0438\u0432\u0456\u0442\u0430\u0442\u0438 \U0001f973\n\n"
+      "\u041d\u0430\u0442\u0438\u0441\u043d\u0456\u0442\u044c \u043a\u043d\u043e\u043f\u043a\u0443 \u043d\u0438\u0436\u0447\u0435 \u0442\u0430 \u0432\u0432\u0435\u0434\u0456\u0442\u044c \u0434\u0430\u0442\u0443."
+    ),
+    color=discord.Color.magenta(),
+  )
+  embed.set_footer(
+    text="\u042f\u043a\u0449\u043e \u0434\u0430\u0442\u0430 \u0437\u043c\u0456\u043d\u0438\u0442\u044c\u0441\u044f \u2014 \u043f\u0440\u043e\u0441\u0442\u043e \u0437\u0430\u043f\u043e\u0432\u043d\u0456\u0442\u044c \u0444\u043e\u0440\u043c\u0443 \u0449\u0435 \u0440\u0430\u0437."
+  )
+  return embed
+
+
+class BirthdayModal(discord.ui.Modal, title="\U0001f382 \u0414\u0430\u0442\u0430 \u043d\u0430\u0440\u043e\u0434\u0436\u0435\u043d\u043d\u044f"):
+  def __init__(self):
+    super().__init__(timeout=300)
+
+    self.birthday_input = discord.ui.TextInput(
+      label="\u0412\u0430\u0448\u0430 \u0434\u0430\u0442\u0430 \u043d\u0430\u0440\u043e\u0434\u0436\u0435\u043d\u043d\u044f",
+      placeholder="\u041d\u0430\u043f\u0440\u0438\u043a\u043b\u0430\u0434: 21.09 \u0430\u0431\u043e 21.09.2001",
+      required=True,
+      max_length=10,
+    )
+    self.add_item(self.birthday_input)
+
+  async def on_submit(self, interaction: discord.Interaction):
+    guild = interaction.guild
+    if guild is None:
+      await interaction.response.send_message(
+        "\u274c \u0426\u0435 \u043f\u0440\u0430\u0446\u044e\u0454 \u0442\u0456\u043b\u044c\u043a\u0438 \u043d\u0430 \u0441\u0435\u0440\u0432\u0435\u0440\u0456.",
+        ephemeral=True,
+      )
+      return
+
+    try:
+      day, month, year = parse_birthday_input(
+        str(self.birthday_input)
+      )
+    except ValueError as exc:
+      await interaction.response.send_message(
+        f"\u274c {exc}",
+        ephemeral=True,
+      )
+      return
+
+    db.upsert_birthday(
+      guild.id,
+      interaction.user.id,
+      day,
+      month,
+      year,
+    )
+
+    await interaction.response.send_message(
+      (
+        "\u2705 \u0414\u0430\u0442\u0443 \u043d\u0430\u0440\u043e\u0434\u0436\u0435\u043d\u043d\u044f \u0437\u0431\u0435\u0440\u0435\u0436\u0435\u043d\u043e: "
+        f"**{birthday_display(day, month, year)}**."
+      ),
+      ephemeral=True,
+    )
+
+
+class BirthdayPanelView(discord.ui.View):
+  def __init__(self):
+    super().__init__(timeout=None)
+
+  @discord.ui.button(
+    label="\u0412\u043a\u0430\u0437\u0430\u0442\u0438 \u0434\u0430\u0442\u0443 \u043d\u0430\u0440\u043e\u0434\u0436\u0435\u043d\u043d\u044f",
+    emoji="\U0001f382",
+    style=discord.ButtonStyle.primary,
+    custom_id="agosto:birthday:open",
+  )
+  async def open_birthday(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.send_modal(BirthdayModal())
+
+
+async def get_text_channel(
+  bot_instance: commands.Bot,
+  channel_id: int,
+) -> Optional[discord.TextChannel]:
+  if not channel_id:
+    return None
+
+  channel = bot_instance.get_channel(channel_id)
+
+  if channel is None:
+    try:
+      channel = await bot_instance.fetch_channel(channel_id)
+    except discord.DiscordException:
+      return None
+
+  if isinstance(channel, discord.TextChannel):
+    return channel
+
+  return None
+
+
+async def ensure_birthday_panel(
+  bot_instance: commands.Bot,
+):
+  if not GUILD_ID or not BIRTHDAY_INPUT_CHANNEL_ID:
+    return
+
+  channel = await get_text_channel(
+    bot_instance,
+    BIRTHDAY_INPUT_CHANNEL_ID,
+  )
+  if channel is None:
+    print("[BIRTHDAY] Input channel not found")
+    return
+
+  old_message_id = db.get_setting(
+    GUILD_ID,
+    "birthday_panel_message_id",
+  )
+
+  if old_message_id:
+    try:
+      message = await channel.fetch_message(int(old_message_id))
+      await message.edit(
+        embed=build_birthday_panel_embed(),
+        view=BirthdayPanelView(),
+      )
+      return
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+      pass
+
+  message = await channel.send(
+    embed=build_birthday_panel_embed(),
+    view=BirthdayPanelView(),
+  )
+
+  db.set_setting(
+    GUILD_ID,
+    "birthday_panel_message_id",
+    str(message.id),
+  )
+  print(f"[BIRTHDAY] Panel posted: {message.id}")
+
+
+def build_birthday_list_embed(
+  guild_id: int,
+) -> discord.Embed:
+  today = datetime.now(LOCAL_TZ).date()
+  rows = db.birthdays_for_guild(guild_id)
+
+  decorated = []
+  for row in rows:
+    days = birthday_days_until(
+      row["month"],
+      row["day"],
+      today,
+    )
+    if days is not None:
+      decorated.append((days, row))
+
+  decorated.sort(
+    key=lambda item: (
+      item[0],
+      item[1]["month"],
+      item[1]["day"],
+      item[1]["user_id"],
+    )
+  )
+
+  embed = discord.Embed(
+    title="\U0001f382 \u0421\u043f\u0438\u0441\u043e\u043a \u0434\u043d\u0456\u0432 \u043d\u0430\u0440\u043e\u0434\u0436\u0435\u043d\u043d\u044f",
+    color=discord.Color.magenta(),
+  )
+
+  if not decorated:
+    embed.description = "\u041f\u043e\u043a\u0438 \u0449\u043e \u043d\u0456\u0445\u0442\u043e \u043d\u0435 \u0432\u043a\u0430\u0437\u0430\u0432 \u0434\u0430\u0442\u0443 \u043d\u0430\u0440\u043e\u0434\u0436\u0435\u043d\u043d\u044f."
+    return embed
+
+  lines = []
+
+  for idx, (days, row) in enumerate(decorated, start=1):
+    if days == 0:
+      when = "**\u0441\u044c\u043e\u0433\u043e\u0434\u043d\u0456**"
+    elif days == 1:
+      when = "**\u0437\u0430\u0432\u0442\u0440\u0430**"
+    else:
+      when = f"\u0447\u0435\u0440\u0435\u0437 **{days} \u0434\u043d.**"
+
+    lines.append(
+      f"**{idx}.** <@{row['user_id']}> \u2014 "
+      f"**{birthday_display(row['day'], row['month'], row['year'])}** "
+      f"\u2022 {when}"
+    )
+
+  for page_idx, chunk in enumerate(
+    chunk_lines(lines, max_lines=20, max_chars=3500),
+    start=1,
+  ):
+    if page_idx == 1:
+      embed.description = "\n".join(chunk)
+      embed.set_footer(text=f"\u0423\u0441\u044c\u043e\u0433\u043e \u0437\u0430\u043f\u0438\u0441\u0430\u043d\u043e: {len(lines)}")
+      return embed
+
+  return embed
+
+
+async def send_birthday_reminders(
+  bot_instance: commands.Bot,
+):
+  if not GUILD_ID or not BIRTHDAY_ALERT_CHANNEL_ID:
+    return
+
+  channel = await get_text_channel(
+    bot_instance,
+    BIRTHDAY_ALERT_CHANNEL_ID,
+  )
+  if channel is None:
+    print("[BIRTHDAY] Alert channel not found")
+    return
+
+  today = datetime.now(LOCAL_TZ).date()
+  rows = db.birthdays_for_guild(GUILD_ID)
+
+  today_rows = []
+  tomorrow_rows = []
+  week_rows = []
+
+  for row in rows:
+    days = birthday_days_until(
+      row["month"],
+      row["day"],
+      today,
+    )
+
+    if days == 0:
+      today_rows.append(row)
+    elif days == 1:
+      tomorrow_rows.append(row)
+    elif days == 7:
+      week_rows.append(row)
+
+  if not (today_rows or tomorrow_rows or week_rows):
+    return
+
+  embed = discord.Embed(
+    title="\U0001f382 \u041d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u043d\u044f \u043f\u0440\u043e \u0434\u043d\u0456 \u043d\u0430\u0440\u043e\u0434\u0436\u0435\u043d\u043d\u044f",
+    description=today.strftime("%d.%m.%Y"),
+    color=discord.Color.magenta(),
+  )
+
+  if today_rows:
+    embed.add_field(
+      name="\U0001f389 \u0421\u042c\u041e\u0413\u041e\u0414\u041d\u0406",
+      value="\n".join(
+        f"<@{row['user_id']}> \u2014 **{birthday_display(row['day'], row['month'])}**"
+        for row in today_rows
+      ),
+      inline=False,
+    )
+
+  if tomorrow_rows:
+    embed.add_field(
+      name="\u23f0 \u0417\u0410\u0412\u0422\u0420\u0410",
+      value="\n".join(
+        f"<@{row['user_id']}> \u2014 **{birthday_display(row['day'], row['month'])}**"
+        for row in tomorrow_rows
+      ),
+      inline=False,
+    )
+
+  if week_rows:
+    embed.add_field(
+      name="\U0001f4c5 \u0427\u0415\u0420\u0415\u0417 \u0422\u0418\u0416\u0414\u0415\u041d\u042c",
+      value="\n".join(
+        f"<@{row['user_id']}> \u2014 **{birthday_display(row['day'], row['month'])}**"
+        for row in week_rows
+      ),
+      inline=False,
+    )
+
+  await channel.send(embed=embed)
+
+
+# ----------------------------
 # Automatic channel reports
 # ----------------------------
 
@@ -5272,6 +5693,20 @@ async def scheduled_posts_loop(bot_instance: commands.Bot):
         )
         print(f"[AUTO] Evening rating sent for {today_key}")
 
+      # Birthday reminders: 7 days before, 1 day before, and on the day.
+      if (
+        BIRTHDAY_ALERT_CHANNEL_ID
+        and now.hour == BIRTHDAY_REMINDER_HOUR
+        and db.get_setting(GUILD_ID, "birthday_reminders_date") != today_key
+      ):
+        await send_birthday_reminders(bot_instance)
+        db.set_setting(
+          GUILD_ID,
+          "birthday_reminders_date",
+          today_key,
+        )
+        print(f"[BIRTHDAY] Reminder check completed for {today_key}")
+
       # At midnight post the previous completed calendar day.
       if FAMILY_STATS_CHANNEL_ID and now.hour == FAMILY_STATS_HOUR:
         report_day = now.date() - timedelta(days=1)
@@ -5309,6 +5744,7 @@ class ContractBot(commands.Bot):
   async def setup_hook(self):
     self.add_view(MainContractPanelView(self))
     self.add_view(UnpaidCompletedView(self))
+    self.add_view(BirthdayPanelView())
 
     if self._scheduled_posts_task is None:
       self._scheduled_posts_task = asyncio.create_task(
@@ -5332,8 +5768,16 @@ class ContractBot(commands.Bot):
       f"family_stats_channel={FAMILY_STATS_CHANNEL_ID or 'disabled'} "
       f"rating_hours={RATING_MORNING_HOUR}/{RATING_EVENING_HOUR} "
       f"family_stats_hour={FAMILY_STATS_HOUR} "
+      f"birthday_input={BIRTHDAY_INPUT_CHANNEL_ID or 'disabled'} "
+      f"birthday_alert={BIRTHDAY_ALERT_CHANNEL_ID or 'disabled'} "
+      f"birthday_hour={BIRTHDAY_REMINDER_HOUR} "
       f"timezone={TIMEZONE_NAME}"
     )
+
+    try:
+      await ensure_birthday_panel(self)
+    except Exception as exc:
+      print(f"[BIRTHDAY] Could not ensure panel: {exc}")
 
     if not self._unpaid_refreshed and GUILD_ID:
       self._unpaid_refreshed = True
@@ -5867,6 +6311,34 @@ async def test_family_stats(interaction: discord.Interaction):
       f"\u041f\u0435\u0440\u0456\u043e\u0434: **{target_day.strftime('%d.%m.%Y')}**.\n"
       "\u0410\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u043d\u0438\u0439 \u0437\u0432\u0456\u0442 \u043e 00:00 \u0446\u0438\u043c \u043d\u0435 \u043f\u043e\u0437\u043d\u0430\u0447\u0430\u0454\u0442\u044c\u0441\u044f \u044f\u043a \u0432\u0438\u043a\u043e\u043d\u0430\u043d\u0438\u0439."
     ),
+    ephemeral=True,
+  )
+
+
+
+
+@bot.tree.command(
+  name="birthdays",
+  description="\u041f\u0435\u0440\u0435\u0433\u043b\u044f\u043d\u0443\u0442\u0438 \u0441\u043f\u0438\u0441\u043e\u043a \u0434\u043d\u0456\u0432 \u043d\u0430\u0440\u043e\u0434\u0436\u0435\u043d\u043d\u044f \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432",
+)
+async def birthdays(interaction: discord.Interaction):
+  if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
+    await interaction.response.send_message(
+      "\u274c \u041a\u043e\u043c\u0430\u043d\u0434\u0430 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u0443.",
+      ephemeral=True,
+    )
+    return
+
+  guild = interaction.guild
+  if guild is None:
+    await interaction.response.send_message(
+      "\u274c \u0426\u0435 \u043f\u0440\u0430\u0446\u044e\u0454 \u0442\u0456\u043b\u044c\u043a\u0438 \u043d\u0430 \u0441\u0435\u0440\u0432\u0435\u0440\u0456.",
+      ephemeral=True,
+    )
+    return
+
+  await interaction.response.send_message(
+    embed=build_birthday_list_embed(guild.id),
     ephemeral=True,
   )
 

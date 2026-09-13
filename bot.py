@@ -35,6 +35,9 @@ BIRTHDAY_INPUT_CHANNEL_ID = int(os.getenv("BIRTHDAY_INPUT_CHANNEL_ID", "0") or 0
 BIRTHDAY_ALERT_CHANNEL_ID = int(os.getenv("BIRTHDAY_ALERT_CHANNEL_ID", "0") or 0)
 BIRTHDAY_REMINDER_HOUR = int(os.getenv("BIRTHDAY_REMINDER_HOUR", "9") or 9)
 
+# Only this Discord user can run /test-* commands.
+TEST_USER_ID = int(os.getenv("TEST_USER_ID", "0") or 0)
+
 # Backward compatible with your current setup.
 ADMIN_ROLE_ID = int(os.getenv("ADMIN_ROLE_ID", "0") or 0)
 
@@ -433,6 +436,10 @@ def management_member(member: discord.Member) -> bool:
   if member.guild_permissions.administrator or member.guild_permissions.manage_guild:
     return True
   return any(role.id in MANAGER_ROLE_IDS for role in member.roles)
+
+
+def test_command_user(user: discord.abc.User) -> bool:
+  return bool(TEST_USER_ID and user.id == TEST_USER_ID)
 
 
 def leader_member(member: discord.Member) -> bool:
@@ -5242,6 +5249,7 @@ def build_birthday_list_embed(
 
 async def send_birthday_reminders(
   bot_instance: commands.Bot,
+  test_mode: bool = False,
 ):
   if not GUILD_ID or not BIRTHDAY_ALERT_CHANNEL_ID:
     return
@@ -5275,14 +5283,31 @@ async def send_birthday_reminders(
     elif days == 7:
       week_rows.append(row)
 
-  if not (today_rows or tomorrow_rows or week_rows):
+  if not (today_rows or tomorrow_rows or week_rows) and not test_mode:
     return
 
   embed = discord.Embed(
-    title="\U0001f382 \u041d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u043d\u044f \u043f\u0440\u043e \u0434\u043d\u0456 \u043d\u0430\u0440\u043e\u0434\u0436\u0435\u043d\u043d\u044f",
+    title=(
+      "\U0001f9ea \u0422\u0415\u0421\u0422 \u2022 \U0001f382 "
+      "\u041d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u043d\u044f \u043f\u0440\u043e \u0434\u043d\u0456 \u043d\u0430\u0440\u043e\u0434\u0436\u0435\u043d\u043d\u044f"
+      if test_mode
+      else "\U0001f382 \u041d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u043d\u044f \u043f\u0440\u043e \u0434\u043d\u0456 \u043d\u0430\u0440\u043e\u0434\u0436\u0435\u043d\u043d\u044f"
+    ),
     description=today.strftime("%d.%m.%Y"),
     color=discord.Color.magenta(),
   )
+
+  if test_mode and not (today_rows or tomorrow_rows or week_rows):
+    embed.add_field(
+      name="\u2705 \u0422\u0435\u0441\u0442 \u043f\u0440\u043e\u0439\u0434\u0435\u043d\u043e",
+      value=(
+        "\u041a\u0430\u043d\u0430\u043b \u043d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u044c \u043f\u0440\u0430\u0446\u044e\u0454.\n"
+        "\u041d\u0430 \u0441\u044c\u043e\u0433\u043e\u0434\u043d\u0456 \u043d\u0435\u043c\u0430\u0454 \u0414\u041d, "
+        "\u044f\u043a\u0456 \u043f\u043e\u0442\u0440\u0435\u0431\u0443\u044e\u0442\u044c \u043d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u043d\u044f "
+        "\u0437\u0430 7 \u0434\u043d\u0456\u0432 / 1 \u0434\u0435\u043d\u044c / \u0441\u044c\u043e\u0433\u043e\u0434\u043d\u0456."
+      ),
+      inline=False,
+    )
 
   if today_rows:
     embed.add_field(
@@ -5312,6 +5337,11 @@ async def send_birthday_reminders(
         for row in week_rows
       ),
       inline=False,
+    )
+
+  if test_mode:
+    embed.set_footer(
+      text="\U0001f9ea \u0422\u0435\u0441\u0442\u043e\u0432\u0435 \u043d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u043d\u044f \u2022 \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u043d\u0438\u0439 \u0433\u0440\u0430\u0444\u0456\u043a \u043d\u0435 \u0437\u043c\u0456\u043d\u0435\u043d\u043e"
     )
 
   await channel.send(embed=embed)
@@ -5771,6 +5801,7 @@ class ContractBot(commands.Bot):
       f"birthday_input={BIRTHDAY_INPUT_CHANNEL_ID or 'disabled'} "
       f"birthday_alert={BIRTHDAY_ALERT_CHANNEL_ID or 'disabled'} "
       f"birthday_hour={BIRTHDAY_REMINDER_HOUR} "
+      f"test_user={TEST_USER_ID or 'disabled'} "
       f"timezone={TIMEZONE_NAME}"
     )
 
@@ -6248,9 +6279,9 @@ async def debts(interaction: discord.Interaction):
   description="\u0422\u0435\u0441\u0442\u043e\u0432\u043e \u0432\u0456\u0434\u043f\u0440\u0430\u0432\u0438\u0442\u0438 \u043f\u043e\u0442\u043e\u0447\u043d\u0438\u0439 \u0440\u0435\u0439\u0442\u0438\u043d\u0433 \u0443 \u043a\u0430\u043d\u0430\u043b \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443",
 )
 async def test_rating(interaction: discord.Interaction):
-  if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
+  if not test_command_user(interaction.user):
     await interaction.response.send_message(
-      "\u274c \u041a\u043e\u043c\u0430\u043d\u0434\u0430 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u0443.",
+      "\u274c \u0426\u044f \u0442\u0435\u0441\u0442\u043e\u0432\u0430 \u043a\u043e\u043c\u0430\u043d\u0434\u0430 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u0432\u043b\u0430\u0441\u043d\u0438\u043a\u0443 \u0442\u0435\u0441\u0442\u0456\u0432.",
       ephemeral=True,
     )
     return
@@ -6282,9 +6313,9 @@ async def test_rating(interaction: discord.Interaction):
   description="\u0422\u0435\u0441\u0442\u043e\u0432\u043e \u0432\u0456\u0434\u043f\u0440\u0430\u0432\u0438\u0442\u0438 \u0449\u043e\u0434\u0435\u043d\u043d\u0443 \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0443 \u0441\u0456\u043c'\u0457",
 )
 async def test_family_stats(interaction: discord.Interaction):
-  if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
+  if not test_command_user(interaction.user):
     await interaction.response.send_message(
-      "\u274c \u041a\u043e\u043c\u0430\u043d\u0434\u0430 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u0443.",
+      "\u274c \u0426\u044f \u0442\u0435\u0441\u0442\u043e\u0432\u0430 \u043a\u043e\u043c\u0430\u043d\u0434\u0430 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u0432\u043b\u0430\u0441\u043d\u0438\u043a\u0443 \u0442\u0435\u0441\u0442\u0456\u0432.",
       ephemeral=True,
     )
     return
@@ -6315,6 +6346,43 @@ async def test_family_stats(interaction: discord.Interaction):
   )
 
 
+
+
+
+
+@bot.tree.command(
+  name="test-birthday-reminder",
+  description="\u0422\u0435\u0441\u0442\u043e\u0432\u043e \u0432\u0456\u0434\u043f\u0440\u0430\u0432\u0438\u0442\u0438 \u043d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u043d\u044f \u043f\u0440\u043e \u0414\u041d \u0443 \u043a\u0430\u043d\u0430\u043b \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u0430",
+)
+async def test_birthday_reminder(interaction: discord.Interaction):
+  if not test_command_user(interaction.user):
+    await interaction.response.send_message(
+      "\u274c \u0426\u044f \u0442\u0435\u0441\u0442\u043e\u0432\u0430 \u043a\u043e\u043c\u0430\u043d\u0434\u0430 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u0432\u043b\u0430\u0441\u043d\u0438\u043a\u0443 \u0442\u0435\u0441\u0442\u0456\u0432.",
+      ephemeral=True,
+    )
+    return
+
+  if not BIRTHDAY_ALERT_CHANNEL_ID:
+    await interaction.response.send_message(
+      "\u274c \u041d\u0435 \u0437\u0430\u0434\u0430\u043d\u043e `BIRTHDAY_ALERT_CHANNEL_ID` \u0443 Railway.",
+      ephemeral=True,
+    )
+    return
+
+  await interaction.response.defer(ephemeral=True)
+
+  await send_birthday_reminders(
+    bot,
+    test_mode=True,
+  )
+
+  await interaction.followup.send(
+    (
+      "\u2705 \u0422\u0435\u0441\u0442\u043e\u0432\u0435 \u043d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u043d\u044f \u0432\u0456\u0434\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e \u0432 \u043a\u0430\u043d\u0430\u043b \u0414\u041d \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432.\n"
+      "\u0426\u0435 **\u043d\u0435 \u0432\u043f\u043b\u0438\u0432\u0430\u0454** \u043d\u0430 \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u043d\u0435 \u043d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u043d\u044f \u0437\u0430 \u0433\u0440\u0430\u0444\u0456\u043a\u043e\u043c."
+    ),
+    ephemeral=True,
+  )
 
 
 @bot.tree.command(

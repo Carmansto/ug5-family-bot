@@ -5250,9 +5250,12 @@ def build_birthday_list_embed(
 async def send_birthday_reminders(
   bot_instance: commands.Bot,
   test_mode: bool = False,
-):
-  if not GUILD_ID or not BIRTHDAY_ALERT_CHANNEL_ID:
-    return
+) -> tuple[bool, str]:
+  if not GUILD_ID:
+    return False, "\u041d\u0435 \u0437\u0430\u0434\u0430\u043d\u043e GUILD_ID."
+
+  if not BIRTHDAY_ALERT_CHANNEL_ID:
+    return False, "\u041d\u0435 \u0437\u0430\u0434\u0430\u043d\u043e BIRTHDAY_ALERT_CHANNEL_ID."
 
   channel = await get_text_channel(
     bot_instance,
@@ -5260,7 +5263,30 @@ async def send_birthday_reminders(
   )
   if channel is None:
     print("[BIRTHDAY] Alert channel not found")
-    return
+    return False, (
+      "\u041d\u0435 \u0437\u043d\u0430\u0439\u0448\u043e\u0432 \u043a\u0430\u043d\u0430\u043b \u043d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u044c. "
+      "\u041f\u0435\u0440\u0435\u0432\u0456\u0440 BIRTHDAY_ALERT_CHANNEL_ID."
+    )
+
+  guild = bot_instance.get_guild(GUILD_ID)
+  if guild is None:
+    return False, "\u0411\u043e\u0442 \u043d\u0435 \u0437\u043d\u0430\u0439\u0448\u043e\u0432 \u0441\u0435\u0440\u0432\u0435\u0440 GUILD_ID."
+
+  me = guild.me
+  if me is None and bot_instance.user is not None:
+    me = guild.get_member(bot_instance.user.id)
+
+  if me is not None:
+    permissions = channel.permissions_for(me)
+
+    if not permissions.view_channel:
+      return False, "\u0423 \u0431\u043e\u0442\u0430 \u043d\u0435\u043c\u0430\u0454 \u043f\u0440\u0430\u0432\u0430 View Channel \u0443 \u043a\u0430\u043d\u0430\u043b\u0456 \u043d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u044c."
+
+    if not permissions.send_messages:
+      return False, "\u0423 \u0431\u043e\u0442\u0430 \u043d\u0435\u043c\u0430\u0454 \u043f\u0440\u0430\u0432\u0430 Send Messages \u0443 \u043a\u0430\u043d\u0430\u043b\u0456 \u043d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u044c."
+
+    if not permissions.embed_links:
+      return False, "\u0423 \u0431\u043e\u0442\u0430 \u043d\u0435\u043c\u0430\u0454 \u043f\u0440\u0430\u0432\u0430 Embed Links \u0443 \u043a\u0430\u043d\u0430\u043b\u0456 \u043d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u044c."
 
   today = datetime.now(LOCAL_TZ).date()
   rows = db.birthdays_for_guild(GUILD_ID)
@@ -5284,12 +5310,11 @@ async def send_birthday_reminders(
       week_rows.append(row)
 
   if not (today_rows or tomorrow_rows or week_rows) and not test_mode:
-    return
+    return True, "\u0421\u044c\u043e\u0433\u043e\u0434\u043d\u0456 \u043d\u0435\u043c\u0430\u0454 \u043d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u044c \u0434\u043b\u044f \u0432\u0456\u0434\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043d\u044f."
 
   embed = discord.Embed(
     title=(
-      "\U0001f9ea \u0422\u0415\u0421\u0422 \u2022 \U0001f382 "
-      "\u041d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u043d\u044f \u043f\u0440\u043e \u0434\u043d\u0456 \u043d\u0430\u0440\u043e\u0434\u0436\u0435\u043d\u043d\u044f"
+      "\U0001f9ea \u0422\u0415\u0421\u0422 \u2022 \U0001f382 \u041d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u043d\u044f \u043f\u0440\u043e \u0434\u043d\u0456 \u043d\u0430\u0440\u043e\u0434\u0436\u0435\u043d\u043d\u044f"
       if test_mode
       else "\U0001f382 \u041d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u043d\u044f \u043f\u0440\u043e \u0434\u043d\u0456 \u043d\u0430\u0440\u043e\u0434\u0436\u0435\u043d\u043d\u044f"
     ),
@@ -5302,8 +5327,7 @@ async def send_birthday_reminders(
       name="\u2705 \u0422\u0435\u0441\u0442 \u043f\u0440\u043e\u0439\u0434\u0435\u043d\u043e",
       value=(
         "\u041a\u0430\u043d\u0430\u043b \u043d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u044c \u043f\u0440\u0430\u0446\u044e\u0454.\n"
-        "\u041d\u0430 \u0441\u044c\u043e\u0433\u043e\u0434\u043d\u0456 \u043d\u0435\u043c\u0430\u0454 \u0414\u041d, "
-        "\u044f\u043a\u0456 \u043f\u043e\u0442\u0440\u0435\u0431\u0443\u044e\u0442\u044c \u043d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u043d\u044f "
+        "\u041d\u0430 \u0441\u044c\u043e\u0433\u043e\u0434\u043d\u0456 \u043d\u0435\u043c\u0430\u0454 \u0414\u041d, \u044f\u043a\u0456 \u043f\u043e\u0442\u0440\u0435\u0431\u0443\u044e\u0442\u044c \u043d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u043d\u044f "
         "\u0437\u0430 7 \u0434\u043d\u0456\u0432 / 1 \u0434\u0435\u043d\u044c / \u0441\u044c\u043e\u0433\u043e\u0434\u043d\u0456."
       ),
       inline=False,
@@ -5344,7 +5368,31 @@ async def send_birthday_reminders(
       text="\U0001f9ea \u0422\u0435\u0441\u0442\u043e\u0432\u0435 \u043d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u043d\u044f \u2022 \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u043d\u0438\u0439 \u0433\u0440\u0430\u0444\u0456\u043a \u043d\u0435 \u0437\u043c\u0456\u043d\u0435\u043d\u043e"
     )
 
-  await channel.send(embed=embed)
+  try:
+    await asyncio.wait_for(
+      channel.send(embed=embed),
+      timeout=15,
+    )
+    return True, "\u041d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u043d\u044f \u0443\u0441\u043f\u0456\u0448\u043d\u043e \u0432\u0456\u0434\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e."
+
+  except asyncio.TimeoutError:
+    print("[BIRTHDAY] Sending reminder timed out")
+    return False, "Discord \u043d\u0435 \u0432\u0456\u0434\u043f\u043e\u0432\u0456\u0432 \u0437\u0430 15 \u0441\u0435\u043a\u0443\u043d\u0434 \u043f\u0456\u0434 \u0447\u0430\u0441 \u0432\u0456\u0434\u043f\u0440\u0430\u0432\u043a\u0438."
+
+  except discord.Forbidden as exc:
+    print(f"[BIRTHDAY] Forbidden while sending reminder: {exc}")
+    return False, (
+      "Discord \u0437\u0430\u0431\u043e\u0440\u043e\u043d\u0438\u0432 \u0432\u0456\u0434\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043d\u044f. "
+      "\u041f\u0435\u0440\u0435\u0432\u0456\u0440 \u043f\u0440\u0430\u0432\u0430 View Channel, Send Messages \u0442\u0430 Embed Links."
+    )
+
+  except discord.HTTPException as exc:
+    print(f"[BIRTHDAY] HTTP error while sending reminder: {exc}")
+    return False, f"\u041f\u043e\u043c\u0438\u043b\u043a\u0430 Discord API: {exc}"
+
+  except Exception as exc:
+    print(f"[BIRTHDAY] Unexpected reminder error: {type(exc).__name__}: {exc}")
+    return False, f"{type(exc).__name__}: {exc}"
 
 
 # ----------------------------
@@ -6371,18 +6419,35 @@ async def test_birthday_reminder(interaction: discord.Interaction):
 
   await interaction.response.defer(ephemeral=True)
 
-  await send_birthday_reminders(
-    bot,
-    test_mode=True,
-  )
+  try:
+    ok, result_text = await send_birthday_reminders(
+      bot,
+      test_mode=True,
+    )
+  except Exception as exc:
+    print(
+      "[BIRTHDAY] /test-birthday-reminder crashed: "
+      f"{type(exc).__name__}: {exc}"
+    )
+    ok = False
+    result_text = f"{type(exc).__name__}: {exc}"
 
-  await interaction.followup.send(
-    (
-      "\u2705 \u0422\u0435\u0441\u0442\u043e\u0432\u0435 \u043d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u043d\u044f \u0432\u0456\u0434\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e \u0432 \u043a\u0430\u043d\u0430\u043b \u0414\u041d \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432.\n"
-      "\u0426\u0435 **\u043d\u0435 \u0432\u043f\u043b\u0438\u0432\u0430\u0454** \u043d\u0430 \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u043d\u0435 \u043d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u043d\u044f \u0437\u0430 \u0433\u0440\u0430\u0444\u0456\u043a\u043e\u043c."
-    ),
-    ephemeral=True,
-  )
+  if ok:
+    await interaction.followup.send(
+      (
+        "\u2705 \u0422\u0435\u0441\u0442\u043e\u0432\u0435 \u043d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u043d\u044f \u0432\u0456\u0434\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e \u0432 \u043a\u0430\u043d\u0430\u043b \u0414\u041d \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432.\n"
+        "\u0426\u0435 **\u043d\u0435 \u0432\u043f\u043b\u0438\u0432\u0430\u0454** \u043d\u0430 \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u043d\u0435 \u043d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u043d\u044f \u0437\u0430 \u0433\u0440\u0430\u0444\u0456\u043a\u043e\u043c."
+      ),
+      ephemeral=True,
+    )
+  else:
+    await interaction.followup.send(
+      (
+        "\u274c \u041d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f \u0432\u0456\u0434\u043f\u0440\u0430\u0432\u0438\u0442\u0438 \u0442\u0435\u0441\u0442\u043e\u0432\u0435 \u043d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u043d\u044f.\n\n"
+        f"\u041f\u0440\u0438\u0447\u0438\u043d\u0430: **{result_text}**"
+      ),
+      ephemeral=True,
+    )
 
 
 @bot.tree.command(

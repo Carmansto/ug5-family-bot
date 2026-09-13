@@ -5293,6 +5293,7 @@ async def send_birthday_reminders(
 
   today_rows = []
   tomorrow_rows = []
+  three_day_rows = []
   week_rows = []
 
   for row in rows:
@@ -5306,10 +5307,12 @@ async def send_birthday_reminders(
       today_rows.append(row)
     elif days == 1:
       tomorrow_rows.append(row)
+    elif days == 3:
+      three_day_rows.append(row)
     elif days == 7:
       week_rows.append(row)
 
-  if not (today_rows or tomorrow_rows or week_rows) and not test_mode:
+  if not (today_rows or tomorrow_rows or three_day_rows or week_rows) and not test_mode:
     return True, "\u0421\u044c\u043e\u0433\u043e\u0434\u043d\u0456 \u043d\u0435\u043c\u0430\u0454 \u043d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u044c \u0434\u043b\u044f \u0432\u0456\u0434\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043d\u044f."
 
   embed = discord.Embed(
@@ -5322,13 +5325,13 @@ async def send_birthday_reminders(
     color=discord.Color.magenta(),
   )
 
-  if test_mode and not (today_rows or tomorrow_rows or week_rows):
+  if test_mode and not (today_rows or tomorrow_rows or three_day_rows or week_rows):
     embed.add_field(
       name="\u2705 \u0422\u0435\u0441\u0442 \u043f\u0440\u043e\u0439\u0434\u0435\u043d\u043e",
       value=(
         "\u041a\u0430\u043d\u0430\u043b \u043d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u044c \u043f\u0440\u0430\u0446\u044e\u0454.\n"
         "\u041d\u0430 \u0441\u044c\u043e\u0433\u043e\u0434\u043d\u0456 \u043d\u0435\u043c\u0430\u0454 \u0414\u041d, \u044f\u043a\u0456 \u043f\u043e\u0442\u0440\u0435\u0431\u0443\u044e\u0442\u044c \u043d\u0430\u0433\u0430\u0434\u0443\u0432\u0430\u043d\u043d\u044f "
-        "\u0437\u0430 7 \u0434\u043d\u0456\u0432 / 1 \u0434\u0435\u043d\u044c / \u0441\u044c\u043e\u0433\u043e\u0434\u043d\u0456."
+        "\u0437\u0430 7 / 3 / 1 \u0434\u0435\u043d\u044c / \u0441\u044c\u043e\u0433\u043e\u0434\u043d\u0456."
       ),
       inline=False,
     )
@@ -5349,6 +5352,16 @@ async def send_birthday_reminders(
       value="\n".join(
         f"<@{row['user_id']}> \u2014 **{birthday_display(row['day'], row['month'])}**"
         for row in tomorrow_rows
+      ),
+      inline=False,
+    )
+
+  if three_day_rows:
+    embed.add_field(
+      name="\u23f3 \u0427\u0415\u0420\u0415\u0417 3 \u0414\u041d\u0406",
+      value="\n".join(
+        f"<@{row['user_id']}> \u2014 **{birthday_display(row['day'], row['month'])}**"
+        for row in three_day_rows
       ),
       inline=False,
     )

@@ -226,12 +226,12 @@ PAYMENT_MODE_LEGACY_FAMILY = "family"
 
 def payment_mode_label(mode: str) -> str:
   labels = {
-    PAYMENT_MODE_NORMAL: "\u0417\u0432\u0438\u0447\u0430\u0439\u043d\u0430 \u043e\u043f\u043b\u0430\u0442\u0430",
+    PAYMENT_MODE_NORMAL: "\u0417\u0432\u0438\u0447\u0430\u0439\u043d\u0435 \u043d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u043d\u044f",
     PAYMENT_MODE_REDISTRIBUTE: "\u0420\u043e\u0437\u0434\u0456\u043b\u0438\u0442\u0438 \u043c\u0456\u0436 \u0440\u0435\u0448\u0442\u043e\u044e",
     PAYMENT_MODE_FAMILY_SHARE: "\u0427\u0430\u0441\u0442\u043a\u0443 \u0432\u0438\u043d\u044f\u0442\u043a\u0456\u0432 \u0443 \u0441\u0456\u043c'\u044e",
     PAYMENT_MODE_LEGACY_FAMILY: "\u041d\u0430 \u0444\u0430\u043c\u0443",
   }
-  return labels.get(mode, "\u041e\u043f\u043b\u0430\u0442\u0430")
+  return labels.get(mode, "\u041d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u043d\u044f")
 
 
 def calculate_payment(
@@ -377,7 +377,7 @@ def payment_preview_embed(
   )
 
   embed = discord.Embed(
-    title="\U0001f4b5 \u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u043e\u043f\u043b\u0430\u0442\u0438",
+    title="\U0001f9ee \u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u043d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u043d\u044f",
     description=(
       f"**{row['contract_name']}**\n"
       f"\u0421\u0443\u043c\u0430 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443: **{format_money_dollars(row['price'])} $**"
@@ -396,38 +396,32 @@ def payment_preview_embed(
     inline=True,
   )
   embed.add_field(
-    name="\U0001f4b8 \u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c",
+    name="\U0001f4b0 \u0411\u0443\u0434\u0435 \u043d\u0430\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c",
     value=format_cents(net_cents),
     inline=True,
   )
 
   if normalized_excluded and payment_mode != PAYMENT_MODE_LEGACY_FAMILY:
     embed.add_field(
-      name="\U0001f6ab \u0411\u0435\u0437 \u0432\u0438\u043f\u043b\u0430\u0442\u0438",
+      name="\U0001f6ab \u0411\u0435\u0437 \u043d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u043d\u044f",
       value=" ".join(f"<@{uid}>" for uid in normalized_excluded),
       inline=False,
     )
 
   if payouts:
-    deferred_set = set(deferred_ids or [])
-    lines = []
-    for uid, amount in payouts.items():
-      if uid in deferred_set:
-        lines.append(
-          f"\u23f3 <@{uid}> \u2014 **{format_cents(amount)}** \u2022 \u0432\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0430 \u043e\u043f\u043b\u0430\u0442\u0430"
-        )
-      else:
-        lines.append(
-          f"<@{uid}> \u2014 **{format_cents(amount)}**"
-        )
-
+    lines = [
+      f"\u2795 <@{uid}> \u2014 **{format_cents(amount)}**"
+      for uid, amount in payouts.items()
+    ]
     embed.add_field(
-      name="\U0001f464 \u0420\u043e\u0437\u043f\u043e\u0434\u0456\u043b",
+      name="\U0001f464 \u041d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u043d\u044f",
       value="\n".join(lines),
       inline=False,
     )
 
-  embed.set_footer(text="\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u0441\u0443\u043c\u0438 \u043f\u0435\u0440\u0435\u0434 \u043f\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043d\u043d\u044f\u043c")
+  embed.set_footer(
+    text="\u041f\u0456\u0441\u043b\u044f \u043f\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0436\u0435\u043d\u043d\u044f \u0441\u0443\u043c\u0438 \u043f\u043e\u0442\u0440\u0430\u043f\u043b\u044f\u0442\u044c \u0443 /payouts. \u0424\u0430\u043a\u0442\u0438\u0447\u043d\u043e \u0432\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u043c\u0438 \u0432\u043e\u043d\u0438 \u0449\u0435 \u043d\u0435 \u0432\u0432\u0430\u0436\u0430\u044e\u0442\u044c\u0441\u044f."
+  )
   return embed
 
 
@@ -561,6 +555,20 @@ class Database:
     """)
 
     self.conn.execute("""
+    CREATE TABLE IF NOT EXISTS payment_accruals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      amount_cents INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL,
+      paid_at TEXT,
+      paid_by INTEGER,
+      UNIQUE(contract_id, user_id)
+    )
+    """)
+
+    self.conn.execute("""
     CREATE TABLE IF NOT EXISTS family_contributions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       contract_id INTEGER NOT NULL,
@@ -621,8 +629,7 @@ class Database:
 
   def backfill_legacy_paid_contracts(self):
     """
-    \u0421\u0442\u0430\u0440\u0456 MVP/V2 \u0437\u0430\u043f\u0438\u0441\u0438 \u043c\u043e\u0433\u043b\u0438 \u0431\u0443\u0442\u0438 \u043f\u043e\u0437\u043d\u0430\u0447\u0435\u043d\u0456 \u044f\u043a paid \u0449\u0435 \u0434\u043e \u043f\u043e\u044f\u0432\u0438
-    \u0411\u0430\u043d\u043a\u0443 \u0441\u0456\u043c'\u0457 \u0442\u0430 \u043f\u0435\u0440\u0441\u043e\u043d\u0430\u043b\u044c\u043d\u0438\u0445 payout-\u0456\u0432. \u0414\u043e\u0440\u0430\u0445\u043e\u0432\u0443\u0454\u043c\u043e \u0457\u0445 \u043e\u0434\u0438\u043d \u0440\u0430\u0437.
+    Backfill only historical paid contracts that predate the accrual system.
     """
     rows = self.conn.execute("""
     SELECT *
@@ -638,8 +645,21 @@ class Database:
       if not member_ids:
         continue
 
+      accrual_count = self.conn.execute(
+        "SELECT COUNT(*) AS cnt FROM payment_accruals WHERE contract_id = ?",
+        (row["id"],),
+      ).fetchone()["cnt"]
+
+      if accrual_count:
+        continue
+
       payout_count = self.conn.execute(
         "SELECT COUNT(*) AS cnt FROM contract_payouts WHERE contract_id = ?",
+        (row["id"],),
+      ).fetchone()["cnt"]
+
+      debt_count = self.conn.execute(
+        "SELECT COUNT(*) AS cnt FROM admin_debts WHERE contract_id = ?",
         (row["id"],),
       ).fetchone()["cnt"]
 
@@ -657,7 +677,7 @@ class Database:
       except ValueError:
         continue
 
-      needs_payouts = bool(payouts) and payout_count == 0
+      needs_payouts = bool(payouts) and payout_count == 0 and debt_count == 0
 
       if not needs_totals and not needs_payouts:
         continue
@@ -690,6 +710,7 @@ class Database:
 
     if changed:
       print(f"[MIGRATION] Backfilled {changed} legacy paid contract(s)")
+
 
   def backfill_family_contributions(self):
     """
@@ -739,6 +760,55 @@ class Database:
 
     if inserted:
       print(f"[MIGRATION] Backfilled {inserted} personal family contribution(s)")
+
+  def migrate_pending_admin_debts_to_accruals(self):
+    """
+    Move only still-unpaid legacy deputy balances into the unified payout queue.
+    Already-paid historical payouts stay historical and are not recreated.
+    """
+    rows = self.conn.execute("""
+    SELECT d.*, c.status AS contract_status
+    FROM admin_debts d
+    JOIN contracts c ON c.id = d.contract_id
+    WHERE d.status = 'pending'
+     AND c.status = 'paid'
+    ORDER BY d.id ASC
+    """).fetchall()
+
+    migrated = 0
+    now = utc_now_iso()
+
+    try:
+      self.conn.execute("BEGIN IMMEDIATE")
+
+      for row in rows:
+        self.conn.execute("""
+        INSERT OR IGNORE INTO payment_accruals
+        (contract_id, user_id, amount_cents, status, created_at)
+        VALUES (?, ?, ?, 'pending', ?)
+        """, (
+          row["contract_id"],
+          row["user_id"],
+          row["amount_cents"],
+          row["created_at"] or now,
+        ))
+
+        cur = self.conn.execute("""
+        UPDATE admin_debts
+        SET status = 'migrated'
+        WHERE id = ?
+         AND status = 'pending'
+        """, (row["id"],))
+        migrated += cur.rowcount
+
+      self.conn.commit()
+    except Exception:
+      self.conn.rollback()
+      raise
+
+    if migrated:
+      print(f"[MIGRATION] Moved {migrated} pending deputy balance(s) to /payouts")
+
 
   # Contract catalog
   def create_contract_type(self, name: str, price: int, cooldown: str, created_by: int) -> sqlite3.Row:
@@ -917,6 +987,11 @@ class Database:
     excluded_payment_ids: Optional[list[int]] = None,
     deferred_payout_ids: Optional[list[int]] = None,
   ):
+    """
+    Finalizes the contract calculation.
+    Participant money is accrued to payment_accruals and is NOT considered paid
+    until leadership closes it through /payouts.
+    """
     row = self.get_completed_by_message(message_id)
     if not row or row["status"] != "unpaid":
       return None
@@ -926,7 +1001,7 @@ class Database:
       return None
 
     try:
-      fomo_cents, net_cents, payouts, excluded_ids = calculate_payment(
+      family_cents, net_cents, payouts, excluded_ids = calculate_payment(
         row["price"],
         participant_ids,
         payment_mode,
@@ -935,23 +1010,6 @@ class Database:
     except ValueError:
       return None
 
-    deferred_set = {
-      int(uid)
-      for uid in (deferred_payout_ids or [])
-      if int(uid) in payouts
-    }
-
-    immediate_payouts = {
-      uid: amount
-      for uid, amount in payouts.items()
-      if uid not in deferred_set
-    }
-    deferred_payouts = {
-      uid: amount
-      for uid, amount in payouts.items()
-      if uid in deferred_set
-    }
-
     contributions = calculate_personal_family_contributions(
       row["price"],
       participant_ids,
@@ -959,7 +1017,7 @@ class Database:
       excluded_ids,
     )
 
-    paid_at = utc_now_iso()
+    calculated_at = utc_now_iso()
 
     try:
       self.conn.execute("BEGIN IMMEDIATE")
@@ -979,8 +1037,8 @@ class Database:
         payment_mode,
         json.dumps(excluded_ids),
         paid_by,
-        paid_at,
-        fomo_cents,
+        calculated_at,
+        family_cents,
         net_cents,
         message_id,
       ))
@@ -992,11 +1050,7 @@ class Database:
       contract_id = row["id"]
 
       self.conn.execute(
-        "DELETE FROM contract_payouts WHERE contract_id = ?",
-        (contract_id,),
-      )
-      self.conn.execute(
-        "DELETE FROM admin_debts WHERE contract_id = ?",
+        "DELETE FROM payment_accruals WHERE contract_id = ?",
         (contract_id,),
       )
       self.conn.execute(
@@ -1004,26 +1058,29 @@ class Database:
         (contract_id,),
       )
 
-      for uid, amount_cents in immediate_payouts.items():
+      for uid, amount_cents in payouts.items():
         self.conn.execute("""
-        INSERT INTO contract_payouts
-        (contract_id, user_id, amount_cents, created_at)
-        VALUES (?, ?, ?, ?)
-        """, (contract_id, uid, amount_cents, paid_at))
-
-      for uid, amount_cents in deferred_payouts.items():
-        self.conn.execute("""
-        INSERT INTO admin_debts
+        INSERT INTO payment_accruals
         (contract_id, user_id, amount_cents, status, created_at)
         VALUES (?, ?, ?, 'pending', ?)
-        """, (contract_id, uid, amount_cents, paid_at))
+        """, (
+          contract_id,
+          uid,
+          amount_cents,
+          calculated_at,
+        ))
 
       for uid, amount_cents in contributions.items():
         self.conn.execute("""
         INSERT INTO family_contributions
         (contract_id, user_id, amount_cents, created_at)
         VALUES (?, ?, ?, ?)
-        """, (contract_id, uid, amount_cents, paid_at))
+        """, (
+          contract_id,
+          uid,
+          amount_cents,
+          calculated_at,
+        ))
 
       self.conn.commit()
     except Exception:
@@ -1033,12 +1090,11 @@ class Database:
     return {
       "payment_mode": payment_mode,
       "excluded_payment_ids": excluded_ids,
-      "fomo_cents": fomo_cents,
+      "fomo_cents": family_cents,
       "net_cents": net_cents,
-      "payouts": immediate_payouts,
-      "deferred_payouts": deferred_payouts,
+      "accruals": payouts,
       "family_contributions": contributions,
-      "paid_at": paid_at,
+      "calculated_at": calculated_at,
     }
 
 
@@ -1119,6 +1175,11 @@ class Database:
     """, (guild_id, limit)).fetchall()
 
   def paid_payouts_for_guild(self, guild_id: int):
+    """
+    Actual money already paid to members.
+    Priority: new accruals > legacy admin debts > legacy instant payouts.
+    This avoids double-counting contracts that passed through older migrations.
+    """
     return self.conn.execute("""
     SELECT
       cp.user_id AS user_id,
@@ -1128,6 +1189,18 @@ class Database:
     JOIN contracts c ON c.id = cp.contract_id
     WHERE c.guild_id = ?
      AND c.status = 'paid'
+     AND NOT EXISTS (
+       SELECT 1
+       FROM payment_accruals a
+       WHERE a.contract_id = cp.contract_id
+        AND a.user_id = cp.user_id
+     )
+     AND NOT EXISTS (
+       SELECT 1
+       FROM admin_debts d
+       WHERE d.contract_id = cp.contract_id
+        AND d.user_id = cp.user_id
+     )
 
     UNION ALL
 
@@ -1141,7 +1214,163 @@ class Database:
      AND c.status = 'paid'
      AND d.status = 'paid'
      AND d.settled_at IS NOT NULL
-    """, (guild_id, guild_id)).fetchall()
+     AND NOT EXISTS (
+       SELECT 1
+       FROM payment_accruals a
+       WHERE a.contract_id = d.contract_id
+        AND a.user_id = d.user_id
+     )
+
+    UNION ALL
+
+    SELECT
+      a.user_id AS user_id,
+      a.amount_cents AS amount_cents,
+      a.paid_at AS created_at
+    FROM payment_accruals a
+    JOIN contracts c ON c.id = a.contract_id
+    WHERE c.guild_id = ?
+     AND c.status = 'paid'
+     AND a.status = 'paid'
+     AND a.paid_at IS NOT NULL
+    """, (guild_id, guild_id, guild_id)).fetchall()
+
+  def accruals_for_contract(self, contract_id: int):
+    return self.conn.execute("""
+    SELECT *
+    FROM payment_accruals
+    WHERE contract_id = ?
+    ORDER BY id ASC
+    """, (contract_id,)).fetchall()
+
+  def accruals_for_guild(self, guild_id: int):
+    return self.conn.execute("""
+    SELECT
+      a.*,
+      c.message_id,
+      c.channel_id,
+      c.contract_name,
+      c.price
+    FROM payment_accruals a
+    JOIN contracts c ON c.id = a.contract_id
+    WHERE c.guild_id = ?
+     AND c.status = 'paid'
+    ORDER BY a.id ASC
+    """, (guild_id,)).fetchall()
+
+  def pending_accrual_summary(self, guild_id: int):
+    return self.conn.execute("""
+    SELECT
+      a.user_id,
+      COUNT(*) AS accrual_count,
+      SUM(a.amount_cents) AS total_cents
+    FROM payment_accruals a
+    JOIN contracts c ON c.id = a.contract_id
+    WHERE c.guild_id = ?
+     AND c.status = 'paid'
+     AND a.status = 'pending'
+    GROUP BY a.user_id
+    ORDER BY total_cents DESC, a.user_id ASC
+    """, (guild_id,)).fetchall()
+
+  def pending_accruals_for_user(self, guild_id: int, user_id: int):
+    return self.conn.execute("""
+    SELECT
+      a.*,
+      c.message_id,
+      c.channel_id,
+      c.contract_name,
+      c.price
+    FROM payment_accruals a
+    JOIN contracts c ON c.id = a.contract_id
+    WHERE c.guild_id = ?
+     AND c.status = 'paid'
+     AND a.user_id = ?
+     AND a.status = 'pending'
+    ORDER BY a.id ASC
+    """, (guild_id, user_id)).fetchall()
+
+  def pending_accrual_total(self, guild_id: int, user_id: Optional[int] = None) -> int:
+    sql = """
+    SELECT COALESCE(SUM(a.amount_cents), 0) AS total
+    FROM payment_accruals a
+    JOIN contracts c ON c.id = a.contract_id
+    WHERE c.guild_id = ?
+     AND c.status = 'paid'
+     AND a.status = 'pending'
+    """
+    params: list = [guild_id]
+
+    if user_id is not None:
+      sql += " AND a.user_id = ?"
+      params.append(user_id)
+
+    row = self.conn.execute(sql, params).fetchone()
+    return int(row["total"] or 0)
+
+  def settle_accruals_for_user(
+    self,
+    guild_id: int,
+    user_id: int,
+    paid_by: int,
+  ):
+    rows = self.pending_accruals_for_user(guild_id, user_id)
+    if not rows:
+      return []
+
+    ids = [row["id"] for row in rows]
+    placeholders = ",".join("?" for _ in ids)
+    now = utc_now_iso()
+
+    self.conn.execute(
+      f"""
+      UPDATE payment_accruals
+      SET status = 'paid',
+        paid_at = ?,
+        paid_by = ?
+      WHERE id IN ({placeholders})
+       AND status = 'pending'
+      """,
+      (now, paid_by, *ids),
+    )
+    self.conn.commit()
+    return rows
+
+  def settle_all_accruals(self, guild_id: int, paid_by: int):
+    rows = self.conn.execute("""
+    SELECT
+      a.*,
+      c.message_id,
+      c.channel_id,
+      c.contract_name
+    FROM payment_accruals a
+    JOIN contracts c ON c.id = a.contract_id
+    WHERE c.guild_id = ?
+     AND c.status = 'paid'
+     AND a.status = 'pending'
+    ORDER BY a.id ASC
+    """, (guild_id,)).fetchall()
+
+    if not rows:
+      return []
+
+    ids = [row["id"] for row in rows]
+    placeholders = ",".join("?" for _ in ids)
+    now = utc_now_iso()
+
+    self.conn.execute(
+      f"""
+      UPDATE payment_accruals
+      SET status = 'paid',
+        paid_at = ?,
+        paid_by = ?
+      WHERE id IN ({placeholders})
+       AND status = 'pending'
+      """,
+      (now, paid_by, *ids),
+    )
+    self.conn.commit()
+    return rows
 
   def admin_debts_for_contract(self, contract_id: int):
     return self.conn.execute("""
@@ -1340,6 +1569,7 @@ class Database:
 db = Database(DB_PATH)
 db.backfill_legacy_paid_contracts()
 db.backfill_family_contributions()
+db.migrate_pending_admin_debts_to_accruals()
 
 
 # ----------------------------
@@ -1348,13 +1578,23 @@ db.backfill_family_contributions()
 
 def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
   participants = parse_ids(row["participant_ids"])
+  payment_mode = row["payment_mode"] or PAYMENT_MODE_NORMAL
+  accruals = db.accruals_for_contract(row["id"]) if row["status"] == "paid" else []
 
   if row["status"] == "paid":
-    color = discord.Color.green()
-    if (row["payment_mode"] or PAYMENT_MODE_NORMAL) == PAYMENT_MODE_LEGACY_FAMILY:
+    if payment_mode == PAYMENT_MODE_LEGACY_FAMILY:
+      color = discord.Color.blurple()
       status_text = "\U0001f3e0 **\u041d\u0430 \u0444\u0430\u043c\u0443**"
+    elif accruals:
+      if any(a["status"] == "pending" for a in accruals):
+        color = discord.Color.gold()
+        status_text = "\U0001f7e1 **\u041d\u0430\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e \u2022 \u043e\u0447\u0456\u043a\u0443\u0454 \u0432\u0438\u043f\u043b\u0430\u0442\u0438**"
+      else:
+        color = discord.Color.green()
+        status_text = "\U0001f7e2 **\u0412\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u043e**"
     else:
-      status_text = "\U0001f7e2 **\u041e\u043f\u043b\u0430\u0447\u0435\u043d\u043e**"
+      color = discord.Color.green()
+      status_text = "\U0001f7e2 **\u041e\u043f\u043b\u0430\u0447\u0435\u043d\u043e \u2022 \u0441\u0442\u0430\u0440\u0430 \u0441\u0438\u0441\u0442\u0435\u043c\u0430**"
   elif row["status"] == "annulled":
     color = discord.Color.dark_red()
     status_text = "\U0001f6ab **\u0410\u043d\u0443\u043b\u044c\u043e\u0432\u0430\u043d\u043e**"
@@ -1363,7 +1603,7 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
     status_text = "\u26ab **\u0421\u043a\u0430\u0441\u043e\u0432\u0430\u043d\u043e**"
   else:
     color = discord.Color.orange()
-    status_text = "\U0001f534 **\u041d\u0435 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u043e**"
+    status_text = "\U0001f534 **\u041d\u0435 \u0440\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e**"
 
   if row["status"] == "annulled":
     title = "\U0001f6ab \u041a\u041e\u041d\u0422\u0420\u0410\u041a\u0422 \u0410\u041d\u0423\u041b\u042c\u041e\u0412\u0410\u041d\u041e"
@@ -1382,19 +1622,38 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
     value=" ".join(f"<@{uid}>" for uid in participants) or "\u2014",
     inline=False,
   )
-  embed.add_field(name="\U0001f4cb \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442", value=row["contract_name"], inline=True)
-  embed.add_field(name="\U0001f4b0 \u0421\u0443\u043c\u0430", value=f"{format_money_dollars(row['price'])} $", inline=True)
-  embed.add_field(name="\u23f3 \u041a\u0414", value=row["cooldown"], inline=True)
-  embed.add_field(name="\U0001f4b3 \u0421\u0442\u0430\u0442\u0443\u0441", value=status_text, inline=False)
+  embed.add_field(
+    name="\U0001f4cb \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442",
+    value=row["contract_name"],
+    inline=True,
+  )
+  embed.add_field(
+    name="\U0001f4b0 \u0421\u0443\u043c\u0430",
+    value=f"{format_money_dollars(row['price'])} $",
+    inline=True,
+  )
+  embed.add_field(
+    name="\u23f3 \u041a\u0414",
+    value=row["cooldown"],
+    inline=True,
+  )
+  embed.add_field(
+    name="\U0001f4b3 \u0421\u0442\u0430\u0442\u0443\u0441",
+    value=status_text,
+    inline=False,
+  )
 
   if row["status"] == "paid":
-    paid_ts = iso_to_unix(row["paid_at"])
-    if paid_ts:
-      embed.add_field(name="\u2705 \u041e\u043f\u043b\u0430\u0447\u0435\u043d\u043e", value=f"<t:{paid_ts}:f>", inline=True)
+    calculated_ts = iso_to_unix(row["paid_at"])
+    if calculated_ts:
+      embed.add_field(
+        name="\U0001f9ee \u0420\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e",
+        value=f"<t:{calculated_ts}:f>",
+        inline=True,
+      )
 
     fomo_cents = row["fomo_cents"] or 0
     net_cents = row["net_cents"] or 0
-    payment_mode = row["payment_mode"] or PAYMENT_MODE_NORMAL
 
     embed.add_field(
       name="\U0001f3e6 \u0411\u0430\u043d\u043a \u0441\u0456\u043c'\u0457",
@@ -1402,7 +1661,7 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
       inline=True,
     )
     embed.add_field(
-      name="\U0001f4b8 \u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c",
+      name="\U0001f4b0 \u041d\u0430\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c",
       value=format_cents(net_cents),
       inline=True,
     )
@@ -1410,7 +1669,7 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
     excluded_payment_ids = parse_ids(row["excluded_payment_ids"] or "[]")
     if excluded_payment_ids and payment_mode != PAYMENT_MODE_LEGACY_FAMILY:
       embed.add_field(
-        name="\U0001f6ab \u0411\u0435\u0437 \u0432\u0438\u043f\u043b\u0430\u0442\u0438",
+        name="\U0001f6ab \u0411\u0435\u0437 \u043d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u043d\u044f",
         value=" ".join(f"<@{uid}>" for uid in excluded_payment_ids),
         inline=False,
       )
@@ -1421,38 +1680,46 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
       PAYMENT_MODE_LEGACY_FAMILY,
     ):
       embed.add_field(
-        name="\u2699\ufe0f \u0421\u043f\u043e\u0441\u0456\u0431 \u043e\u043f\u043b\u0430\u0442\u0438",
+        name="\u2699\ufe0f \u0421\u043f\u043e\u0441\u0456\u0431 \u0440\u043e\u0437\u0440\u0430\u0445\u0443\u043d\u043a\u0443",
         value=payment_mode_label(payment_mode),
         inline=False,
       )
 
-    payouts = db.payouts_for_contract(row["id"])
-    debts = db.admin_debts_for_contract(row["id"])
+    legacy_payouts = db.payouts_for_contract(row["id"])
+    legacy_debts = db.admin_debts_for_contract(row["id"])
 
-    payout_lines = [
-      f"<@{p['user_id']}> \u2014 **{format_cents(p['amount_cents'])}**"
-      for p in payouts
-    ]
+    payout_lines = []
 
-    for debt in debts:
+    for p in legacy_payouts:
+      payout_lines.append(
+        f"\u2705 <@{p['user_id']}> \u2014 **{format_cents(p['amount_cents'])}** \u2022 \u0441\u0442\u0430\u0440\u0430 \u0432\u0438\u043f\u043b\u0430\u0442\u0430"
+      )
+
+    for debt in legacy_debts:
       if debt["status"] == "paid":
         payout_lines.append(
-          f"\u2705 <@{debt['user_id']}> \u2014 **{format_cents(debt['amount_cents'])}** \u2022 \u0432\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u043e \u043b\u0456\u0434\u0435\u0440\u043e\u043c"
+          f"\u2705 <@{debt['user_id']}> \u2014 **{format_cents(debt['amount_cents'])}** \u2022 \u0441\u0442\u0430\u0440\u0430 \u0432\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0430 \u0432\u0438\u043f\u043b\u0430\u0442\u0430 \u0437\u0430\u043a\u0440\u0438\u0442\u0430"
+        )
+
+    for accrual in accruals:
+      if accrual["status"] == "paid":
+        payout_lines.append(
+          f"\u2705 <@{accrual['user_id']}> \u2014 **{format_cents(accrual['amount_cents'])}** \u2022 \u0432\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u043e"
         )
       else:
         payout_lines.append(
-          f"\u23f3 <@{debt['user_id']}> \u2014 **{format_cents(debt['amount_cents'])}** \u2022 \u0432\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0430 \u043e\u043f\u043b\u0430\u0442\u0430"
+          f"\u23f3 <@{accrual['user_id']}> \u2014 **{format_cents(accrual['amount_cents'])}** \u2022 \u0434\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438"
         )
 
     if payout_lines:
       embed.add_field(
-        name="\U0001f464 \u0420\u043e\u0437\u043f\u043e\u0434\u0456\u043b \u0432\u0438\u043f\u043b\u0430\u0442\u0438",
+        name="\U0001f464 \u0411\u0430\u043b\u0430\u043d\u0441\u0438 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432",
         value="\n".join(payout_lines),
         inline=False,
       )
 
   if row["status"] == "annulled":
-    paid_ts = iso_to_unix(row["paid_at"])
+    calculated_ts = iso_to_unix(row["paid_at"])
     annulled_ts = iso_to_unix(row["annulled_at"])
     annulled_by = row["annulled_by"]
 
@@ -1462,10 +1729,10 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
     if annulled_ts:
       details.append(f"<t:{annulled_ts}:f>")
 
-    if paid_ts:
+    if calculated_ts:
       embed.add_field(
-        name="\u0411\u0443\u043b\u043e \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u043e",
-        value=f"<t:{paid_ts}:f>",
+        name="\u0411\u0443\u043b\u043e \u0440\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e",
+        value=f"<t:{calculated_ts}:f>",
         inline=True,
       )
 
@@ -1475,7 +1742,7 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
       inline=True,
     )
     embed.add_field(
-      name="\u0411\u0443\u043b\u043e \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c",
+      name="\u0411\u0443\u043b\u043e \u043d\u0430\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c",
       value=format_cents(row["net_cents"] or 0),
       inline=True,
     )
@@ -1491,16 +1758,22 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
     cancelled_ts = iso_to_unix(row["cancelled_at"])
     cancelled_by = row["cancelled_by"]
     details = []
+
     if cancelled_by:
       details.append(f"\u0421\u043a\u0430\u0441\u0443\u0432\u0430\u0432: <@{cancelled_by}>")
     if cancelled_ts:
       details.append(f"<t:{cancelled_ts}:f>")
-    if details:
-      embed.add_field(name="\u0421\u043a\u0430\u0441\u0443\u0432\u0430\u043d\u043d\u044f", value=" \u2022 ".join(details), inline=False)
 
-  embed.set_footer(text=f"\u0417\u0430\u043f\u0438\u0441 #{row['id']}")
+    if details:
+      embed.add_field(
+        name="\u0421\u043a\u0430\u0441\u0443\u0432\u0430\u043d\u043d\u044f",
+        value=" \u2022 ".join(details),
+        inline=False,
+      )
+
   embed.set_footer(text=f"ID \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443: {row['id']}")
   return embed
+
 
 
 async def get_target_channel(guild: discord.Guild, fallback_channel_id: int):
@@ -2160,23 +2433,11 @@ async def payment_preview_with_debts(
   excluded_ids: Optional[list[int]] = None,
   back_to_custom: bool = False,
 ):
-  _, _, payouts, _ = calculate_payment(
-    row["price"],
-    parse_ids(row["participant_ids"]),
-    payment_mode,
-    excluded_ids,
-  )
-
-  deferred_ids = await deferred_payout_ids(
-    interaction.guild,
-    list(payouts.keys()),
-  )
-
   embed = payment_preview_embed(
     row,
     payment_mode,
     excluded_ids,
-    deferred_ids,
+    [],
   )
 
   return embed, PaymentConfirmView(
@@ -2185,7 +2446,7 @@ async def payment_preview_with_debts(
     payment_mode,
     excluded_ids,
     back_to_custom=back_to_custom,
-    deferred_ids=deferred_ids,
+    deferred_ids=[],
   )
 
 
@@ -2205,7 +2466,6 @@ class PaymentConfirmView(discord.ui.View):
     self.payment_mode = payment_mode
     self.excluded_ids = excluded_ids or []
     self.back_to_custom = back_to_custom
-    self.deferred_ids = deferred_ids or []
 
   @discord.ui.button(
     label="\u041f\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u0438",
@@ -2214,21 +2474,23 @@ class PaymentConfirmView(discord.ui.View):
   )
   async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
-      await interaction.response.edit_message(content="\u274c \u041d\u0435\u043c\u0430\u0454 \u043f\u0440\u0430\u0432\u0430.", view=None)
+      await interaction.response.edit_message(
+        content="\u274c \u041d\u0435\u043c\u0430\u0454 \u043f\u0440\u0430\u0432\u0430.",
+        view=None,
+      )
       return
 
     row_before = db.get_completed_by_message(self.message_id)
     if not row_before or row_before["status"] != "unpaid":
       await interaction.response.edit_message(
-        content="\u274c \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0443\u0436\u0435 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0439 \u0430\u0431\u043e \u0441\u043a\u0430\u0441\u043e\u0432\u0430\u043d\u0438\u0439.",
+        content="\u274c \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0443\u0436\u0435 \u0440\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u0438\u0439 \u0430\u0431\u043e \u0441\u043a\u0430\u0441\u043e\u0432\u0430\u043d\u0438\u0439.",
         embed=None,
         view=None,
       )
       return
 
-    # \u0411\u043b\u043e\u043a\u0443\u0454\u043c\u043e \u043f\u043e\u0432\u0442\u043e\u0440\u043d\u0435 \u043d\u0430\u0442\u0438\u0441\u043a\u0430\u043d\u043d\u044f \u043e\u0434\u0440\u0430\u0437\u0443.
     await interaction.response.edit_message(
-      content="\u23f3 \u041f\u0440\u043e\u0432\u043e\u0434\u0436\u0443 \u043e\u043f\u043b\u0430\u0442\u0443...",
+      content="\u23f3 \u041d\u0430\u0440\u0430\u0445\u043e\u0432\u0443\u044e \u0441\u0443\u043c\u0438...",
       embed=None,
       view=None,
     )
@@ -2238,12 +2500,11 @@ class PaymentConfirmView(discord.ui.View):
       interaction.user.id,
       payment_mode=self.payment_mode,
       excluded_payment_ids=self.excluded_ids,
-      deferred_payout_ids=self.deferred_ids,
     )
 
     if not result:
       await interaction.edit_original_response(
-        content="\u274c \u041d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f \u043f\u0440\u043e\u0432\u0435\u0441\u0442\u0438 \u043e\u043f\u043b\u0430\u0442\u0443.",
+        content="\u274c \u041d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f \u0432\u0438\u043a\u043e\u043d\u0430\u0442\u0438 \u043d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u043d\u044f.",
         embed=None,
         view=None,
       )
@@ -2251,15 +2512,11 @@ class PaymentConfirmView(discord.ui.View):
 
     await refresh_completed_message(self.message_id)
 
-    payout_lines = [
+    accrual_lines = [
       f"<@{uid}> \u2014 **{format_cents(amount)}**"
-      for uid, amount in result["payouts"].items()
+      for uid, amount in result["accruals"].items()
     ]
-    payout_lines.extend(
-      f"\u23f3 <@{uid}> \u2014 **{format_cents(amount)}** \u2022 \u0432\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0430 \u043e\u043f\u043b\u0430\u0442\u0430"
-      for uid, amount in result["deferred_payouts"].items()
-    )
-    payouts_text = "\n".join(payout_lines) or "\u2014"
+    accruals_text = "\n".join(accrual_lines) or "\u2014"
 
     excluded_text = (
       "\u2014"
@@ -2269,23 +2526,25 @@ class PaymentConfirmView(discord.ui.View):
 
     await audit_log(
       interaction.guild,
-      "\U0001f4b5 \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u043e",
+      "\U0001f9ee \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0440\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e",
       (
         f"\u0417\u0430\u043f\u0438\u0441: **#{row_before['id']}**\n"
         f"\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442: **{row_before['contract_name']}**\n"
         f"\u0421\u043f\u043e\u0441\u0456\u0431: **{payment_mode_label(self.payment_mode)}**\n"
         f"\u0411\u0430\u043d\u043a \u0441\u0456\u043c'\u0457: **{format_cents(result['fomo_cents'])}**\n"
-        f"\u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c: **{format_cents(result['net_cents'])}**\n"
-        f"\u0411\u0435\u0437 \u0432\u0438\u043f\u043b\u0430\u0442\u0438: {excluded_text}\n"
-        f"\u0420\u043e\u0437\u043f\u043e\u0434\u0456\u043b:\n{payouts_text}\n"
-        f"\u0412\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u043e \u043f\u0456\u0441\u043b\u044f \u0446\u044c\u043e\u0433\u043e \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443: **{format_cents(sum(result['deferred_payouts'].values()))}**\n"
-        f"\u041e\u043f\u043b\u0430\u0442\u0438\u0432/\u043b\u0430: <@{interaction.user.id}>"
+        f"\u041d\u0430\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c: **{format_cents(result['net_cents'])}**\n"
+        f"\u0411\u0435\u0437 \u043d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u043d\u044f: {excluded_text}\n"
+        f"\u0411\u0430\u043b\u0430\u043d\u0441 \u0434\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438:\n{accruals_text}\n"
+        f"\u0420\u043e\u0437\u0440\u0430\u0445\u0443\u0432\u0430\u0432/\u043b\u0430: <@{interaction.user.id}>"
       ),
-      discord.Color.green(),
+      discord.Color.gold(),
     )
 
     await interaction.edit_original_response(
-      content="\u2705 \u041e\u043f\u043b\u0430\u0442\u0443 \u043f\u0440\u043e\u0432\u0435\u0434\u0435\u043d\u043e.",
+      content=(
+        "\u2705 \u0421\u0443\u043c\u0438 \u043d\u0430\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e.\n"
+        "\u0424\u0430\u043a\u0442\u0438\u0447\u043d\u0443 \u0432\u0438\u043f\u043b\u0430\u0442\u0443 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c \u0442\u0435\u043f\u0435\u0440 \u0437\u0430\u043a\u0440\u0438\u0432\u0430\u0439\u0442\u0435 \u0447\u0435\u0440\u0435\u0437 `/payouts`."
+      ),
       embed=None,
       view=None,
     )
@@ -2308,8 +2567,8 @@ class PaymentConfirmView(discord.ui.View):
     if self.back_to_custom:
       await interaction.response.edit_message(
         content=(
-          "\u2699\ufe0f **\u041d\u0430\u043b\u0430\u0448\u0442\u0443\u0432\u0430\u0442\u0438 \u043e\u043f\u043b\u0430\u0442\u0443**\n"
-          "\u041e\u0431\u0435\u0440\u0456\u0442\u044c, \u043a\u043e\u0433\u043e \u043d\u0435 \u043f\u043e\u0442\u0440\u0456\u0431\u043d\u043e \u043e\u043f\u043b\u0430\u0447\u0443\u0432\u0430\u0442\u0438, \u0430 \u043f\u043e\u0442\u0456\u043c \u0441\u043f\u043e\u0441\u0456\u0431 \u0440\u043e\u0437\u043f\u043e\u0434\u0456\u043b\u0443."
+          "\u2699\ufe0f **\u041d\u0430\u043b\u0430\u0448\u0442\u0443\u0432\u0430\u0442\u0438 \u043d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u043d\u044f**\n"
+          "\u041e\u0431\u0435\u0440\u0456\u0442\u044c, \u043a\u043e\u043c\u0443 \u043d\u0435 \u043d\u0430\u0440\u0430\u0445\u043e\u0432\u0443\u0432\u0430\u0442\u0438 \u0433\u0440\u043e\u0448\u0456, \u0430 \u043f\u043e\u0442\u0456\u043c \u0441\u043f\u043e\u0441\u0456\u0431 \u0440\u043e\u0437\u043f\u043e\u0434\u0456\u043b\u0443."
         ),
         embed=None,
         view=CustomPaymentView(
@@ -2322,7 +2581,7 @@ class PaymentConfirmView(discord.ui.View):
       )
     else:
       await interaction.response.edit_message(
-        content="\u041e\u043f\u043b\u0430\u0442\u0443 \u043d\u0435 \u043f\u0440\u043e\u0432\u0435\u0434\u0435\u043d\u043e.",
+        content="\u041d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u043d\u044f \u043d\u0435 \u0432\u0438\u043a\u043e\u043d\u0430\u043d\u043e.",
         embed=None,
         view=None,
       )
@@ -2754,16 +3013,16 @@ class UnpaidCompletedView(discord.ui.View):
     self.bot_instance = bot_instance
 
   @discord.ui.button(
-    label="\u041e\u043f\u043b\u0430\u0442\u0430",
+    label="\u041d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u0442\u0438",
     style=discord.ButtonStyle.success,
-    emoji="\U0001f4b5",
+    emoji="\U0001f9ee",
     custom_id="contract_v3:paid",
     row=0,
   )
   async def paid(self, interaction: discord.Interaction, button: discord.ui.Button):
     if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
       await interaction.response.send_message(
-        "\u274c \u041e\u043f\u043b\u0430\u0447\u0443\u0432\u0430\u0442\u0438 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438 \u043c\u043e\u0436\u0435 \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u043e.",
+        "\u274c \u041d\u0430\u0440\u0430\u0445\u043e\u0432\u0443\u0432\u0430\u0442\u0438 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u043c\u043e\u0436\u0435 \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u043e.",
         ephemeral=True,
       )
       return
@@ -2843,7 +3102,7 @@ class UnpaidCompletedView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="\u041d\u0430\u043b\u0430\u0448\u0442\u0443\u0432\u0430\u0442\u0438 \u043e\u043f\u043b\u0430\u0442\u0443",
+    label="\u041d\u0430\u043b\u0430\u0448\u0442\u0443\u0432\u0430\u0442\u0438",
     style=discord.ButtonStyle.primary,
     emoji="\u2699\ufe0f",
     custom_id="contract_v4:custompay",
@@ -3555,6 +3814,171 @@ def rating_data_for_guild_all_time(guild_id: int):
 
 
 
+
+
+def get_leaderboard_role_ids(guild_id: int) -> list[int]:
+  raw = db.get_setting(guild_id, "leaderboard_role_ids")
+  if not raw:
+    return []
+
+  try:
+    values = json.loads(raw)
+  except Exception:
+    return []
+
+  result = []
+  for value in values:
+    try:
+      role_id = int(value)
+    except Exception:
+      continue
+    if role_id not in result:
+      result.append(role_id)
+
+  return result
+
+
+async def build_role_leaderboard_embed(
+  guild: discord.Guild,
+  guild_id: int,
+  slot_label: Optional[str] = None,
+) -> discord.Embed:
+  role_ids = get_leaderboard_role_ids(guild_id)
+  points, participations, rating_users, _ = rating_data_for_guild(guild_id)
+
+  embed = discord.Embed(
+    title="\U0001f396 \u0420\u0415\u0419\u0422\u0418\u041d\u0413 \u041f\u041e \u0420\u041e\u041b\u042f\u0425",
+    description=(
+      slot_label
+      if slot_label
+      else "\u041e\u043a\u0440\u0435\u043c\u0456 \u0442\u0430\u0431\u043b\u0438\u0446\u0456 \u0434\u043b\u044f \u043d\u0430\u043b\u0430\u0448\u0442\u043e\u0432\u0430\u043d\u0438\u0445 Discord-\u0440\u043e\u043b\u0435\u0439."
+    ),
+    color=discord.Color.purple(),
+  )
+
+  if not role_ids:
+    embed.description = (
+      "\u0420\u043e\u043b\u0456 \u0449\u0435 \u043d\u0435 \u043d\u0430\u043b\u0430\u0448\u0442\u043e\u0432\u0430\u043d\u0456.\n"
+      "\u041a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u043e \u043c\u043e\u0436\u0435 \u0432\u0438\u0431\u0440\u0430\u0442\u0438 \u0457\u0445 \u0447\u0435\u0440\u0435\u0437 `/leaderboard-settings`."
+    )
+    return embed
+
+  member_cache: dict[int, Optional[discord.Member]] = {}
+
+  for role_id in role_ids:
+    role = guild.get_role(role_id)
+    if role is None:
+      continue
+
+    filtered = []
+
+    for uid in rating_users:
+      member = member_cache.get(uid)
+
+      if uid not in member_cache:
+        member = guild.get_member(uid)
+        if member is None:
+          member = await fetch_member_safe(guild, uid)
+        member_cache[uid] = member
+
+      if member and any(r.id == role_id for r in member.roles):
+        filtered.append(uid)
+
+    if filtered:
+      lines = [
+        (
+          f"**{idx}.** <@{uid}> \u2014 "
+          f"**{format_points_with_word(points[uid])}** "
+          f"\u2022 {participations[uid]} \u0443\u0447\u0430\u0441\u0442\u0435\u0439"
+        )
+        for idx, uid in enumerate(filtered[:15], start=1)
+      ]
+
+      if len(filtered) > 15:
+        lines.append(f"\u2026\u0456 \u0449\u0435 {len(filtered) - 15}")
+
+      value = "\n".join(lines)
+    else:
+      value = "\u0423 \u043f\u043e\u0442\u043e\u0447\u043d\u043e\u043c\u0443 \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443 \u043f\u043e\u043a\u0438 \u043d\u0435\u043c\u0430\u0454 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432 \u0456\u0437 \u0446\u0456\u0454\u044e \u0440\u043e\u043b\u043b\u044e."
+
+    embed.add_field(
+      name=f"\U0001f396 {role.name}",
+      value=value,
+      inline=False,
+    )
+
+  if not embed.fields:
+    embed.description = (
+      "\u041d\u0430\u043b\u0430\u0448\u0442\u043e\u0432\u0430\u043d\u0456 \u0440\u043e\u043b\u0456 \u0431\u0456\u043b\u044c\u0448\u0435 \u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u0456 \u043d\u0430 \u0441\u0435\u0440\u0432\u0435\u0440\u0456.\n"
+      "\u041e\u043d\u043e\u0432\u0456\u0442\u044c \u0457\u0445 \u0447\u0435\u0440\u0435\u0437 `/leaderboard-settings`."
+    )
+
+  return embed
+
+
+class LeaderboardRoleSelect(discord.ui.RoleSelect):
+  def __init__(self, guild_id: int):
+    self.guild_id = guild_id
+    super().__init__(
+      placeholder="\u041e\u0431\u0435\u0440\u0456\u0442\u044c \u0440\u043e\u043b\u0456 \u0434\u043b\u044f \u043e\u043a\u0440\u0435\u043c\u043e\u0433\u043e \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443",
+      min_values=1,
+      max_values=10,
+      row=0,
+    )
+
+  async def callback(self, interaction: discord.Interaction):
+    selected_ids = [
+      role.id
+      for role in self.values
+      if role.id != interaction.guild_id
+    ]
+
+    db.set_setting(
+      self.guild_id,
+      "leaderboard_role_ids",
+      json.dumps(selected_ids),
+    )
+
+    role_mentions = " ".join(f"<@&{rid}>" for rid in selected_ids)
+
+    await interaction.response.edit_message(
+      content=(
+        "\u2705 \u0420\u043e\u043b\u0456 \u0434\u043b\u044f \u043e\u043a\u0440\u0435\u043c\u043e\u0433\u043e \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443 \u0437\u0431\u0435\u0440\u0435\u0436\u0435\u043d\u043e.\n"
+        f"{role_mentions or '\u2014'}"
+      ),
+      view=LeaderboardSettingsView(self.guild_id),
+    )
+
+
+class LeaderboardSettingsView(discord.ui.View):
+  def __init__(self, guild_id: int):
+    super().__init__(timeout=300)
+    self.guild_id = guild_id
+    self.add_item(LeaderboardRoleSelect(guild_id))
+
+  @discord.ui.button(
+    label="\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u0438 \u0440\u043e\u043b\u0456",
+    emoji="\U0001f5d1\ufe0f",
+    style=discord.ButtonStyle.danger,
+    row=1,
+  )
+  async def clear(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    db.set_setting(
+      self.guild_id,
+      "leaderboard_role_ids",
+      "[]",
+    )
+
+    await interaction.response.edit_message(
+      content="\u2705 \u041e\u043a\u0440\u0435\u043c\u0438\u0439 \u0440\u0435\u0439\u0442\u0438\u043d\u0433 \u043f\u043e \u0440\u043e\u043b\u044f\u0445 \u043e\u0447\u0438\u0449\u0435\u043d\u043e.",
+      view=LeaderboardSettingsView(self.guild_id),
+    )
+
+
 def earnings_data_for_guild(guild_id: int):
   rows = db.all_non_cancelled(guild_id)
   paid_rows_all = [r for r in rows if r["status"] == "paid"]
@@ -3615,6 +4039,7 @@ def build_my_stats_embed(guild_id: int, user_id: int) -> discord.Embed:
 
   position = users.index(user_id) + 1 if user_id in users else None
   personal_earnings = earnings["member_earnings"].get(user_id, 0)
+  pending_payout = db.pending_accrual_total(guild_id, user_id)
 
   paid_period_rows = [
     row for row in earnings["paid_rows"]
@@ -3660,7 +4085,8 @@ def build_my_stats_embed(guild_id: int, user_id: int) -> discord.Embed:
     name="\U0001f4b5 \u0417\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a",
     value=(
       f"\u041e\u0442\u0440\u0438\u043c\u0430\u043d\u043e: **{format_cents(personal_earnings)}**\n"
-      f"\u041e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0445 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432: **{len(paid_period_rows)}**"
+      f"\u0414\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438: **{format_cents(pending_payout)}**\n"
+      f"\u0420\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u0438\u0445 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432: **{len(paid_period_rows)}**"
     ),
     inline=True,
   )
@@ -3668,7 +4094,7 @@ def build_my_stats_embed(guild_id: int, user_id: int) -> discord.Embed:
   embed.add_field(
     name="\u23f3 \u0417\u0430\u0440\u0430\u0437",
     value=(
-      f"\u041e\u0447\u0456\u043a\u0443\u044e\u0442\u044c \u043e\u043f\u043b\u0430\u0442\u0438: **{len(unpaid_now_rows)}**"
+      f"\u041d\u0435 \u0440\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432: **{len(unpaid_now_rows)}**"
     ),
     inline=False,
   )
@@ -3918,32 +4344,34 @@ def build_admin_general_stats_embed(guild_id: int) -> discord.Embed:
   earnings = earnings_data_for_guild(guild_id)
   points, participations, rating_users, rating_reset_at = rating_data_for_guild(guild_id)
 
-  paid_rows = earnings["paid_rows"]
-  unpaid_rows = earnings["unpaid_rows"]
+  calculated_rows = earnings["paid_rows"]
+  uncalculated_rows = earnings["unpaid_rows"]
 
-  gross = sum(row["price"] * 100 for row in paid_rows)
-  family = sum((row["fomo_cents"] or 0) for row in paid_rows)
-  members = sum((row["net_cents"] or 0) for row in paid_rows)
-  unpaid = sum(row["price"] * 100 for row in unpaid_rows)
+  gross = sum(row["price"] * 100 for row in calculated_rows)
+  family = sum((row["fomo_cents"] or 0) for row in calculated_rows)
+  accrued = sum((row["net_cents"] or 0) for row in calculated_rows)
+  actually_paid = sum(earnings["member_earnings"].values())
+  pending_payouts = db.pending_accrual_total(guild_id)
+  uncalculated = sum(row["price"] * 100 for row in uncalculated_rows)
 
   custom_count = sum(
-    1 for row in paid_rows
+    1 for row in calculated_rows
     if (row["payment_mode"] or PAYMENT_MODE_NORMAL) in (
       PAYMENT_MODE_REDISTRIBUTE,
       PAYMENT_MODE_FAMILY_SHARE,
     )
   )
   exception_count = sum(
-    1 for row in paid_rows
+    1 for row in calculated_rows
     if parse_ids(row["excluded_payment_ids"] or "[]")
     and (row["payment_mode"] or PAYMENT_MODE_NORMAL) != PAYMENT_MODE_LEGACY_FAMILY
   )
   full_family_count = sum(
-    1 for row in paid_rows
+    1 for row in calculated_rows
     if (row["payment_mode"] or PAYMENT_MODE_NORMAL) == PAYMENT_MODE_LEGACY_FAMILY
   )
 
-  avg_contract = gross // len(paid_rows) if paid_rows else 0
+  avg_contract = gross // len(calculated_rows) if calculated_rows else 0
 
   rating_rows = [
     row for row in earnings["rows"]
@@ -3981,8 +4409,8 @@ def build_admin_general_stats_embed(guild_id: int) -> discord.Embed:
   embed.add_field(
     name="\U0001f4cb \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438",
     value=(
-      f"\u041e\u043f\u043b\u0430\u0447\u0435\u043d\u043e \u0432 \u043f\u0435\u0440\u0456\u043e\u0434\u0456: **{len(paid_rows)}**\n"
-      f"\u041d\u0435 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u043e \u0437\u0430\u0440\u0430\u0437: **{len(unpaid_rows)}**\n"
+      f"\u0420\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e \u0432 \u043f\u0435\u0440\u0456\u043e\u0434\u0456: **{len(calculated_rows)}**\n"
+      f"\u041d\u0435 \u0440\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e \u0437\u0430\u0440\u0430\u0437: **{len(uncalculated_rows)}**\n"
       f"\u041f\u043e\u0432\u043d\u0456\u0441\u0442\u044e \u043d\u0430 \u0444\u0430\u043c\u0443: **{full_family_count}**"
     ),
     inline=True,
@@ -3994,8 +4422,8 @@ def build_admin_general_stats_embed(guild_id: int) -> discord.Embed:
       f"\u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432 \u0443 \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443: **{len(active_users)}**\n"
       f"\u0423\u0447\u0430\u0441\u0442\u0435\u0439 \u0443 \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443: **{sum(participations.values())}**\n"
       f"\u0421\u0435\u0440\u0435\u0434\u043d\u044f \u043a\u043e\u043c\u0430\u043d\u0434\u0430: **{avg_team:.1f}**\n"
-      f"\u041e\u043f\u043b\u0430\u0442 \u0437 \u0432\u0438\u043d\u044f\u0442\u043a\u0430\u043c\u0438: **{exception_count}**\n"
-      f"\u041d\u0430\u043b\u0430\u0448\u0442\u043e\u0432\u0430\u043d\u0438\u0445 \u043e\u043f\u043b\u0430\u0442: **{custom_count}**"
+      f"\u0420\u043e\u0437\u0440\u0430\u0445\u0443\u043d\u043a\u0456\u0432 \u0437 \u0432\u0438\u043d\u044f\u0442\u043a\u0430\u043c\u0438: **{exception_count}**\n"
+      f"\u041d\u0430\u043b\u0430\u0448\u0442\u043e\u0432\u0430\u043d\u0438\u0445 \u0440\u043e\u0437\u0440\u0430\u0445\u0443\u043d\u043a\u0456\u0432: **{custom_count}**"
     ),
     inline=True,
   )
@@ -4005,9 +4433,11 @@ def build_admin_general_stats_embed(guild_id: int) -> discord.Embed:
     value=(
       f"\u0417\u0430\u0433\u0430\u043b\u043e\u043c \u043f\u043e \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0430\u0445: **{format_cents(gross)}**\n"
       f"\u041d\u0430 \u0444\u0430\u043c\u0443: **{format_cents(family)}**\n"
-      f"\u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c: **{format_cents(members)}**\n"
-      f"\u041e\u0447\u0456\u043a\u0443\u0454 \u043e\u043f\u043b\u0430\u0442\u0438: **{format_cents(unpaid)}**\n"
-      f"\u0421\u0435\u0440\u0435\u0434\u043d\u0456\u0439 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0439 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442: **{format_cents(avg_contract)}**"
+      f"\u041d\u0430\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c: **{format_cents(accrued)}**\n"
+      f"\u0424\u0430\u043a\u0442\u0438\u0447\u043d\u043e \u0432\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u043e: **{format_cents(actually_paid)}**\n"
+      f"\u0414\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438 \u0437\u0430\u0440\u0430\u0437: **{format_cents(pending_payouts)}**\n"
+      f"\u041d\u0435 \u0440\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432 \u043d\u0430: **{format_cents(uncalculated)}**\n"
+      f"\u0421\u0435\u0440\u0435\u0434\u043d\u0456\u0439 \u0440\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u0438\u0439 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442: **{format_cents(avg_contract)}**"
     ),
     inline=False,
   )
@@ -4033,6 +4463,8 @@ def build_admin_history_embed(guild_id: int) -> discord.Embed:
   gross = sum(row["price"] * 100 for row in paid_rows)
   family = sum((row["fomo_cents"] or 0) for row in paid_rows)
   members = sum((row["net_cents"] or 0) for row in paid_rows)
+  actually_paid = sum(earnings["member_earnings"].values())
+  pending_payouts = db.pending_accrual_total(guild_id)
   unpaid = sum(row["price"] * 100 for row in unpaid_rows)
 
   exception_count = sum(
@@ -4082,8 +4514,8 @@ def build_admin_history_embed(guild_id: int) -> discord.Embed:
     name="\U0001f4cb \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438 \u0437\u0430 \u0432\u0435\u0441\u044c \u0447\u0430\u0441",
     value=(
       f"\u0412\u0441\u044c\u043e\u0433\u043e \u0434\u0456\u0439\u0441\u043d\u0438\u0445: **{len(valid_rows)}**\n"
-      f"\u041e\u043f\u043b\u0430\u0447\u0435\u043d\u043e: **{len(paid_rows)}**\n"
-      f"\u041d\u0435 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u043e \u0437\u0430\u0440\u0430\u0437: **{len(unpaid_rows)}**\n"
+      f"\u0420\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e: **{len(paid_rows)}**\n"
+      f"\u041d\u0435 \u0440\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e \u0437\u0430\u0440\u0430\u0437: **{len(unpaid_rows)}**\n"
       f"\u0421\u043a\u0430\u0441\u043e\u0432\u0430\u043d\u043e: **{len(cancelled)}**\n"
       f"\u0410\u043d\u0443\u043b\u044c\u043e\u0432\u0430\u043d\u043e \u043f\u0456\u0441\u043b\u044f \u043e\u043f\u043b\u0430\u0442\u0438: **{len(annulled)}**"
     ),
@@ -4107,8 +4539,10 @@ def build_admin_history_embed(guild_id: int) -> discord.Embed:
     value=(
       f"\u0417\u0430\u0433\u0430\u043b\u043e\u043c \u043f\u043e \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0430\u0445: **{format_cents(gross)}**\n"
       f"\u041d\u0430 \u0444\u0430\u043c\u0443: **{format_cents(family)}**\n"
-      f"\u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c: **{format_cents(members)}**\n"
-      f"\u041d\u0435 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u043e \u0437\u0430\u0440\u0430\u0437: **{format_cents(unpaid)}**"
+      f"\u041d\u0430\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c: **{format_cents(members)}**\n"
+      f"\u0424\u0430\u043a\u0442\u0438\u0447\u043d\u043e \u0432\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u043e: **{format_cents(actually_paid)}**\n"
+      f"\u0414\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438 \u0437\u0430\u0440\u0430\u0437: **{format_cents(pending_payouts)}**\n"
+      f"\u041d\u0435 \u0440\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432 \u043d\u0430: **{format_cents(unpaid)}**"
     ),
     inline=False,
   )
@@ -4187,16 +4621,16 @@ def build_contract_stats_embed(guild_id: int, page: int = 0):
   )
 
   if not slice_rows:
-    embed.description = "\u0429\u0435 \u043d\u0435\u043c\u0430\u0454 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0445 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432."
+    embed.description = "\u0429\u0435 \u043d\u0435\u043c\u0430\u0454 \u0440\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u0438\u0445 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432."
   else:
     for stat in slice_rows:
       embed.add_field(
         name=stat["name"],
         value=(
-          f"\u041e\u043f\u043b\u0430\u0447\u0435\u043d\u043e: **{stat['count']}**\n"
+          f"\u0420\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e: **{stat['count']}**\n"
           f"\u0417\u0430\u0433\u0430\u043b\u043e\u043c: **{format_cents(stat['gross'])}**\n"
           f"\u041d\u0430 \u0444\u0430\u043c\u0443: **{format_cents(stat['family'])}**\n"
-          f"\u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c: **{format_cents(stat['members'])}**\n"
+          f"\u041d\u0430\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c: **{format_cents(stat['members'])}**\n"
           f"\u0417 \u0432\u0438\u043d\u044f\u0442\u043a\u0430\u043c\u0438: **{stat['exceptions']}**"
         ),
         inline=True,
@@ -4275,7 +4709,7 @@ def build_daily_stats_embed(guild_id: int, page: int = 0):
   if not slice_rows:
     embed.add_field(
       name="\u041d\u0435\u043c\u0430\u0454 \u0434\u0430\u043d\u0438\u0445",
-      value="\u0429\u0435 \u043d\u0435\u043c\u0430\u0454 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0445 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432.",
+      value="\u0429\u0435 \u043d\u0435\u043c\u0430\u0454 \u0440\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u0438\u0445 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432.",
       inline=False,
     )
   else:
@@ -4286,7 +4720,7 @@ def build_daily_stats_embed(guild_id: int, page: int = 0):
           f"\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432: **{stat['count']}**\n"
           f"\u0417\u0430\u0433\u0430\u043b\u043e\u043c: **{format_cents(stat['gross'])}**\n"
           f"\u041d\u0430 \u0444\u0430\u043c\u0443: **{format_cents(stat['family'])}**\n"
-          f"\u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c: **{format_cents(stat['members'])}**\n"
+          f"\u041d\u0430\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c: **{format_cents(stat['members'])}**\n"
           f"\u041f\u043e\u0432\u043d\u0456\u0441\u0442\u044e \u043d\u0430 \u0444\u0430\u043c\u0443: **{stat['full_family']}**"
         ),
         inline=False,
@@ -4376,7 +4810,7 @@ def build_member_stats_embed(
   current_received = earnings["member_earnings"].get(user_id, 0)
   all_received = all_earnings["member_earnings"].get(user_id, 0)
 
-  pending_debt = db.pending_admin_debt_total(guild_id, user_id)
+  pending_payout = db.pending_accrual_total(guild_id, user_id)
 
   current_family_contribution = db.family_contribution_for_user(
     guild_id,
@@ -4418,9 +4852,9 @@ def build_member_stats_embed(
     name="\U0001f4b5 \u041f\u043e\u0442\u043e\u0447\u043d\u0456 \u0444\u0456\u043d\u0430\u043d\u0441\u0438",
     value=(
       f"\u041e\u0442\u0440\u0438\u043c\u0430\u043d\u043e: **{format_cents(current_received)}**\n"
-      f"\u0412\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0430 \u043e\u043f\u043b\u0430\u0442\u0430: **{format_cents(pending_debt)}**\n"
-      f"\u041e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0445 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432: **{len(paid_period)}**\n"
-      f"\u041e\u0447\u0456\u043a\u0443\u044e\u0442\u044c \u043e\u043f\u043b\u0430\u0442\u0438: **{len(unpaid_now)}**"
+      f"\u0414\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438: **{format_cents(pending_payout)}**\n"
+      f"\u0420\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u0438\u0445 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432: **{len(paid_period)}**\n"
+      f"\u041d\u0435 \u0440\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432: **{len(unpaid_now)}**"
     ),
     inline=True,
   )
@@ -4648,6 +5082,247 @@ async def build_member_stats_picker_view(
   )
 
 
+
+
+def parse_period_date(raw: str):
+  value = raw.strip()
+
+  for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d"):
+    try:
+      return datetime.strptime(value, fmt).date()
+    except ValueError:
+      pass
+
+  raise ValueError("\u0412\u043a\u0430\u0436\u0456\u0442\u044c \u0434\u0430\u0442\u0443 \u0443 \u0444\u043e\u0440\u043c\u0430\u0442\u0456 \u0414\u0414.\u041c\u041c.\u0420\u0420\u0420\u0420.")
+
+
+def date_in_period(
+  iso_value: Optional[str],
+  start_day,
+  end_day,
+) -> bool:
+  day = local_date_from_iso(iso_value)
+  return bool(day and start_day <= day <= end_day)
+
+
+def build_period_stats_embed(
+  guild_id: int,
+  start_day,
+  end_day,
+) -> discord.Embed:
+  rows = db.all_non_cancelled(guild_id)
+
+  contract_rows = [
+    row for row in rows
+    if date_in_period(
+      row["created_at"],
+      start_day,
+      end_day,
+    )
+  ]
+
+  calculated_rows = [
+    row for row in rows
+    if row["status"] == "paid"
+    and date_in_period(
+      row["paid_at"],
+      start_day,
+      end_day,
+    )
+  ]
+
+  gross = sum(row["price"] * 100 for row in calculated_rows)
+  family = sum((row["fomo_cents"] or 0) for row in calculated_rows)
+  accrued = sum((row["net_cents"] or 0) for row in calculated_rows)
+
+  payouts = [
+    row for row in db.paid_payouts_for_guild(guild_id)
+    if date_in_period(
+      row["created_at"],
+      start_day,
+      end_day,
+    )
+  ]
+  actually_paid = sum(row["amount_cents"] for row in payouts)
+
+  personal_family = sum(
+    row["amount_cents"] or 0
+    for row in db.family_contributions_for_guild(guild_id)
+    if date_in_period(
+      row["created_at"],
+      start_day,
+      end_day,
+    )
+  )
+
+  pending_from_period = sum(
+    row["amount_cents"] or 0
+    for row in db.accruals_for_guild(guild_id)
+    if row["status"] == "pending"
+    and date_in_period(
+      row["created_at"],
+      start_day,
+      end_day,
+    )
+  )
+
+  rating_points = defaultdict(lambda: Fraction(0, 1))
+  participations = Counter()
+
+  for row in contract_rows:
+    members = parse_ids(row["participant_ids"])
+    if not members:
+      continue
+
+    share = Fraction(10, len(members))
+
+    for uid in members:
+      rating_points[uid] += share
+      participations[uid] += 1
+
+  rating_users = sorted(
+    rating_points,
+    key=lambda uid: (
+      rating_points[uid],
+      participations[uid],
+    ),
+    reverse=True,
+  )
+
+  earning_counter = Counter()
+  for payout in payouts:
+    earning_counter[payout["user_id"]] += payout["amount_cents"]
+
+  unique_users = {
+    uid
+    for row in contract_rows
+    for uid in parse_ids(row["participant_ids"])
+  }
+
+  embed = discord.Embed(
+    title="\U0001f4c6 \u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u0437\u0430 \u043f\u0435\u0440\u0456\u043e\u0434",
+    description=(
+      f"**{start_day.strftime('%d.%m.%Y')} \u2014 "
+      f"{end_day.strftime('%d.%m.%Y')}**"
+    ),
+    color=discord.Color.blurple(),
+  )
+
+  embed.add_field(
+    name="\U0001f4cb \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438",
+    value=(
+      f"\u0412\u0438\u043a\u043e\u043d\u0430\u043d\u043e: **{len(contract_rows)}**\n"
+      f"\u0420\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e: **{len(calculated_rows)}**\n"
+      f"\u0423\u043d\u0456\u043a\u0430\u043b\u044c\u043d\u0438\u0445 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432: **{len(unique_users)}**"
+    ),
+    inline=True,
+  )
+
+  embed.add_field(
+    name="\U0001f4b0 \u0424\u0456\u043d\u0430\u043d\u0441\u0438",
+    value=(
+      f"\u0417\u0430\u0433\u0430\u043b\u044c\u043d\u0430 \u0441\u0443\u043c\u0430: **{format_cents(gross)}**\n"
+      f"\u0411\u0430\u043d\u043a \u0441\u0456\u043c'\u0457: **{format_cents(family)}**\n"
+      f"\u041e\u0441\u043e\u0431\u0438\u0441\u0442\u0438\u0445 \u0432\u043d\u0435\u0441\u043a\u0456\u0432 \u0443 \u0411\u0430\u043d\u043a: **{format_cents(personal_family)}**\n"
+      f"\u041d\u0430\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c: **{format_cents(accrued)}**\n"
+      f"\u0424\u0430\u043a\u0442\u0438\u0447\u043d\u043e \u0432\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u043e: **{format_cents(actually_paid)}**\n"
+      f"\u0417 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432 \u043f\u0435\u0440\u0456\u043e\u0434\u0443 \u0449\u0435 \u0434\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438: **{format_cents(pending_from_period)}**"
+    ),
+    inline=True,
+  )
+
+  if rating_users:
+    rating_lines = [
+      (
+        f"**{idx}.** <@{uid}> \u2014 "
+        f"**{format_points_with_word(rating_points[uid])}** "
+        f"\u2022 {participations[uid]} \u0443\u0447\u0430\u0441\u0442\u0435\u0439"
+      )
+      for idx, uid in enumerate(rating_users[:10], start=1)
+    ]
+
+    embed.add_field(
+      name="\U0001f3c6 \u0420\u0435\u0439\u0442\u0438\u043d\u0433 \u0437\u0430 \u043f\u0435\u0440\u0456\u043e\u0434",
+      value="\n".join(rating_lines),
+      inline=False,
+    )
+
+  top_earnings = earning_counter.most_common(5)
+
+  if top_earnings:
+    earning_lines = [
+      f"**{idx}.** <@{uid}> \u2014 **{format_cents(amount)}**"
+      for idx, (uid, amount) in enumerate(top_earnings, start=1)
+    ]
+
+    embed.add_field(
+      name="\U0001f4b5 \u0422\u043e\u043f-5 \u0444\u0430\u043a\u0442\u0438\u0447\u043d\u043e\u0433\u043e \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043a\u0443",
+      value="\n".join(earning_lines),
+      inline=False,
+    )
+
+  embed.set_footer(
+    text=f"\u0427\u0430\u0441\u043e\u0432\u0430 \u0437\u043e\u043d\u0430: {TIMEZONE_NAME}"
+  )
+  return embed
+
+
+class PeriodStatsModal(discord.ui.Modal, title="\U0001f4c6 \u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u0437\u0430 \u043f\u0435\u0440\u0456\u043e\u0434"):
+  def __init__(self, guild_id: int):
+    super().__init__(timeout=300)
+    self.guild_id = guild_id
+
+    self.start_input = discord.ui.TextInput(
+      label="\u0414\u0430\u0442\u0430 \u0432\u0456\u0434",
+      placeholder="01.09.2026",
+      required=True,
+      max_length=10,
+    )
+    self.end_input = discord.ui.TextInput(
+      label="\u0414\u0430\u0442\u0430 \u0434\u043e",
+      placeholder="15.09.2026",
+      required=True,
+      max_length=10,
+    )
+
+    self.add_item(self.start_input)
+    self.add_item(self.end_input)
+
+  async def on_submit(self, interaction: discord.Interaction):
+    try:
+      start_day = parse_period_date(str(self.start_input))
+      end_day = parse_period_date(str(self.end_input))
+    except ValueError as exc:
+      await interaction.response.send_message(
+        f"\u274c {exc}",
+        ephemeral=True,
+      )
+      return
+
+    if end_day < start_day:
+      await interaction.response.send_message(
+        "\u274c \u0414\u0430\u0442\u0430 \u00ab\u0434\u043e\u00bb \u043d\u0435 \u043c\u043e\u0436\u0435 \u0431\u0443\u0442\u0438 \u0440\u0430\u043d\u0456\u0448\u0435 \u0434\u0430\u0442\u0438 \u00ab\u0432\u0456\u0434\u00bb.",
+        ephemeral=True,
+      )
+      return
+
+    if (end_day - start_day).days > 3660:
+      await interaction.response.send_message(
+        "\u274c \u0417\u0430\u043d\u0430\u0434\u0442\u043e \u0432\u0435\u043b\u0438\u043a\u0438\u0439 \u043f\u0435\u0440\u0456\u043e\u0434.",
+        ephemeral=True,
+      )
+      return
+
+    await interaction.response.send_message(
+      embed=build_period_stats_embed(
+        self.guild_id,
+        start_day,
+        end_day,
+      ),
+      ephemeral=True,
+    )
+
+
 class AdminStatsView(discord.ui.View):
   def __init__(
     self,
@@ -4763,6 +5438,51 @@ class AdminStatsView(discord.ui.View):
     await interaction.response.edit_message(
       embed=build_admin_history_embed(self.guild_id),
       view=AdminStatsView(self.guild_id, "history"),
+    )
+
+  @discord.ui.button(
+    label="\u041f\u043e \u0440\u043e\u043b\u044f\u0445",
+    emoji="\U0001f396",
+    style=discord.ButtonStyle.secondary,
+    row=1,
+  )
+  async def roles(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    if interaction.guild is None:
+      await interaction.response.send_message(
+        "\u274c \u0421\u0435\u0440\u0432\u0435\u0440 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0438\u0439.",
+        ephemeral=True,
+      )
+      return
+
+    await interaction.response.defer()
+
+    embed = await build_role_leaderboard_embed(
+      interaction.guild,
+      self.guild_id,
+    )
+
+    await interaction.edit_original_response(
+      embed=embed,
+      view=AdminStatsView(self.guild_id, "roles"),
+    )
+
+  @discord.ui.button(
+    label="\u041f\u0435\u0440\u0456\u043e\u0434",
+    emoji="\U0001f4c6",
+    style=discord.ButtonStyle.secondary,
+    row=1,
+  )
+  async def period(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.send_modal(
+      PeriodStatsModal(self.guild_id)
     )
 
   @discord.ui.button(
@@ -5482,7 +6202,7 @@ def build_auto_rating_embeds(
     if points[uid] > 0
   ]
 
-  chunks = chunk_lines(lines)
+  chunks = chunk_lines(lines, max_lines=40, max_chars=3800)
   total_participations = sum(participations[uid] for uid in users)
 
   embeds = []
@@ -5526,14 +6246,16 @@ def build_family_daily_embed(
     row for row in rows
     if local_date_from_iso(row["created_at"]) == target_day
   ]
-  paid_today = [
+
+  calculated_today = [
     row for row in rows
     if row["status"] == "paid"
     and local_date_from_iso(row["paid_at"]) == target_day
   ]
 
-  gross_cents = sum((row["price"] or 0) * 100 for row in paid_today)
-  family_cents = sum(row["fomo_cents"] or 0 for row in paid_today)
+  gross_cents = sum((row["price"] or 0) * 100 for row in calculated_today)
+  family_cents = sum(row["fomo_cents"] or 0 for row in calculated_today)
+  accrued_cents = sum(row["net_cents"] or 0 for row in calculated_today)
 
   participant_counter = Counter()
   for row in completed_today:
@@ -5548,47 +6270,36 @@ def build_family_daily_embed(
     row for row in all_payouts
     if local_date_from_iso(row["created_at"]) == target_day
   ]
-  paid_to_members_cents = sum(row["amount_cents"] or 0 for row in payouts_today)
+  paid_to_members_cents = sum(
+    row["amount_cents"] or 0
+    for row in payouts_today
+  )
 
   earnings_counter = Counter()
   for row in payouts_today:
     earnings_counter[row["user_id"]] += row["amount_cents"] or 0
 
-  debts = db.admin_debts_for_guild(guild_id)
-  deferred_created_today = [
-    row for row in debts
-    if local_date_from_iso(row["created_at"]) == target_day
-  ]
-  deferred_cents = sum(row["amount_cents"] or 0 for row in deferred_created_today)
+  accruals = db.accruals_for_guild(guild_id)
 
-  deferred_settled_today = [
-    row for row in debts
-    if row["settled_at"]
-    and local_date_from_iso(row["settled_at"]) == target_day
-  ]
-  deferred_settled_cents = sum(
-    row["amount_cents"] or 0
-    for row in deferred_settled_today
-  )
-
-  # Snapshot of outstanding deferred payments at the end of target_day.
+  # Outstanding balances exactly as they were at the end of target_day.
   pending_at_day_end = []
-  for row in debts:
+
+  for row in accruals:
     created_day = local_date_from_iso(row["created_at"])
-    settled_day = (
-      local_date_from_iso(row["settled_at"])
-      if row["settled_at"]
+    paid_day = (
+      local_date_from_iso(row["paid_at"])
+      if row["paid_at"]
       else None
     )
 
     if (
       created_day is not None
       and created_day <= target_day
-      and (settled_day is None or settled_day > target_day)
+      and (paid_day is None or paid_day > target_day)
     ):
       pending_at_day_end.append(row)
 
-  pending_debt_cents = sum(
+  pending_cents = sum(
     row["amount_cents"] or 0
     for row in pending_at_day_end
   )
@@ -5614,8 +6325,8 @@ def build_family_daily_embed(
     name="\U0001f4cb \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438",
     value=(
       f"\u0412\u0438\u043a\u043e\u043d\u0430\u043d\u043e: **{len(completed_today)}**\n"
-      f"\u041e\u043f\u043b\u0430\u0447\u0435\u043d\u043e: **{len(paid_today)}**\n"
-      f"\u0417\u0430\u0433\u0430\u043b\u044c\u043d\u0430 \u0441\u0443\u043c\u0430 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0445: **{format_cents(gross_cents)}**"
+      f"\u0420\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e: **{len(calculated_today)}**\n"
+      f"\u0417\u0430\u0433\u0430\u043b\u044c\u043d\u0430 \u0441\u0443\u043c\u0430 \u0440\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u0438\u0445: **{format_cents(gross_cents)}**"
     ),
     inline=False,
   )
@@ -5632,9 +6343,9 @@ def build_family_daily_embed(
   embed.add_field(
     name="\U0001f4b5 \u0412\u0438\u043f\u043b\u0430\u0442\u0438",
     value=(
-      f"\u0424\u0430\u043a\u0442\u0438\u0447\u043d\u043e \u0432\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u043e: **{format_cents(paid_to_members_cents)}**\n"
-      f"\u0421\u0442\u0432\u043e\u0440\u0435\u043d\u043e \u0432\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0438\u0445 \u043e\u043f\u043b\u0430\u0442: **{format_cents(deferred_cents)}**\n"
-      f"\u0417\u0430\u043a\u0440\u0438\u0442\u043e \u0432\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0438\u0445 \u043e\u043f\u043b\u0430\u0442: **{format_cents(deferred_settled_cents)}**"
+      f"\u041d\u0430\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c: **{format_cents(accrued_cents)}**\n"
+      f"\u0424\u0430\u043a\u0442\u0438\u0447\u043d\u043e \u0432\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u043e \u0437\u0430 \u0434\u0435\u043d\u044c: **{format_cents(paid_to_members_cents)}**\n"
+      f"\u0417\u0430\u043b\u0438\u0448\u043e\u043a \u0434\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438 \u043d\u0430 \u043a\u0456\u043d\u0435\u0446\u044c \u0434\u043d\u044f: **{format_cents(pending_cents)}**"
     ),
     inline=True,
   )
@@ -5667,7 +6378,7 @@ def build_family_daily_embed(
       for idx, (uid, amount) in enumerate(top_earnings, start=1)
     ]
     embed.add_field(
-      name="\U0001f4b0 \u0422\u043e\u043f-5 \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043a\u0443 \u0437\u0430 \u0434\u0435\u043d\u044c",
+      name="\U0001f4b0 \u0422\u043e\u043f-5 \u0444\u0430\u043a\u0442\u0438\u0447\u043d\u043e\u0433\u043e \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043a\u0443 \u0437\u0430 \u0434\u0435\u043d\u044c",
       value="\n".join(earning_lines),
       inline=False,
     )
@@ -5675,31 +6386,34 @@ def build_family_daily_embed(
   if pending_by_user:
     pending_lines = [
       f"<@{uid}> \u2014 **{format_cents(amount)}**"
-      for uid, amount in pending_by_user.most_common(10)
+      for uid, amount in pending_by_user.most_common(15)
     ]
 
-    if len(pending_by_user) > 10:
+    if len(pending_by_user) > 15:
       pending_lines.append(
-        f"\u2026\u0456 \u0449\u0435 {len(pending_by_user) - 10}"
+        f"\u2026\u0456 \u0449\u0435 {len(pending_by_user) - 15}"
       )
 
     embed.add_field(
-      name="\U0001f4b3 \u0412\u0406\u0414\u041a\u041b\u0410\u0414\u0415\u041d\u0406 \u041e\u041f\u041b\u0410\u0422\u0418 \u0417\u0410\u041c\u0410\u041c",
+      name="\U0001f4b3 \u0414\u041e \u0412\u0418\u041f\u041b\u0410\u0422\u0418 \u0423\u0427\u0410\u0421\u041d\u0418\u041a\u0410\u041c",
       value=(
-        f"**\u0417\u0410\u041b\u0418\u0428\u041e\u041a \u0414\u041e \u0412\u0418\u041f\u041b\u0410\u0422\u0418: {format_cents(pending_debt_cents)}**\n\n"
+        f"**\u0417\u0410\u041b\u0418\u0428\u041e\u041a: {format_cents(pending_cents)}**\n\n"
         + "\n".join(pending_lines)
       ),
       inline=False,
     )
   else:
     embed.add_field(
-      name="\U0001f4b3 \u0412\u0406\u0414\u041a\u041b\u0410\u0414\u0415\u041d\u0406 \u041e\u041f\u041b\u0410\u0422\u0418 \u0417\u0410\u041c\u0410\u041c",
-      value="**\u2705 \u0412\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0438\u0445 \u043e\u043f\u043b\u0430\u0442 \u043d\u0435\u043c\u0430\u0454.**",
+      name="\U0001f4b3 \u0414\u041e \u0412\u0418\u041f\u041b\u0410\u0422\u0418 \u0423\u0427\u0410\u0421\u041d\u0418\u041a\u0410\u041c",
+      value="**\u2705 \u041d\u0430\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u0438\u0445 \u0441\u0443\u043c \u0434\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438 \u043d\u0435\u043c\u0430\u0454.**",
       inline=False,
     )
 
-  embed.set_footer(text=f"\u0427\u0430\u0441\u043e\u0432\u0430 \u0437\u043e\u043d\u0430: {TIMEZONE_NAME}")
+  embed.set_footer(
+    text=f"\u0427\u0430\u0441\u043e\u0432\u0430 \u0437\u043e\u043d\u0430: {TIMEZONE_NAME}"
+  )
   return embed
+
 
 
 async def send_auto_rating(
@@ -5723,8 +6437,18 @@ async def send_auto_rating(
   if not isinstance(channel, discord.TextChannel):
     return
 
+  # 1) General leaderboard.
   for embed in build_auto_rating_embeds(GUILD_ID, slot_label):
     await channel.send(embed=embed)
+
+  # 2) Separate leaderboard for configured roles.
+  if get_leaderboard_role_ids(GUILD_ID):
+    role_embed = await build_role_leaderboard_embed(
+      guild,
+      GUILD_ID,
+      slot_label,
+    )
+    await channel.send(embed=role_embed)
 
 
 async def send_auto_family_stats(
@@ -6073,6 +6797,535 @@ async def annul_contract(
 
 
 
+
+# ----------------------------
+# Unified participant payouts
+# ----------------------------
+
+def payout_summary_page(
+  guild_id: int,
+  page: int,
+  page_size: int = 25,
+):
+  rows = db.pending_accrual_summary(guild_id)
+  total_pages = max(1, (len(rows) + page_size - 1) // page_size)
+  page = max(0, min(page, total_pages - 1))
+  return rows[page * page_size:(page + 1) * page_size], page, total_pages, rows
+
+
+async def payout_user_label(
+  guild: discord.Guild,
+  user_id: int,
+) -> str:
+  member = guild.get_member(user_id)
+  return member.display_name if member else f"ID {user_id}"
+
+
+class PayoutUserSelect(discord.ui.Select):
+  def __init__(
+    self,
+    guild_id: int,
+    page: int,
+    rows,
+    labels: dict[int, str],
+  ):
+    self.guild_id = guild_id
+    self.page = page
+
+    options = [
+      discord.SelectOption(
+        label=labels.get(row["user_id"], f"ID {row['user_id']}")[:100],
+        value=str(row["user_id"]),
+        description=(
+          f"\u0414\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438: {format_cents(row['total_cents'])} \u2022 "
+          f"{row['accrual_count']} \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442(\u0456\u0432)"
+        )[:100],
+      )
+      for row in rows
+    ]
+
+    if not options:
+      options = [
+        discord.SelectOption(
+          label="\u041d\u0435\u043c\u0430\u0454 \u0432\u0438\u043f\u043b\u0430\u0442",
+          value="none",
+        )
+      ]
+
+    super().__init__(
+      placeholder="\u041e\u0431\u0435\u0440\u0456\u0442\u044c \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430",
+      min_values=1,
+      max_values=1,
+      options=options,
+      disabled=(options[0].value == "none"),
+      row=0,
+    )
+
+  async def callback(self, interaction: discord.Interaction):
+    uid = int(self.values[0])
+    await show_payout_user(
+      interaction,
+      uid,
+      self.page,
+    )
+
+
+class PayoutListView(discord.ui.View):
+  def __init__(
+    self,
+    guild_id: int,
+    page: int,
+    total_pages: int,
+    rows,
+    labels: dict[int, str],
+  ):
+    super().__init__(timeout=300)
+    self.guild_id = guild_id
+    self.page = page
+    self.total_pages = total_pages
+
+    self.add_item(
+      PayoutUserSelect(
+        guild_id,
+        page,
+        rows,
+        labels,
+      )
+    )
+
+    self.previous.disabled = page <= 0
+    self.page_label.label = f"{page + 1}/{total_pages}"
+    self.next_page.disabled = page >= total_pages - 1
+
+  @discord.ui.button(
+    label="\u041d\u0430\u0437\u0430\u0434",
+    emoji="\u25c0\ufe0f",
+    style=discord.ButtonStyle.secondary,
+    row=1,
+  )
+  async def previous(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await send_payouts_list(
+      interaction,
+      edit=True,
+      page=self.page - 1,
+    )
+
+  @discord.ui.button(
+    label="1/1",
+    style=discord.ButtonStyle.secondary,
+    disabled=True,
+    row=1,
+  )
+  async def page_label(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    pass
+
+  @discord.ui.button(
+    label="\u0414\u0430\u043b\u0456",
+    emoji="\u25b6\ufe0f",
+    style=discord.ButtonStyle.secondary,
+    row=1,
+  )
+  async def next_page(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await send_payouts_list(
+      interaction,
+      edit=True,
+      page=self.page + 1,
+    )
+
+  @discord.ui.button(
+    label="\u0412\u0438\u043f\u043b\u0430\u0442\u0438\u0442\u0438 \u0432\u0441\u0456\u043c",
+    emoji="\U0001f4b8",
+    style=discord.ButtonStyle.danger,
+    row=2,
+  )
+  async def pay_all(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    if not isinstance(interaction.user, discord.Member) or not leader_member(interaction.user):
+      await interaction.response.send_message(
+        "\u274c \u0412\u0438\u043f\u043b\u0430\u0442\u0438\u0442\u0438 \u0432\u0441\u0456\u043c \u043c\u043e\u0436\u0435 \u0442\u0456\u043b\u044c\u043a\u0438 \u043b\u0456\u0434\u0435\u0440.",
+        ephemeral=True,
+      )
+      return
+
+    summary = db.pending_accrual_summary(self.guild_id)
+    if not summary:
+      await interaction.response.send_message(
+        "\u2705 \u041d\u0435\u043c\u0430\u0454 \u0441\u0443\u043c \u0434\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438.",
+        ephemeral=True,
+      )
+      return
+
+    total = sum(row["total_cents"] for row in summary)
+    count = sum(row["accrual_count"] for row in summary)
+
+    embed = discord.Embed(
+      title="\u26a0\ufe0f \u0412\u0438\u043f\u043b\u0430\u0442\u0438\u0442\u0438 \u0432\u0441\u0456\u043c?",
+      description=(
+        f"\u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432: **{len(summary)}**\n"
+        f"\u041d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u044c: **{count}**\n"
+        f"\u0417\u0430\u0433\u0430\u043b\u044c\u043d\u0430 \u0441\u0443\u043c\u0430: **{format_cents(total)}**"
+      ),
+      color=discord.Color.red(),
+    )
+
+    await interaction.response.send_message(
+      embed=embed,
+      view=PayoutAllConfirmView(self.guild_id),
+      ephemeral=True,
+    )
+
+
+class PayoutPayView(discord.ui.View):
+  def __init__(
+    self,
+    guild_id: int,
+    user_id: int,
+    page: int,
+  ):
+    super().__init__(timeout=180)
+    self.guild_id = guild_id
+    self.user_id = user_id
+    self.page = page
+
+  @discord.ui.button(
+    label="\u0412\u0438\u043f\u043b\u0430\u0442\u0438\u0442\u0438",
+    emoji="\U0001f4b5",
+    style=discord.ButtonStyle.success,
+  )
+  async def pay(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    if not isinstance(interaction.user, discord.Member) or not leader_member(interaction.user):
+      await interaction.response.send_message(
+        "\u274c \u0417\u0430\u043a\u0440\u0438\u0432\u0430\u0442\u0438 \u0432\u0438\u043f\u043b\u0430\u0442\u0438 \u043c\u043e\u0436\u0435 \u0442\u0456\u043b\u044c\u043a\u0438 \u043b\u0456\u0434\u0435\u0440.",
+        ephemeral=True,
+      )
+      return
+
+    rows = db.pending_accruals_for_user(
+      self.guild_id,
+      self.user_id,
+    )
+
+    if not rows:
+      await interaction.response.edit_message(
+        content="\u2705 \u0423 \u0446\u0456\u0454\u0457 \u043b\u044e\u0434\u0438\u043d\u0438 \u0432\u0436\u0435 \u043d\u0435\u043c\u0430\u0454 \u0441\u0443\u043c\u0438 \u0434\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438.",
+        embed=None,
+        view=None,
+      )
+      return
+
+    total = sum(row["amount_cents"] for row in rows)
+
+    await interaction.response.edit_message(
+      content="\u23f3 \u0417\u0430\u043a\u0440\u0438\u0432\u0430\u044e \u0432\u0438\u043f\u043b\u0430\u0442\u0443...",
+      embed=None,
+      view=None,
+    )
+
+    settled = db.settle_accruals_for_user(
+      self.guild_id,
+      self.user_id,
+      interaction.user.id,
+    )
+
+    message_ids = sorted({
+      row["message_id"]
+      for row in settled
+      if row["message_id"]
+    })
+
+    for message_id in message_ids:
+      await refresh_completed_message(message_id)
+
+    await audit_log(
+      interaction.guild,
+      "\U0001f4b5 \u0412\u0438\u043f\u043b\u0430\u0442\u0443 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0443 \u0437\u0430\u043a\u0440\u0438\u0442\u043e",
+      (
+        f"\u0423\u0447\u0430\u0441\u043d\u0438\u043a: <@{self.user_id}>\n"
+        f"\u0421\u0443\u043c\u0430: **{format_cents(total)}**\n"
+        f"\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432: **{len(settled)}**\n"
+        f"\u0412\u0438\u043f\u043b\u0430\u0442\u0438\u0432/\u043b\u0430: <@{interaction.user.id}>"
+      ),
+      discord.Color.green(),
+    )
+
+    await interaction.edit_original_response(
+      content=(
+        f"\u2705 <@{self.user_id}> \u0432\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u043e **{format_cents(total)}**.\n"
+        "\u0411\u0430\u043b\u0430\u043d\u0441 \u0434\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438 \u0437\u0430\u043a\u0440\u0438\u0442\u043e."
+      ),
+      embed=None,
+      view=None,
+    )
+
+  @discord.ui.button(
+    label="\u041d\u0430\u0437\u0430\u0434",
+    emoji="\u21a9\ufe0f",
+    style=discord.ButtonStyle.secondary,
+  )
+  async def back(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await send_payouts_list(
+      interaction,
+      edit=True,
+      page=self.page,
+    )
+
+
+class PayoutAllConfirmView(discord.ui.View):
+  def __init__(self, guild_id: int):
+    super().__init__(timeout=120)
+    self.guild_id = guild_id
+
+  @discord.ui.button(
+    label="\u041f\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u0438 \u0432\u0438\u043f\u043b\u0430\u0442\u0443 \u0432\u0441\u0456\u043c",
+    emoji="\u2705",
+    style=discord.ButtonStyle.danger,
+  )
+  async def confirm(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    if not isinstance(interaction.user, discord.Member) or not leader_member(interaction.user):
+      await interaction.response.edit_message(
+        content="\u274c \u0412\u0438\u043f\u043b\u0430\u0442\u0438\u0442\u0438 \u0432\u0441\u0456\u043c \u043c\u043e\u0436\u0435 \u0442\u0456\u043b\u044c\u043a\u0438 \u043b\u0456\u0434\u0435\u0440.",
+        embed=None,
+        view=None,
+      )
+      return
+
+    await interaction.response.edit_message(
+      content="\u23f3 \u0417\u0430\u043a\u0440\u0438\u0432\u0430\u044e \u0432\u0441\u0456 \u0432\u0438\u043f\u043b\u0430\u0442\u0438...",
+      embed=None,
+      view=None,
+    )
+
+    rows = db.settle_all_accruals(
+      self.guild_id,
+      interaction.user.id,
+    )
+
+    if not rows:
+      await interaction.edit_original_response(
+        content="\u2705 \u0421\u0443\u043c \u0434\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438 \u0432\u0436\u0435 \u043d\u0435\u043c\u0430\u0454.",
+        embed=None,
+        view=None,
+      )
+      return
+
+    total = sum(row["amount_cents"] for row in rows)
+    users = {row["user_id"] for row in rows}
+    message_ids = sorted({
+      row["message_id"]
+      for row in rows
+      if row["message_id"]
+    })
+
+    for message_id in message_ids:
+      await refresh_completed_message(message_id)
+
+    await audit_log(
+      interaction.guild,
+      "\U0001f4b8 \u041c\u0430\u0441\u043e\u0432\u0443 \u0432\u0438\u043f\u043b\u0430\u0442\u0443 \u0437\u0430\u043a\u0440\u0438\u0442\u043e",
+      (
+        f"\u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432: **{len(users)}**\n"
+        f"\u041d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u044c: **{len(rows)}**\n"
+        f"\u0421\u0443\u043c\u0430: **{format_cents(total)}**\n"
+        f"\u0412\u0438\u043f\u043b\u0430\u0442\u0438\u0432/\u043b\u0430: <@{interaction.user.id}>"
+      ),
+      discord.Color.green(),
+    )
+
+    await interaction.edit_original_response(
+      content=(
+        f"\u2705 \u0412\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u043e **{len(users)}** \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c.\n"
+        f"\u0417\u0430\u0433\u0430\u043b\u044c\u043d\u0430 \u0441\u0443\u043c\u0430: **{format_cents(total)}**."
+      ),
+      embed=None,
+      view=None,
+    )
+
+  @discord.ui.button(
+    label="\u0421\u043a\u0430\u0441\u0443\u0432\u0430\u0442\u0438",
+    emoji="\u21a9\ufe0f",
+    style=discord.ButtonStyle.secondary,
+  )
+  async def cancel(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      content="\u041c\u0430\u0441\u043e\u0432\u0443 \u0432\u0438\u043f\u043b\u0430\u0442\u0443 \u0441\u043a\u0430\u0441\u043e\u0432\u0430\u043d\u043e.",
+      embed=None,
+      view=None,
+    )
+
+
+async def show_payout_user(
+  interaction: discord.Interaction,
+  user_id: int,
+  page: int = 0,
+):
+  guild = interaction.guild
+  if guild is None:
+    return
+
+  rows = db.pending_accruals_for_user(
+    guild.id,
+    user_id,
+  )
+  total = sum(row["amount_cents"] for row in rows)
+  label = await payout_user_label(guild, user_id)
+
+  embed = discord.Embed(
+    title="\U0001f4b0 \u0414\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438",
+    description=(
+      f"**{label}** \u2022 <@{user_id}>\n"
+      f"\u0417\u0430\u0433\u0430\u043b\u044c\u043d\u0430 \u0441\u0443\u043c\u0430: **{format_cents(total)}**\n"
+      f"\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432: **{len(rows)}**"
+    ),
+    color=discord.Color.gold(),
+  )
+
+  if rows:
+    lines = [
+      (
+        f"#{row['contract_id']} \u2022 {row['contract_name']} \u2014 "
+        f"**{format_cents(row['amount_cents'])}**"
+      )
+      for row in rows[:15]
+    ]
+
+    if len(rows) > 15:
+      lines.append(f"\u2026\u0456 \u0449\u0435 {len(rows) - 15}")
+
+    embed.add_field(
+      name="\u041d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u043d\u044f",
+      value="\n".join(lines),
+      inline=False,
+    )
+
+  await interaction.response.edit_message(
+    content=None,
+    embed=embed,
+    view=PayoutPayView(
+      guild.id,
+      user_id,
+      page,
+    ),
+  )
+
+
+async def send_payouts_list(
+  interaction: discord.Interaction,
+  edit: bool = False,
+  page: int = 0,
+):
+  guild = interaction.guild
+  if guild is None:
+    return
+
+  page_rows, page, total_pages, all_rows = payout_summary_page(
+    guild.id,
+    page,
+  )
+
+  if not all_rows:
+    embed = discord.Embed(
+      title="\U0001f4b0 \u0412\u0438\u043f\u043b\u0430\u0442\u0438 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c",
+      description="\u2705 \u0417\u0430\u0440\u0430\u0437 \u043d\u0435\u043c\u0430\u0454 \u043d\u0430\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u0438\u0445 \u0441\u0443\u043c \u0434\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438.",
+      color=discord.Color.green(),
+    )
+
+    if edit:
+      await interaction.response.edit_message(
+        content=None,
+        embed=embed,
+        view=None,
+      )
+    else:
+      await interaction.response.send_message(
+        embed=embed,
+        ephemeral=True,
+      )
+    return
+
+  labels = {}
+  for row in page_rows:
+    labels[row["user_id"]] = await payout_user_label(
+      guild,
+      row["user_id"],
+    )
+
+  total = sum(row["total_cents"] for row in all_rows)
+
+  lines = [
+    (
+      f"<@{row['user_id']}> \u2014 **{format_cents(row['total_cents'])}** "
+      f"\u2022 {row['accrual_count']} \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442(\u0456\u0432)"
+    )
+    for row in page_rows
+  ]
+
+  embed = discord.Embed(
+    title="\U0001f4b0 \u0412\u0438\u043f\u043b\u0430\u0442\u0438 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c",
+    description=(
+      f"\u0412\u0441\u044c\u043e\u0433\u043e \u0434\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438: **{format_cents(total)}**\n"
+      f"\u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432: **{len(all_rows)}**\n\n"
+      + "\n".join(lines)
+    ),
+    color=discord.Color.gold(),
+  )
+
+  embed.set_footer(
+    text=f"\u0421\u0442\u043e\u0440\u0456\u043d\u043a\u0430 {page + 1}/{total_pages}"
+  )
+
+  view = PayoutListView(
+    guild.id,
+    page,
+    total_pages,
+    page_rows,
+    labels,
+  )
+
+  if edit:
+    await interaction.response.edit_message(
+      content=None,
+      embed=embed,
+      view=view,
+    )
+  else:
+    await interaction.response.send_message(
+      embed=embed,
+      view=view,
+      ephemeral=True,
+    )
+
+
 async def debt_user_label(
   guild: discord.Guild,
   user_id: int,
@@ -6333,8 +7586,53 @@ async def send_debts_list(
 
 
 @bot.tree.command(
+  name="leaderboard-settings",
+  description="\u041d\u0430\u043b\u0430\u0448\u0442\u0443\u0432\u0430\u0442\u0438 \u0440\u043e\u043b\u0456 \u0434\u043b\u044f \u043e\u043a\u0440\u0435\u043c\u043e\u0433\u043e \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443",
+)
+async def leaderboard_settings(interaction: discord.Interaction):
+  if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
+    await interaction.response.send_message(
+      "\u274c \u041a\u043e\u043c\u0430\u043d\u0434\u0430 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u0443.",
+      ephemeral=True,
+    )
+    return
+
+  current_ids = get_leaderboard_role_ids(interaction.guild_id)
+  current = (
+    " ".join(f"<@&{rid}>" for rid in current_ids)
+    if current_ids
+    else "\u041d\u0435 \u043d\u0430\u043b\u0430\u0448\u0442\u043e\u0432\u0430\u043d\u043e."
+  )
+
+  await interaction.response.send_message(
+    (
+      "\U0001f396 **\u0420\u0435\u0439\u0442\u0438\u043d\u0433 \u043f\u043e \u0440\u043e\u043b\u044f\u0445**\n"
+      f"\u041f\u043e\u0442\u043e\u0447\u043d\u0456 \u0440\u043e\u043b\u0456: {current}\n\n"
+      "\u041e\u0431\u0435\u0440\u0456\u0442\u044c \u0440\u043e\u043b\u0456 \u043d\u0438\u0436\u0447\u0435. \u0414\u043b\u044f \u043a\u043e\u0436\u043d\u043e\u0457 \u0431\u0443\u0434\u0435 \u043e\u043a\u0440\u0435\u043c\u0438\u0439 \u043b\u0456\u0434\u0435\u0440\u0431\u043e\u0440\u0434."
+    ),
+    view=LeaderboardSettingsView(interaction.guild_id),
+    ephemeral=True,
+  )
+
+
+@bot.tree.command(
+  name="payouts",
+  description="\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u0438 \u043d\u0430\u043a\u043e\u043f\u0438\u0447\u0435\u043d\u0456 \u0441\u0443\u043c\u0438 \u0434\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430\u043c",
+)
+async def payouts(interaction: discord.Interaction):
+  if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
+    await interaction.response.send_message(
+      "\u274c \u041a\u043e\u043c\u0430\u043d\u0434\u0430 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u0443.",
+      ephemeral=True,
+    )
+    return
+
+  await send_payouts_list(interaction)
+
+
+@bot.tree.command(
   name="debts",
-  description="\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u0438 \u0432\u0456\u0434\u043a\u043b\u0430\u0434\u0435\u043d\u0456 \u0432\u0438\u043f\u043b\u0430\u0442\u0438 \u0437\u0430\u043c\u0430\u043c \u0437\u0430 \u0432\u0438\u043a\u043e\u043d\u0430\u043d\u0456 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438",
+  description="\u0421\u0442\u0430\u0440\u0438\u0439 \u044f\u0440\u043b\u0438\u043a \u2014 \u0432\u0456\u0434\u043a\u0440\u0438\u0432\u0430\u0454 \u043d\u043e\u0432\u0443 \u0441\u0438\u0441\u0442\u0435\u043c\u0443 \u0432\u0438\u043f\u043b\u0430\u0442",
 )
 async def debts(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
@@ -6344,7 +7642,8 @@ async def debts(interaction: discord.Interaction):
     )
     return
 
-  await send_debts_list(interaction)
+  await send_payouts_list(interaction)
+
 
 
 

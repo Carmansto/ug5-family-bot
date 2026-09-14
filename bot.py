@@ -3847,70 +3847,87 @@ async def build_role_leaderboard_embed(
   points, participations, rating_users, _ = rating_data_for_guild(guild_id)
 
   embed = discord.Embed(
-    title="\U0001f396 \u0420\u0415\u0419\u0422\u0418\u041d\u0413 \u041f\u041e \u0420\u041e\u041b\u042f\u0425",
+    title="\U0001f396 \u041e\u041a\u0420\u0415\u041c\u0418\u0419 \u0422\u041e\u041f",
     description=(
       slot_label
       if slot_label
-      else "\u041e\u043a\u0440\u0435\u043c\u0456 \u0442\u0430\u0431\u043b\u0438\u0446\u0456 \u0434\u043b\u044f \u043d\u0430\u043b\u0430\u0448\u0442\u043e\u0432\u0430\u043d\u0438\u0445 Discord-\u0440\u043e\u043b\u0435\u0439."
+      else "\u0417\u0430\u0433\u0430\u043b\u044c\u043d\u0438\u0439 \u0442\u043e\u043f \u0441\u0435\u0440\u0435\u0434 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432 \u0456\u0437 \u043d\u0430\u043b\u0430\u0448\u0442\u043e\u0432\u0430\u043d\u0438\u043c\u0438 Discord-\u0440\u043e\u043b\u044f\u043c\u0438."
     ),
     color=discord.Color.purple(),
   )
 
   if not role_ids:
     embed.description = (
-      "\u0420\u043e\u043b\u0456 \u0449\u0435 \u043d\u0435 \u043d\u0430\u043b\u0430\u0448\u0442\u043e\u0432\u0430\u043d\u0456.\n"
+      "\u0420\u043e\u043b\u0456 \u0434\u043b\u044f \u043e\u043a\u0440\u0435\u043c\u043e\u0433\u043e \u0442\u043e\u043f\u0443 \u0449\u0435 \u043d\u0435 \u043d\u0430\u043b\u0430\u0448\u0442\u043e\u0432\u0430\u043d\u0456.\n"
       "\u041a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u043e \u043c\u043e\u0436\u0435 \u0432\u0438\u0431\u0440\u0430\u0442\u0438 \u0457\u0445 \u0447\u0435\u0440\u0435\u0437 `/leaderboard-settings`."
     )
     return embed
 
-  member_cache: dict[int, Optional[discord.Member]] = {}
+  valid_role_ids = {
+    role_id
+    for role_id in role_ids
+    if guild.get_role(role_id) is not None
+  }
 
-  for role_id in role_ids:
-    role = guild.get_role(role_id)
-    if role is None:
-      continue
-
-    filtered = []
-
-    for uid in rating_users:
-      member = member_cache.get(uid)
-
-      if uid not in member_cache:
-        member = guild.get_member(uid)
-        if member is None:
-          member = await fetch_member_safe(guild, uid)
-        member_cache[uid] = member
-
-      if member and any(r.id == role_id for r in member.roles):
-        filtered.append(uid)
-
-    if filtered:
-      lines = [
-        (
-          f"**{idx}.** <@{uid}> \u2014 "
-          f"**{format_points_with_word(points[uid])}** "
-          f"\u2022 {participations[uid]} \u0443\u0447\u0430\u0441\u0442\u0435\u0439"
-        )
-        for idx, uid in enumerate(filtered[:15], start=1)
-      ]
-
-      if len(filtered) > 15:
-        lines.append(f"\u2026\u0456 \u0449\u0435 {len(filtered) - 15}")
-
-      value = "\n".join(lines)
-    else:
-      value = "\u0423 \u043f\u043e\u0442\u043e\u0447\u043d\u043e\u043c\u0443 \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443 \u043f\u043e\u043a\u0438 \u043d\u0435\u043c\u0430\u0454 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432 \u0456\u0437 \u0446\u0456\u0454\u044e \u0440\u043e\u043b\u043b\u044e."
-
-    embed.add_field(
-      name=f"\U0001f396 {role.name}",
-      value=value,
-      inline=False,
-    )
-
-  if not embed.fields:
+  if not valid_role_ids:
     embed.description = (
       "\u041d\u0430\u043b\u0430\u0448\u0442\u043e\u0432\u0430\u043d\u0456 \u0440\u043e\u043b\u0456 \u0431\u0456\u043b\u044c\u0448\u0435 \u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u0456 \u043d\u0430 \u0441\u0435\u0440\u0432\u0435\u0440\u0456.\n"
       "\u041e\u043d\u043e\u0432\u0456\u0442\u044c \u0457\u0445 \u0447\u0435\u0440\u0435\u0437 `/leaderboard-settings`."
+    )
+    return embed
+
+  filtered = []
+
+  for uid in rating_users:
+    member = guild.get_member(uid)
+
+    if member is None:
+      member = await fetch_member_safe(guild, uid)
+
+    if member and any(
+      role.id in valid_role_ids
+      for role in member.roles
+    ):
+      filtered.append(uid)
+
+  if not filtered:
+    embed.add_field(
+      name="\U0001f3c6 \u0422\u043e\u043f",
+      value=(
+        "\u0423 \u043f\u043e\u0442\u043e\u0447\u043d\u043e\u043c\u0443 \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443 \u043f\u043e\u043a\u0438 \u043d\u0435\u043c\u0430\u0454 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432 "
+        "\u0456\u0437 \u043d\u0430\u043b\u0430\u0448\u0442\u043e\u0432\u0430\u043d\u0438\u043c\u0438 \u0440\u043e\u043b\u044f\u043c\u0438."
+      ),
+      inline=False,
+    )
+    return embed
+
+  lines = [
+    (
+      f"**{idx}.** <@{uid}> \u2014 "
+      f"**{format_points_with_word(points[uid])}** "
+      f"\u2022 {participations[uid]} \u0443\u0447\u0430\u0441\u0442\u0435\u0439"
+    )
+    for idx, uid in enumerate(filtered[:25], start=1)
+  ]
+
+  if len(filtered) > 25:
+    lines.append(f"\u2026\u0456 \u0449\u0435 {len(filtered) - 25}")
+
+  embed.add_field(
+    name="\U0001f3c6 \u0422\u043e\u043f",
+    value="\n".join(lines),
+    inline=False,
+  )
+
+  role_names = [
+    guild.get_role(role_id).name
+    for role_id in role_ids
+    if guild.get_role(role_id) is not None
+  ]
+
+  if role_names:
+    embed.set_footer(
+      text="\u0420\u043e\u043b\u0456: " + ", ".join(role_names[:10])
     )
 
   return embed
@@ -3920,7 +3937,7 @@ class LeaderboardRoleSelect(discord.ui.RoleSelect):
   def __init__(self, guild_id: int):
     self.guild_id = guild_id
     super().__init__(
-      placeholder="\u041e\u0431\u0435\u0440\u0456\u0442\u044c \u0440\u043e\u043b\u0456 \u0434\u043b\u044f \u043e\u043a\u0440\u0435\u043c\u043e\u0433\u043e \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443",
+      placeholder="\u041e\u0431\u0435\u0440\u0456\u0442\u044c \u0440\u043e\u043b\u0456 \u0434\u043b\u044f \u043e\u043a\u0440\u0435\u043c\u043e\u0433\u043e \u0442\u043e\u043f\u0443",
       min_values=1,
       max_values=10,
       row=0,
@@ -3943,7 +3960,7 @@ class LeaderboardRoleSelect(discord.ui.RoleSelect):
 
     await interaction.response.edit_message(
       content=(
-        "\u2705 \u0420\u043e\u043b\u0456 \u0434\u043b\u044f \u043e\u043a\u0440\u0435\u043c\u043e\u0433\u043e \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443 \u0437\u0431\u0435\u0440\u0435\u0436\u0435\u043d\u043e.\n"
+        "\u2705 \u0420\u043e\u043b\u0456 \u0434\u043b\u044f \u043e\u043a\u0440\u0435\u043c\u043e\u0433\u043e \u0442\u043e\u043f\u0443 \u0437\u0431\u0435\u0440\u0435\u0436\u0435\u043d\u043e.\n"
         f"{role_mentions or '\u2014'}"
       ),
       view=LeaderboardSettingsView(self.guild_id),
@@ -3974,7 +3991,7 @@ class LeaderboardSettingsView(discord.ui.View):
     )
 
     await interaction.response.edit_message(
-      content="\u2705 \u041e\u043a\u0440\u0435\u043c\u0438\u0439 \u0440\u0435\u0439\u0442\u0438\u043d\u0433 \u043f\u043e \u0440\u043e\u043b\u044f\u0445 \u043e\u0447\u0438\u0449\u0435\u043d\u043e.",
+      content="\u2705 \u041e\u043a\u0440\u0435\u043c\u0438\u0439 \u0442\u043e\u043f \u043e\u0447\u0438\u0449\u0435\u043d\u043e.",
       view=LeaderboardSettingsView(self.guild_id),
     )
 
@@ -5441,7 +5458,7 @@ class AdminStatsView(discord.ui.View):
     )
 
   @discord.ui.button(
-    label="\u041f\u043e \u0440\u043e\u043b\u044f\u0445",
+    label="\u041e\u043a\u0440\u0435\u043c\u0438\u0439 \u0442\u043e\u043f",
     emoji="\U0001f396",
     style=discord.ButtonStyle.secondary,
     row=1,
@@ -6441,7 +6458,7 @@ async def send_auto_rating(
   for embed in build_auto_rating_embeds(GUILD_ID, slot_label):
     await channel.send(embed=embed)
 
-  # 2) Separate leaderboard for configured roles.
+  # 2) One combined leaderboard for all configured roles.
   if get_leaderboard_role_ids(GUILD_ID):
     role_embed = await build_role_leaderboard_embed(
       guild,

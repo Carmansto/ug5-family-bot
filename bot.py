@@ -3879,10 +3879,6 @@ async def build_role_leaderboard_embed(
     inline=False,
   )
 
-  embed.set_footer(
-    text="\u041e\u0441\u043d\u043e\u0432\u043d\u0438\u0439 \u0441\u043a\u043b\u0430\u0434 \u0432\u0438\u0437\u043d\u0430\u0447\u0430\u0454\u0442\u044c\u0441\u044f \u0440\u043e\u043b\u044f\u043c\u0438 \u0437 /leaderboard-settings"
-  )
-
   return embed
 
 
@@ -7482,8 +7478,8 @@ async def stats(interaction: discord.Interaction):
   )
 
 
-@bot.tree.command(name="pending-contracts", description="\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438, \u044f\u043a\u0456 \u0449\u0435 \u043d\u0435 \u043d\u0430\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u0456")
-async def pending_contracts(interaction: discord.Interaction):
+@bot.tree.command(name="pending", description="\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438, \u044f\u043a\u0456 \u0449\u0435 \u043d\u0435 \u043d\u0430\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u0456")
+async def pending(interaction: discord.Interaction):
   if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
     await interaction.response.send_message(
       "\u274c \u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u0443.",

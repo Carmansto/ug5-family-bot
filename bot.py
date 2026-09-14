@@ -4460,9 +4460,15 @@ async def member_labels(
   user_ids: list[int],
 ) -> dict[int, str]:
   labels = {}
+
   for uid in user_ids:
-    member = await fetch_member_safe(guild, uid)
+    member = guild.get_member(uid)
+
+    if member is None:
+      member = await fetch_member_safe(guild, uid)
+
     labels[uid] = member.display_name if member else f"ID {uid}"
+
   return labels
 
 
@@ -4504,13 +4510,15 @@ class MemberStatsSelect(discord.ui.Select):
     )
 
   async def callback(self, interaction: discord.Interaction):
+    await interaction.response.defer()
+
     uid = int(self.values[0])
     view = await build_member_stats_picker_view(
       interaction.guild,
       self.guild_id,
       self.page,
     )
-    await interaction.response.edit_message(
+    await interaction.edit_original_response(
       embed=build_member_stats_embed(self.guild_id, uid),
       view=view,
     )
@@ -4554,12 +4562,14 @@ class MemberStatsPickerView(discord.ui.View):
     interaction: discord.Interaction,
     button: discord.ui.Button,
   ):
+    await interaction.response.defer()
+
     view = await build_member_stats_picker_view(
       interaction.guild,
       self.guild_id,
       self.page - 1,
     )
-    await interaction.response.edit_message(
+    await interaction.edit_original_response(
       embed=build_member_stats_embed(self.guild_id),
       view=view,
     )
@@ -4588,12 +4598,14 @@ class MemberStatsPickerView(discord.ui.View):
     interaction: discord.Interaction,
     button: discord.ui.Button,
   ):
+    await interaction.response.defer()
+
     view = await build_member_stats_picker_view(
       interaction.guild,
       self.guild_id,
       self.page + 1,
     )
-    await interaction.response.edit_message(
+    await interaction.edit_original_response(
       embed=build_member_stats_embed(self.guild_id),
       view=view,
     )
@@ -4725,12 +4737,14 @@ class AdminStatsView(discord.ui.View):
     interaction: discord.Interaction,
     button: discord.ui.Button,
   ):
+    await interaction.response.defer()
+
     view = await build_member_stats_picker_view(
       interaction.guild,
       self.guild_id,
       0,
     )
-    await interaction.response.edit_message(
+    await interaction.edit_original_response(
       embed=build_member_stats_embed(self.guild_id),
       view=view,
     )

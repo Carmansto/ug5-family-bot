@@ -451,18 +451,21 @@ def has_leader_role(member: discord.Member) -> bool:
   return any(role.id == LEADER_ROLE_ID for role in member.roles)
 
 
-def leader_only_payout_member(member: discord.Member) -> bool:
-  """\u0417\u0430\u043c: \u0440\u043e\u043b\u044c \u0454 \u0432 MANAGER_ROLE_IDS, \u0430\u043b\u0435 \u0446\u0435 \u043d\u0435 \u043b\u0456\u0434\u0435\u0440 \u0456 \u043d\u0435 owner \u0441\u0435\u0440\u0432\u0435\u0440\u0430."""
-  if member.guild.owner_id == member.id:
-    return False
-  if LEADER_ROLE_ID and any(role.id == LEADER_ROLE_ID for role in member.roles):
-    return False
+def management_payout_member(member: discord.Member) -> bool:
+  """\u041a\u0435\u0440\u0456\u0432\u043d\u0438\u0439 \u0441\u043a\u043b\u0430\u0434: LEADER_ROLE_ID \u0430\u0431\u043e \u0431\u0443\u0434\u044c-\u044f\u043a\u0430 \u0440\u043e\u043b\u044c \u0456\u0437 MANAGER_ROLE_IDS."""
+  if has_leader_role(member):
+    return True
   return any(role.id in MANAGER_ROLE_IDS for role in member.roles)
+
+
+def leader_only_payout_member(member: discord.Member) -> bool:
+  # Legacy alias for compatibility with older helpers.
+  return management_payout_member(member)
 
 
 def deferred_payout_member(member: discord.Member) -> bool:
   # Legacy alias used only by old compatibility helpers.
-  return leader_only_payout_member(member)
+  return management_payout_member(member)
 
 
 async def fetch_member_safe(
@@ -483,7 +486,7 @@ async def payout_requires_leader(
   user_id: int,
 ) -> bool:
   member = await fetch_member_safe(guild, user_id)
-  return bool(member and leader_only_payout_member(member))
+  return bool(member and management_payout_member(member))
 
 
 async def deferred_payout_ids(
@@ -6940,6 +6943,7 @@ async def payout_user_label(
 
 
 
+
 class PayoutUserSelect(discord.ui.Select):
   def __init__(
     self,
@@ -6967,8 +6971,8 @@ class PayoutUserSelect(discord.ui.Select):
       options = [
         discord.SelectOption(
           label=(
-            "\u041d\u0435\u043c\u0430\u0454 \u0437\u0430\u043c\u0456\u0432 \u0434\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438"
-            if category == "deputies"
+            "\u041d\u0435\u043c\u0430\u0454 \u043a\u0435\u0440\u0456\u0432\u043d\u043e\u0433\u043e \u0441\u043a\u043b\u0430\u0434\u0443 \u0434\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438"
+            if category == "management"
             else "\u041d\u0435\u043c\u0430\u0454 \u043e\u0441\u043d\u043e\u0432\u043d\u043e\u0433\u043e \u0441\u043a\u043b\u0430\u0434\u0443 \u0434\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438"
           ),
           value="none",
@@ -6977,24 +6981,24 @@ class PayoutUserSelect(discord.ui.Select):
 
     super().__init__(
       placeholder=(
-        "\U0001f6e1 \u041e\u0431\u0435\u0440\u0430\u0442\u0438 \u0437\u0430\u043c\u0430"
-        if category == "deputies"
+        "\U0001f6e1 \u041e\u0431\u0440\u0430\u0442\u0438 \u0437 \u043a\u0435\u0440\u0456\u0432\u043d\u043e\u0433\u043e \u0441\u043a\u043b\u0430\u0434\u0443"
+        if category == "management"
         else "\U0001f465 \u041e\u0431\u0440\u0430\u0442\u0438 \u0437 \u043e\u0441\u043d\u043e\u0432\u043d\u043e\u0433\u043e \u0441\u043a\u043b\u0430\u0434\u0443"
       ),
       min_values=1,
       max_values=1,
       options=options,
       disabled=(options[0].value == "none"),
-      row=(1 if category == "deputies" else 0),
+      row=(1 if category == "management" else 0),
     )
 
   async def callback(self, interaction: discord.Interaction):
     if self.values[0] == "none":
       return
-    uid = int(self.values[0])
+
     await show_payout_user(
       interaction,
-      uid,
+      int(self.values[0]),
     )
 
 
@@ -7003,13 +7007,13 @@ class PayoutListView(discord.ui.View):
     self,
     guild_id: int,
     participant_rows,
-    deputy_rows,
+    management_rows,
     labels: dict[int, str],
-    can_pay_deputies: bool,
+    can_pay_management: bool,
   ):
     super().__init__(timeout=300)
     self.guild_id = guild_id
-    self.pay_deputies.disabled = not can_pay_deputies
+    self.pay_management.disabled = not can_pay_management
 
     self.add_item(
       PayoutUserSelect(
@@ -7019,12 +7023,13 @@ class PayoutListView(discord.ui.View):
         "participants",
       )
     )
+
     self.add_item(
       PayoutUserSelect(
         guild_id,
-        deputy_rows,
+        management_rows,
         labels,
-        "deputies",
+        "management",
       )
     )
 
@@ -7052,6 +7057,7 @@ class PayoutListView(discord.ui.View):
       return
 
     participant_rows, _ = await split_payout_summary(guild)
+
     if not participant_rows:
       await interaction.response.send_message(
         "\u2705 \u041e\u0441\u043d\u043e\u0432\u043d\u043e\u043c\u0443 \u0441\u043a\u043b\u0430\u0434\u0443 \u0437\u0430\u0440\u0430\u0437 \u043d\u0435\u043c\u0430\u0454 \u0449\u043e \u0432\u0438\u043f\u043b\u0430\u0447\u0443\u0432\u0430\u0442\u0438.",
@@ -7065,7 +7071,7 @@ class PayoutListView(discord.ui.View):
     embed = discord.Embed(
       title="\u26a0\ufe0f \u0412\u0438\u043f\u043b\u0430\u0442\u0438\u0442\u0438 \u043e\u0441\u043d\u043e\u0432\u043d\u043e\u043c\u0443 \u0441\u043a\u043b\u0430\u0434\u0443?",
       description=(
-        f"\u041e\u0441\u043d\u043e\u0432\u043d\u0438\u0439 \u0441\u043a\u043b\u0430\u0434: **{len(participant_rows)}**\n"
+        f"\u041b\u044e\u0434\u0435\u0439: **{len(participant_rows)}**\n"
         f"\u041d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u044c: **{count}**\n"
         f"\u0421\u0443\u043c\u0430: **{format_cents(total)}**"
       ),
@@ -7083,19 +7089,19 @@ class PayoutListView(discord.ui.View):
 
 
   @discord.ui.button(
-    label="\u0412\u0438\u043f\u043b\u0430\u0442\u0438\u0442\u0438 \u0437\u0430\u043c\u0430\u043c",
+    label="\u0412\u0438\u043f\u043b\u0430\u0442\u0438\u0442\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u043e\u043c\u0443 \u0441\u043a\u043b\u0430\u0434\u0443",
     emoji="\U0001f6e1",
     style=discord.ButtonStyle.danger,
     row=2,
   )
-  async def pay_deputies(
+  async def pay_management(
     self,
     interaction: discord.Interaction,
     button: discord.ui.Button,
   ):
     if not isinstance(interaction.user, discord.Member) or not has_leader_role(interaction.user):
       await interaction.response.send_message(
-        "\U0001f512 \u0412\u0438\u043f\u043b\u0430\u0442\u0438 \u0437\u0430\u043c\u0430\u043c \u043c\u043e\u0436\u0435 \u0442\u0456\u043b\u044c\u043a\u0438 \u043b\u0456\u0434\u0435\u0440.",
+        "\U0001f512 \u0412\u0438\u043f\u043b\u0430\u0442\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u043e\u043c\u0443 \u0441\u043a\u043b\u0430\u0434\u0443 \u043c\u043e\u0436\u0435 \u0442\u0456\u043b\u044c\u043a\u0438 LEADER_ROLE_ID.",
         ephemeral=True,
       )
       return
@@ -7104,21 +7110,22 @@ class PayoutListView(discord.ui.View):
     if guild is None:
       return
 
-    _, deputy_rows = await split_payout_summary(guild)
-    if not deputy_rows:
+    _, management_rows = await split_payout_summary(guild)
+
+    if not management_rows:
       await interaction.response.send_message(
-        "\u2705 \u0417\u0430\u043c\u0430\u043c \u0437\u0430\u0440\u0430\u0437 \u043d\u0435\u043c\u0430\u0454 \u0449\u043e \u0432\u0438\u043f\u043b\u0430\u0447\u0443\u0432\u0430\u0442\u0438.",
+        "\u2705 \u041a\u0435\u0440\u0456\u0432\u043d\u043e\u043c\u0443 \u0441\u043a\u043b\u0430\u0434\u0443 \u0437\u0430\u0440\u0430\u0437 \u043d\u0435\u043c\u0430\u0454 \u0449\u043e \u0432\u0438\u043f\u043b\u0430\u0447\u0443\u0432\u0430\u0442\u0438.",
         ephemeral=True,
       )
       return
 
-    total = sum(row["total_cents"] for row in deputy_rows)
-    count = sum(row["accrual_count"] for row in deputy_rows)
+    total = sum(row["total_cents"] for row in management_rows)
+    count = sum(row["accrual_count"] for row in management_rows)
 
     embed = discord.Embed(
-      title="\u26a0\ufe0f \u0412\u0438\u043f\u043b\u0430\u0442\u0438\u0442\u0438 \u0437\u0430\u043c\u0430\u043c?",
+      title="\u26a0\ufe0f \u0412\u0438\u043f\u043b\u0430\u0442\u0438\u0442\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u043e\u043c\u0443 \u0441\u043a\u043b\u0430\u0434\u0443?",
       description=(
-        f"\u0417\u0430\u043c\u0456\u0432: **{len(deputy_rows)}**\n"
+        f"\u041b\u044e\u0434\u0435\u0439: **{len(management_rows)}**\n"
         f"\u041d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u044c: **{count}**\n"
         f"\u0421\u0443\u043c\u0430: **{format_cents(total)}**"
       ),
@@ -7129,7 +7136,7 @@ class PayoutListView(discord.ui.View):
       embed=embed,
       view=PayoutCategoryConfirmView(
         self.guild_id,
-        "deputies",
+        "management",
       ),
       ephemeral=True,
     )
@@ -7175,7 +7182,7 @@ class PayoutPayView(discord.ui.View):
       and not has_leader_role(interaction.user)
     ):
       await interaction.response.send_message(
-        "\U0001f512 \u0412\u0438\u043f\u043b\u0430\u0442\u0443 \u0437\u0430\u043c\u0443 \u043c\u043e\u0436\u0435 \u0437\u0430\u043a\u0440\u0438\u0442\u0438 \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u043e\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447 \u0437 LEADER_ROLE_ID.",
+        "\U0001f512 \u0412\u0438\u043f\u043b\u0430\u0442\u0443 \u043a\u0435\u0440\u0456\u0432\u043d\u043e\u043c\u0443 \u0441\u043a\u043b\u0430\u0434\u0443 \u043c\u043e\u0436\u0435 \u0437\u0430\u043a\u0440\u0438\u0442\u0438 \u0442\u0456\u043b\u044c\u043a\u0438 LEADER_ROLE_ID.",
         ephemeral=True,
       )
       return
@@ -7281,9 +7288,9 @@ class PayoutCategoryConfirmView(discord.ui.View):
       )
       return
 
-    if self.category == "deputies" and not has_leader_role(interaction.user):
+    if self.category == "management" and not has_leader_role(interaction.user):
       await interaction.response.edit_message(
-        content="\U0001f512 \u0412\u0438\u043f\u043b\u0430\u0442\u0438 \u0437\u0430\u043c\u0430\u043c \u043c\u043e\u0436\u0435 \u0437\u0430\u043a\u0440\u0438\u0442\u0438 \u0442\u0456\u043b\u044c\u043a\u0438 \u043b\u0456\u0434\u0435\u0440.",
+        content="\U0001f512 \u0412\u0438\u043f\u043b\u0430\u0442\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u043e\u043c\u0443 \u0441\u043a\u043b\u0430\u0434\u0443 \u043c\u043e\u0436\u0435 \u0442\u0456\u043b\u044c\u043a\u0438 LEADER_ROLE_ID.",
         embed=None,
         view=None,
       )
@@ -7293,14 +7300,16 @@ class PayoutCategoryConfirmView(discord.ui.View):
     if guild is None:
       return
 
-    participant_rows, deputy_rows = await split_payout_summary(guild)
+    participant_rows, management_rows = await split_payout_summary(guild)
+
     selected_rows = (
-      deputy_rows
-      if self.category == "deputies"
+      management_rows
+      if self.category == "management"
       else participant_rows
     )
 
     user_ids = [row["user_id"] for row in selected_rows]
+
     if not user_ids:
       await interaction.response.edit_message(
         content="\u2705 \u0414\u043e\u0441\u0442\u0443\u043f\u043d\u0438\u0445 \u0441\u0443\u043c \u0434\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438 \u0432\u0436\u0435 \u043d\u0435\u043c\u0430\u0454.",
@@ -7323,6 +7332,7 @@ class PayoutCategoryConfirmView(discord.ui.View):
 
     total = sum(row["amount_cents"] for row in rows)
     users = {row["user_id"] for row in rows}
+
     message_ids = sorted({
       row["message_id"]
       for row in rows
@@ -7333,8 +7343,8 @@ class PayoutCategoryConfirmView(discord.ui.View):
       await refresh_completed_message(message_id)
 
     category_label = (
-      "\u0437\u0430\u043c\u0430\u043c"
-      if self.category == "deputies"
+      "\u043a\u0435\u0440\u0456\u0432\u043d\u043e\u043c\u0443 \u0441\u043a\u043b\u0430\u0434\u0443"
+      if self.category == "management"
       else "\u043e\u0441\u043d\u043e\u0432\u043d\u043e\u043c\u0443 \u0441\u043a\u043b\u0430\u0434\u0443"
     )
 
@@ -7343,7 +7353,7 @@ class PayoutCategoryConfirmView(discord.ui.View):
       "\U0001f4b8 \u041c\u0430\u0441\u043e\u0432\u0443 \u0432\u0438\u043f\u043b\u0430\u0442\u0443 \u0437\u0430\u043a\u0440\u0438\u0442\u043e",
       (
         f"\u041a\u0430\u0442\u0435\u0433\u043e\u0440\u0456\u044f: **{category_label}**\n"
-        f"\u0423\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432: **{len(users)}**\n"
+        f"\u041b\u044e\u0434\u0435\u0439: **{len(users)}**\n"
         f"\u041d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u044c: **{len(rows)}**\n"
         f"\u0421\u0443\u043c\u0430: **{format_cents(total)}**\n"
         f"\u0412\u0438\u043f\u043b\u0430\u0442\u0438\u0432/\u043b\u0430: <@{interaction.user.id}>"
@@ -7383,15 +7393,15 @@ async def split_payout_summary(
 ):
   summary = db.pending_accrual_summary(guild.id)
   participants = []
-  deputies = []
+  management = []
 
   for row in summary:
     if await payout_requires_leader(guild, row["user_id"]):
-      deputies.append(row)
+      management.append(row)
     else:
       participants.append(row)
 
-  return participants, deputies
+  return participants, management
 
 
 async def show_payout_user(
@@ -7408,11 +7418,12 @@ async def show_payout_user(
   )
   total = sum(row["amount_cents"] for row in rows)
   label = await payout_user_label(guild, user_id)
-  leader_only = await payout_requires_leader(guild, user_id)
+  is_management = await payout_requires_leader(guild, user_id)
 
   category_text = (
-    "\U0001f6e1 **\u0417\u0410\u041c** \u2022 \u0432\u0438\u043f\u043b\u0430\u0442\u0443 \u0437\u0430\u043a\u0440\u0438\u0432\u0430\u0454 \u0442\u0456\u043b\u044c\u043a\u0438 \u043b\u0456\u0434\u0435\u0440"
-    if leader_only
+    "\U0001f6e1 **\u041a\u0415\u0420\u0406\u0412\u041d\u0418\u0419 \u0421\u041a\u041b\u0410\u0414** \u2022 "
+    "\u0432\u0438\u043f\u043b\u0430\u0442\u0443 \u0437\u0430\u043a\u0440\u0438\u0432\u0430\u0454 \u0442\u0456\u043b\u044c\u043a\u0438 \u043b\u0456\u0434\u0435\u0440"
+    if is_management
     else "\U0001f465 **\u041e\u0421\u041d\u041e\u0412\u041d\u0418\u0419 \u0421\u041a\u041b\u0410\u0414**"
   )
 
@@ -7463,8 +7474,8 @@ async def send_payouts_list(
   if guild is None:
     return
 
-  participant_rows, deputy_rows = await split_payout_summary(guild)
-  all_rows = participant_rows + deputy_rows
+  participant_rows, management_rows = await split_payout_summary(guild)
+  all_rows = participant_rows + management_rows
 
   if not all_rows:
     embed = discord.Embed(
@@ -7487,6 +7498,7 @@ async def send_payouts_list(
     return
 
   labels = {}
+
   for row in all_rows[:50]:
     labels[row["user_id"]] = await payout_user_label(
       guild,
@@ -7494,7 +7506,7 @@ async def send_payouts_list(
     )
 
   participants_total = sum(row["total_cents"] for row in participant_rows)
-  deputies_total = sum(row["total_cents"] for row in deputy_rows)
+  management_total = sum(row["total_cents"] for row in management_rows)
 
   participant_lines = [
     (
@@ -7504,12 +7516,12 @@ async def send_payouts_list(
     for row in participant_rows[:20]
   ] or ["\u2014"]
 
-  deputy_lines = [
+  management_lines = [
     (
       f"<@{row['user_id']}> \u2014 **{format_cents(row['total_cents'])}** "
       f"\u2022 {row['accrual_count']} \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442(\u0456\u0432)"
     )
-    for row in deputy_rows[:20]
+    for row in management_rows[:20]
   ] or ["\u2014"]
 
   if len(participant_rows) > 20:
@@ -7517,16 +7529,16 @@ async def send_payouts_list(
       f"\u2026\u0456 \u0449\u0435 {len(participant_rows) - 20}"
     )
 
-  if len(deputy_rows) > 20:
-    deputy_lines.append(
-      f"\u2026\u0456 \u0449\u0435 {len(deputy_rows) - 20}"
+  if len(management_rows) > 20:
+    management_lines.append(
+      f"\u2026\u0456 \u0449\u0435 {len(management_rows) - 20}"
     )
 
   embed = discord.Embed(
     title="\U0001f4b0 \u0412\u0418\u041f\u041b\u0410\u0422\u0418",
     description=(
       f"\u0412\u0441\u044c\u043e\u0433\u043e \u0434\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438: "
-      f"**{format_cents(participants_total + deputies_total)}**"
+      f"**{format_cents(participants_total + management_total)}**"
     ),
     color=discord.Color.gold(),
   )
@@ -7542,18 +7554,18 @@ async def send_payouts_list(
 
   embed.add_field(
     name=(
-      f"\U0001f6e1 \u0417\u0410\u041c\u0418 \u2022 "
-      f"{len(deputy_rows)} \u2022 {format_cents(deputies_total)}"
+      f"\U0001f6e1 \u041a\u0415\u0420\u0406\u0412\u041d\u0418\u0419 \u0421\u041a\u041b\u0410\u0414 \u2022 "
+      f"{len(management_rows)} \u2022 {format_cents(management_total)}"
     ),
-    value="\n".join(deputy_lines),
+    value="\n".join(management_lines),
     inline=False,
   )
 
   embed.set_footer(
-    text="\u0412\u0438\u043f\u043b\u0430\u0442\u0438 \u0437\u0430\u043c\u0430\u043c \u0437\u0430\u043a\u0440\u0438\u0432\u0430\u0454 \u0442\u0456\u043b\u044c\u043a\u0438 \u043b\u0456\u0434\u0435\u0440."
+    text="\u0412\u0438\u043f\u043b\u0430\u0442\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u043e\u043c\u0443 \u0441\u043a\u043b\u0430\u0434\u0443 \u0437\u0430\u043a\u0440\u0438\u0432\u0430\u0454 \u0442\u0456\u043b\u044c\u043a\u0438 \u043b\u0456\u0434\u0435\u0440."
   )
 
-  can_pay_deputies = (
+  can_pay_management = (
     isinstance(interaction.user, discord.Member)
     and has_leader_role(interaction.user)
   )
@@ -7561,9 +7573,9 @@ async def send_payouts_list(
   view = PayoutListView(
     guild.id,
     participant_rows,
-    deputy_rows,
+    management_rows,
     labels,
-    can_pay_deputies,
+    can_pay_management,
   )
 
   if edit:

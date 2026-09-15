@@ -444,6 +444,13 @@ def leader_member(member: discord.Member) -> bool:
   return False
 
 
+def has_leader_role(member: discord.Member) -> bool:
+  """Exact LEADER_ROLE_ID check. No owner/admin bypass."""
+  if not LEADER_ROLE_ID:
+    return False
+  return any(role.id == LEADER_ROLE_ID for role in member.roles)
+
+
 def leader_only_payout_member(member: discord.Member) -> bool:
   """\u0417\u0430\u043c: \u0440\u043e\u043b\u044c \u0454 \u0432 MANAGER_ROLE_IDS, \u0430\u043b\u0435 \u0446\u0435 \u043d\u0435 \u043b\u0456\u0434\u0435\u0440 \u0456 \u043d\u0435 owner \u0441\u0435\u0440\u0432\u0435\u0440\u0430."""
   if member.guild.owner_id == member.id:
@@ -6883,9 +6890,11 @@ class PayoutListView(discord.ui.View):
     participant_rows,
     deputy_rows,
     labels: dict[int, str],
+    can_pay_deputies: bool,
   ):
     super().__init__(timeout=300)
     self.guild_id = guild_id
+    self.pay_deputies.disabled = not can_pay_deputies
 
     self.add_item(
       PayoutUserSelect(
@@ -6969,7 +6978,7 @@ class PayoutListView(discord.ui.View):
     interaction: discord.Interaction,
     button: discord.ui.Button,
   ):
-    if not isinstance(interaction.user, discord.Member) or not leader_member(interaction.user):
+    if not isinstance(interaction.user, discord.Member) or not has_leader_role(interaction.user):
       await interaction.response.send_message(
         "\U0001f512 \u0412\u0438\u043f\u043b\u0430\u0442\u0438 \u0437\u0430\u043c\u0430\u043c \u043c\u043e\u0436\u0435 \u0442\u0456\u043b\u044c\u043a\u0438 \u043b\u0456\u0434\u0435\u0440.",
         ephemeral=True,
@@ -7048,10 +7057,10 @@ class PayoutPayView(discord.ui.View):
 
     if (
       await payout_requires_leader(guild, self.user_id)
-      and not leader_member(interaction.user)
+      and not has_leader_role(interaction.user)
     ):
       await interaction.response.send_message(
-        "\U0001f512 \u0412\u0438\u043f\u043b\u0430\u0442\u0443 \u0437\u0430\u043c\u0443 \u043c\u043e\u0436\u0435 \u0437\u0430\u043a\u0440\u0438\u0442\u0438 \u0442\u0456\u043b\u044c\u043a\u0438 \u043b\u0456\u0434\u0435\u0440.",
+        "\U0001f512 \u0412\u0438\u043f\u043b\u0430\u0442\u0443 \u0437\u0430\u043c\u0443 \u043c\u043e\u0436\u0435 \u0437\u0430\u043a\u0440\u0438\u0442\u0438 \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u043e\u0440\u0438\u0441\u0442\u0443\u0432\u0430\u0447 \u0437 LEADER_ROLE_ID.",
         ephemeral=True,
       )
       return
@@ -7157,7 +7166,7 @@ class PayoutCategoryConfirmView(discord.ui.View):
       )
       return
 
-    if self.category == "deputies" and not leader_member(interaction.user):
+    if self.category == "deputies" and not has_leader_role(interaction.user):
       await interaction.response.edit_message(
         content="\U0001f512 \u0412\u0438\u043f\u043b\u0430\u0442\u0438 \u0437\u0430\u043c\u0430\u043c \u043c\u043e\u0436\u0435 \u0437\u0430\u043a\u0440\u0438\u0442\u0438 \u0442\u0456\u043b\u044c\u043a\u0438 \u043b\u0456\u0434\u0435\u0440.",
         embed=None,
@@ -7429,11 +7438,17 @@ async def send_payouts_list(
     text="\u0412\u0438\u043f\u043b\u0430\u0442\u0438 \u0437\u0430\u043c\u0430\u043c \u0437\u0430\u043a\u0440\u0438\u0432\u0430\u0454 \u0442\u0456\u043b\u044c\u043a\u0438 \u043b\u0456\u0434\u0435\u0440."
   )
 
+  can_pay_deputies = (
+    isinstance(interaction.user, discord.Member)
+    and has_leader_role(interaction.user)
+  )
+
   view = PayoutListView(
     guild.id,
     participant_rows,
     deputy_rows,
     labels,
+    can_pay_deputies,
   )
 
   if edit:

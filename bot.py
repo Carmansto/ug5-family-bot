@@ -2441,27 +2441,6 @@ class ConfirmContractView(discord.ui.View):
     self.return_query = return_query
     self.note = (note or "").strip() or None
 
-  @discord.ui.button(
-    label="\u041f\u0440\u0438\u043c\u0456\u0442\u043a\u0430",
-    style=discord.ButtonStyle.primary,
-    emoji="\U0001f4dd",
-  )
-  async def add_note(
-    self,
-    interaction: discord.Interaction,
-    button: discord.ui.Button,
-  ):
-    await interaction.response.send_modal(
-      ContractNoteModal(
-        self.bot_instance,
-        self.participant_ids,
-        self.type_id,
-        self.return_page,
-        self.return_query,
-        self.note,
-      )
-    )
-
   @discord.ui.button(label="\u041f\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u0438", style=discord.ButtonStyle.success, emoji="\u2705")
   async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
     guild = interaction.guild
@@ -2533,6 +2512,28 @@ class ConfirmContractView(discord.ui.View):
       content=f"\u2705 \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0437\u0430\u043f\u0438\u0441\u0430\u043d\u043e: {placeholder.jump_url}",
       embed=None,
       view=None,
+    )
+
+
+  @discord.ui.button(
+    label="\u041f\u0440\u0438\u043c\u0456\u0442\u043a\u0430",
+    style=discord.ButtonStyle.primary,
+    emoji="\U0001f4dd",
+  )
+  async def add_note(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.send_modal(
+      ContractNoteModal(
+        self.bot_instance,
+        self.participant_ids,
+        self.type_id,
+        self.return_page,
+        self.return_query,
+        self.note,
+      )
     )
 
   @discord.ui.button(label="\u041d\u0430\u0437\u0430\u0434", style=discord.ButtonStyle.secondary, emoji="\u21a9\ufe0f")

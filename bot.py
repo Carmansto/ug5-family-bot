@@ -542,6 +542,7 @@ class Database:
       contract_name TEXT NOT NULL,
       price INTEGER NOT NULL,
       cooldown TEXT NOT NULL,
+      note TEXT,
       status TEXT NOT NULL DEFAULT 'unpaid',
       payment_mode TEXT NOT NULL DEFAULT 'normal',
       excluded_payment_ids TEXT NOT NULL DEFAULT '[]',
@@ -641,6 +642,7 @@ class Database:
       "excluded_payment_ids": "ALTER TABLE contracts ADD COLUMN excluded_payment_ids TEXT NOT NULL DEFAULT '[]'",
       "annulled_by": "ALTER TABLE contracts ADD COLUMN annulled_by INTEGER",
       "annulled_at": "ALTER TABLE contracts ADD COLUMN annulled_at TEXT",
+      "note": "ALTER TABLE contracts ADD COLUMN note TEXT",
     }
 
     for name, sql in migrations.items():
@@ -932,14 +934,15 @@ class Database:
     creator_id: int,
     participant_ids: list[int],
     contract_type: sqlite3.Row,
+    note: Optional[str] = None,
   ) -> int:
     cur = self.conn.execute("""
     INSERT INTO contracts (
       message_id, guild_id, channel_id, creator_id, participant_ids,
-      contract_type_id, contract_name, price, cooldown,
+      contract_type_id, contract_name, price, cooldown, note,
       status, created_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unpaid', ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unpaid', ?)
     """, (
       message_id,
       guild_id,
@@ -950,6 +953,7 @@ class Database:
       contract_type["name"],
       contract_type["price"],
       contract_type["cooldown"],
+      (note.strip() if note and note.strip() else None),
       utc_now_iso(),
     ))
     self.conn.commit()
@@ -1711,6 +1715,15 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
     value=row["cooldown"],
     inline=True,
   )
+
+  note = (row["note"] or "").strip() if "note" in row.keys() else ""
+  if note:
+    embed.add_field(
+      name="\U0001f4dd \u041f\u0440\u0438\u043c\u0456\u0442\u043a\u0430",
+      value=note,
+      inline=False,
+    )
+
   embed.add_field(
     name="\U0001f4b3 \u0421\u0442\u0430\u0442\u0443\u0441",
     value=status_text,
@@ -2090,6 +2103,7 @@ class ContractPageSelect(discord.ui.Select):
         type_id,
         return_page=self.page,
         return_query=self.query,
+        note=None,
       ),
     )
 
@@ -2314,7 +2328,11 @@ class ContractPickerView(discord.ui.View):
 
 
 
-def build_confirmation_embed(contract_type: sqlite3.Row, participant_ids: list[int]) -> discord.Embed:
+def build_confirmation_embed(
+  contract_type: sqlite3.Row,
+  participant_ids: list[int],
+  note: Optional[str] = None,
+) -> discord.Embed:
   embed = discord.Embed(
     title="\u041f\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u0438 \u0432\u0438\u043a\u043e\u043d\u0430\u043d\u043d\u044f \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443",
     color=discord.Color.blurple(),
@@ -2331,7 +2349,78 @@ def build_confirmation_embed(contract_type: sqlite3.Row, participant_ids: list[i
     inline=True,
   )
   embed.add_field(name="\u23f3 \u041a\u0414", value=contract_type["cooldown"], inline=True)
+
+  cleaned_note = (note or "").strip()
+  if cleaned_note:
+    embed.add_field(
+      name="\U0001f4dd \u041f\u0440\u0438\u043c\u0456\u0442\u043a\u0430",
+      value=cleaned_note,
+      inline=False,
+    )
+  else:
+    embed.set_footer(
+      text="\u041f\u0440\u0438\u043c\u0456\u0442\u043a\u0430 \u043d\u0435\u043e\u0431\u043e\u0432\u2019\u044f\u0437\u043a\u043e\u0432\u0430."
+    )
+
   return embed
+
+
+
+
+class ContractNoteModal(discord.ui.Modal, title="\U0001f4dd \u041f\u0440\u0438\u043c\u0456\u0442\u043a\u0430 \u0434\u043e \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0443"):
+  def __init__(
+    self,
+    bot_instance: "ContractBot",
+    participant_ids: list[int],
+    type_id: int,
+    return_page: int,
+    return_query: Optional[str],
+    current_note: Optional[str] = None,
+  ):
+    super().__init__(timeout=300)
+    self.bot_instance = bot_instance
+    self.participant_ids = participant_ids
+    self.type_id = type_id
+    self.return_page = return_page
+    self.return_query = return_query
+
+    self.note_input = discord.ui.TextInput(
+      label="\u041f\u0440\u0438\u043c\u0456\u0442\u043a\u0430",
+      placeholder="\u041d\u0430\u043f\u0440\u0438\u043a\u043b\u0430\u0434: \u043e\u0441\u043e\u0431\u043b\u0438\u0432\u0456 \u0443\u043c\u043e\u0432\u0438, \u043f\u043e\u044f\u0441\u043d\u0435\u043d\u043d\u044f...",
+      default=current_note or None,
+      required=False,
+      max_length=500,
+      style=discord.TextStyle.paragraph,
+    )
+    self.add_item(self.note_input)
+
+  async def on_submit(self, interaction: discord.Interaction):
+    contract_type = db.get_contract_type(self.type_id)
+    if not contract_type or not contract_type["active"]:
+      await interaction.response.send_message(
+        "\u274c \u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0443\u0436\u0435 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0438\u0439.",
+        ephemeral=True,
+      )
+      return
+
+    note = str(self.note_input).strip() or None
+
+    await interaction.response.edit_message(
+      content="\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0442\u0435 \u0434\u0430\u043d\u0456 \u0439 \u043f\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u044c\u0442\u0435.",
+      embed=build_confirmation_embed(
+        contract_type,
+        self.participant_ids,
+        note,
+      ),
+      view=ConfirmContractView(
+        self.bot_instance,
+        self.participant_ids,
+        self.type_id,
+        return_page=self.return_page,
+        return_query=self.return_query,
+        note=note,
+      ),
+    )
 
 
 class ConfirmContractView(discord.ui.View):
@@ -2342,6 +2431,7 @@ class ConfirmContractView(discord.ui.View):
     type_id: int,
     return_page: int = 0,
     return_query: Optional[str] = None,
+    note: Optional[str] = None,
   ):
     super().__init__(timeout=300)
     self.bot_instance = bot_instance
@@ -2349,6 +2439,28 @@ class ConfirmContractView(discord.ui.View):
     self.type_id = type_id
     self.return_page = return_page
     self.return_query = return_query
+    self.note = (note or "").strip() or None
+
+  @discord.ui.button(
+    label="\u041f\u0440\u0438\u043c\u0456\u0442\u043a\u0430",
+    style=discord.ButtonStyle.primary,
+    emoji="\U0001f4dd",
+  )
+  async def add_note(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.send_modal(
+      ContractNoteModal(
+        self.bot_instance,
+        self.participant_ids,
+        self.type_id,
+        self.return_page,
+        self.return_query,
+        self.note,
+      )
+    )
 
   @discord.ui.button(label="\u041f\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u0438", style=discord.ButtonStyle.success, emoji="\u2705")
   async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2389,6 +2501,7 @@ class ConfirmContractView(discord.ui.View):
       creator_id=interaction.user.id,
       participant_ids=self.participant_ids,
       contract_type=contract_type,
+      note=self.note,
     )
 
     row = db.get_completed_by_message(placeholder.id)
@@ -2406,7 +2519,8 @@ class ConfirmContractView(discord.ui.View):
         f"\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442: **{row['contract_name']}**\n"
         f"\u0421\u0443\u043c\u0430: **{format_money_dollars(row['price'])} $**\n"
         f"\u0412\u0438\u043a\u043e\u043d\u0430\u0432\u0446\u0456: {mentions(self.participant_ids)}\n"
-        f"\u0417\u0430\u043f\u0438\u0441\u0430\u0432/\u043b\u0430: <@{interaction.user.id}>"
+        + (f"\U0001f4dd \u041f\u0440\u0438\u043c\u0456\u0442\u043a\u0430: {self.note}\n" if self.note else "")
+        + f"\u0417\u0430\u043f\u0438\u0441\u0430\u0432/\u043b\u0430: <@{interaction.user.id}>"
       ),
       discord.Color.green(),
     )

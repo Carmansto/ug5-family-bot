@@ -436,12 +436,6 @@ def test_command_user(user: discord.abc.User) -> bool:
   return bool(TEST_USER_ID and user.id == TEST_USER_ID)
 
 
-def leader_member(member: discord.Member) -> bool:
-  if member.guild.owner_id == member.id:
-    return True
-  if LEADER_ROLE_ID:
-    return any(role.id == LEADER_ROLE_ID for role in member.roles)
-  return False
 
 
 def has_leader_role(member: discord.Member) -> bool:
@@ -451,6 +445,13 @@ def has_leader_role(member: discord.Member) -> bool:
   return any(role.id == LEADER_ROLE_ID for role in member.roles)
 
 
+def can_close_management_payout(member: discord.Member) -> bool:
+  """Old /debts access rule: LEADER_ROLE_ID or Discord server owner."""
+  if member.guild.owner_id == member.id:
+    return True
+  return has_leader_role(member)
+
+
 def management_payout_member(member: discord.Member) -> bool:
   """\u041a\u0435\u0440\u0456\u0432\u043d\u0438\u0439 \u0441\u043a\u043b\u0430\u0434: LEADER_ROLE_ID \u0430\u0431\u043e \u0431\u0443\u0434\u044c-\u044f\u043a\u0430 \u0440\u043e\u043b\u044c \u0456\u0437 MANAGER_ROLE_IDS."""
   if has_leader_role(member):
@@ -458,14 +459,8 @@ def management_payout_member(member: discord.Member) -> bool:
   return any(role.id in MANAGER_ROLE_IDS for role in member.roles)
 
 
-def leader_only_payout_member(member: discord.Member) -> bool:
-  # Legacy alias for compatibility with older helpers.
-  return management_payout_member(member)
 
 
-def deferred_payout_member(member: discord.Member) -> bool:
-  # Legacy alias used only by old compatibility helpers.
-  return management_payout_member(member)
 
 
 async def fetch_member_safe(
@@ -481,7 +476,7 @@ async def fetch_member_safe(
     return None
 
 
-async def payout_requires_leader(
+async def payout_is_management(
   guild: discord.Guild,
   user_id: int,
 ) -> bool:
@@ -489,19 +484,6 @@ async def payout_requires_leader(
   return bool(member and management_payout_member(member))
 
 
-async def deferred_payout_ids(
-  guild: Optional[discord.Guild],
-  user_ids: list[int],
-) -> list[int]:
-  if guild is None:
-    return []
-
-  result = []
-  for uid in user_ids:
-    member = await fetch_member_safe(guild, uid)
-    if member and deferred_payout_member(member):
-      result.append(uid)
-  return result
 
 
 # ----------------------------
@@ -627,6 +609,13 @@ class Database:
     )
     """)
 
+    self.conn.execute("""
+    CREATE TABLE IF NOT EXISTS schema_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )
+    """)
+
     self.conn.commit()
 
   def _migrate_old_contracts_table(self):
@@ -653,6 +642,97 @@ class Database:
         self.conn.execute(sql)
 
     self.conn.commit()
+
+  def _get_schema_version(self) -> int:
+    row = self.conn.execute(
+      "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+    ).fetchone()
+
+    if not row:
+      return 0
+
+    try:
+      return int(row["value"])
+    except (TypeError, ValueError):
+      return 0
+
+  def _set_schema_version(self, version: int):
+    self.conn.execute("""
+    INSERT INTO schema_meta (key, value)
+    VALUES ('schema_version', ?)
+    ON CONFLICT(key)
+    DO UPDATE SET value = excluded.value
+    """, (str(version),))
+    self.conn.commit()
+
+  def _create_performance_indexes(self):
+    statements = [
+      """
+      CREATE INDEX IF NOT EXISTS idx_contracts_guild_status_created
+      ON contracts(guild_id, status, created_at)
+      """,
+      """
+      CREATE INDEX IF NOT EXISTS idx_contracts_guild_status_paid
+      ON contracts(guild_id, status, paid_at)
+      """,
+      """
+      CREATE INDEX IF NOT EXISTS idx_payment_accruals_user_status
+      ON payment_accruals(user_id, status)
+      """,
+      """
+      CREATE INDEX IF NOT EXISTS idx_payment_accruals_status_contract
+      ON payment_accruals(status, contract_id)
+      """,
+      """
+      CREATE INDEX IF NOT EXISTS idx_family_contributions_user_created
+      ON family_contributions(user_id, created_at)
+      """,
+      """
+      CREATE INDEX IF NOT EXISTS idx_admin_debts_user_status
+      ON admin_debts(user_id, status)
+      """,
+      """
+      CREATE INDEX IF NOT EXISTS idx_birthdays_guild_month_day
+      ON birthdays(guild_id, month, day)
+      """,
+    ]
+
+    for statement in statements:
+      self.conn.execute(statement)
+
+    self.conn.commit()
+
+  def run_startup_migrations(self):
+    """
+    One-time startup migrations.
+
+    V6.11 and older executed historical backfills on every restart.
+    On the first V6.12 start they run one final idempotent pass and the
+    resulting schema version is saved. Later restarts skip those scans.
+    """
+    version = self._get_schema_version()
+
+    if version < 1:
+      self.backfill_legacy_paid_contracts()
+      self._set_schema_version(1)
+      version = 1
+
+    if version < 2:
+      self.backfill_family_contributions()
+      self._set_schema_version(2)
+      version = 2
+
+    if version < 3:
+      self.migrate_pending_admin_debts_to_accruals()
+      self._set_schema_version(3)
+      version = 3
+
+    if version < 4:
+      self._create_performance_indexes()
+      self._set_schema_version(4)
+      version = 4
+
+    return version
 
   def backfill_legacy_paid_contracts(self):
     """
@@ -912,21 +992,6 @@ class Database:
     LIMIT ?
     """, (limit,)).fetchall()
 
-  def search_contract_types(self, query: str, limit: int = 25):
-    q = f"%{query.strip()}%"
-    return self.conn.execute("""
-    SELECT ct.*,
-        COUNT(c.id) AS usage_count
-    FROM contract_types ct
-    LEFT JOIN contracts c
-     ON c.contract_type_id = ct.id
-     AND c.status NOT IN ('cancelled', 'annulled')
-    WHERE ct.active = 1
-     AND ct.name LIKE ? COLLATE NOCASE
-    GROUP BY ct.id
-    ORDER BY usage_count DESC, ct.name COLLATE NOCASE ASC
-    LIMIT ?
-    """, (q, limit)).fetchall()
 
   # Completed contracts
   def add_completed_contract(
@@ -1417,41 +1482,6 @@ class Database:
     return rows
 
 
-  def settle_all_accruals(self, guild_id: int, paid_by: int):
-    rows = self.conn.execute("""
-    SELECT
-      a.*,
-      c.message_id,
-      c.channel_id,
-      c.contract_name
-    FROM payment_accruals a
-    JOIN contracts c ON c.id = a.contract_id
-    WHERE c.guild_id = ?
-     AND c.status = 'paid'
-     AND a.status = 'pending'
-    ORDER BY a.id ASC
-    """, (guild_id,)).fetchall()
-
-    if not rows:
-      return []
-
-    ids = [row["id"] for row in rows]
-    placeholders = ",".join("?" for _ in ids)
-    now = utc_now_iso()
-
-    self.conn.execute(
-      f"""
-      UPDATE payment_accruals
-      SET status = 'paid',
-        paid_at = ?,
-        paid_by = ?
-      WHERE id IN ({placeholders})
-       AND status = 'pending'
-      """,
-      (now, paid_by, *ids),
-    )
-    self.conn.commit()
-    return rows
 
   def admin_debts_for_contract(self, contract_id: int):
     return self.conn.execute("""
@@ -1461,77 +1491,9 @@ class Database:
     ORDER BY id ASC
     """, (contract_id,)).fetchall()
 
-  def pending_admin_debt_summary(self, guild_id: int):
-    return self.conn.execute("""
-    SELECT
-      d.user_id,
-      COUNT(*) AS debt_count,
-      SUM(d.amount_cents) AS total_cents
-    FROM admin_debts d
-    JOIN contracts c ON c.id = d.contract_id
-    WHERE c.guild_id = ?
-     AND c.status = 'paid'
-     AND d.status = 'pending'
-    GROUP BY d.user_id
-    ORDER BY total_cents DESC, d.user_id ASC
-    """, (guild_id,)).fetchall()
 
-  def pending_admin_debts_for_user(self, guild_id: int, user_id: int):
-    return self.conn.execute("""
-    SELECT
-      d.*,
-      c.message_id,
-      c.channel_id,
-      c.contract_name,
-      c.price
-    FROM admin_debts d
-    JOIN contracts c ON c.id = d.contract_id
-    WHERE c.guild_id = ?
-     AND c.status = 'paid'
-     AND d.user_id = ?
-     AND d.status = 'pending'
-    ORDER BY d.id ASC
-    """, (guild_id, user_id)).fetchall()
 
-  def pending_admin_debt_total(self, guild_id: int, user_id: int) -> int:
-    row = self.conn.execute("""
-    SELECT COALESCE(SUM(d.amount_cents), 0) AS total
-    FROM admin_debts d
-    JOIN contracts c ON c.id = d.contract_id
-    WHERE c.guild_id = ?
-     AND c.status = 'paid'
-     AND d.user_id = ?
-     AND d.status = 'pending'
-    """, (guild_id, user_id)).fetchone()
-    return int(row["total"] or 0)
 
-  def settle_admin_debts_for_user(
-    self,
-    guild_id: int,
-    user_id: int,
-    settled_by: int,
-  ):
-    debts = self.pending_admin_debts_for_user(guild_id, user_id)
-    if not debts:
-      return []
-
-    now = utc_now_iso()
-    debt_ids = [row["id"] for row in debts]
-    placeholders = ",".join("?" for _ in debt_ids)
-
-    self.conn.execute(
-      f"""
-      UPDATE admin_debts
-      SET status = 'paid',
-        settled_at = ?,
-        settled_by = ?
-      WHERE id IN ({placeholders})
-       AND status = 'pending'
-      """,
-      (now, settled_by, *debt_ids),
-    )
-    self.conn.commit()
-    return debts
 
   def family_contribution_for_user(
     self,
@@ -1565,15 +1527,6 @@ class Database:
     }
     return sorted(user_ids)
 
-  def admin_debts_for_guild(self, guild_id: int):
-    return self.conn.execute("""
-    SELECT d.*
-    FROM admin_debts d
-    JOIN contracts c ON c.id = d.contract_id
-    WHERE c.guild_id = ?
-     AND c.status = 'paid'
-    ORDER BY d.id ASC
-    """, (guild_id,)).fetchall()
 
   def family_contributions_for_guild(self, guild_id: int):
     return self.conn.execute("""
@@ -1623,12 +1576,6 @@ class Database:
     ORDER BY month ASC, day ASC, user_id ASC
     """, (guild_id,)).fetchall()
 
-  def get_birthday(self, guild_id: int, user_id: int):
-    return self.conn.execute("""
-    SELECT *
-    FROM birthdays
-    WHERE guild_id = ? AND user_id = ?
-    """, (guild_id, user_id)).fetchone()
 
   def get_setting(self, guild_id: int, key: str) -> Optional[str]:
     row = self.conn.execute("""
@@ -1648,9 +1595,8 @@ class Database:
 
 
 db = Database(DB_PATH)
-db.backfill_legacy_paid_contracts()
-db.backfill_family_contributions()
-db.migrate_pending_admin_debts_to_accruals()
+SCHEMA_VERSION = db.run_startup_migrations()
+print(f"[DB] Schema version: {SCHEMA_VERSION}")
 
 
 # ----------------------------
@@ -4799,46 +4745,6 @@ def build_contract_stats_embed(guild_id: int, page: int = 0):
 
 
 
-def daily_stats_rows(guild_id: int):
-  earnings = earnings_data_for_guild(guild_id)
-  grouped = {}
-
-  for row in earnings["paid_rows"]:
-    day = local_date_from_iso(row["paid_at"])
-    if day is None:
-      continue
-
-    stat = grouped.setdefault(
-      day,
-      {
-        "day": day,
-        "count": 0,
-        "gross": 0,
-        "family": 0,
-        "members": 0,
-        "exceptions": 0,
-        "full_family": 0,
-      },
-    )
-
-    stat["count"] += 1
-    stat["gross"] += row["price"] * 100
-    stat["family"] += row["fomo_cents"] or 0
-    stat["members"] += row["net_cents"] or 0
-
-    if parse_ids(row["excluded_payment_ids"] or "[]") and (
-      (row["payment_mode"] or PAYMENT_MODE_NORMAL) != PAYMENT_MODE_LEGACY_FAMILY
-    ):
-      stat["exceptions"] += 1
-
-    if (row["payment_mode"] or PAYMENT_MODE_NORMAL) == PAYMENT_MODE_LEGACY_FAMILY:
-      stat["full_family"] += 1
-
-  return sorted(
-    grouped.values(),
-    key=lambda stat: stat["day"],
-    reverse=True,
-  )
 
 
 def build_member_stats_embed(
@@ -6923,15 +6829,6 @@ async def annul_contract(
 # Unified participant payouts
 # ----------------------------
 
-def payout_summary_page(
-  guild_id: int,
-  page: int,
-  page_size: int = 25,
-):
-  rows = db.pending_accrual_summary(guild_id)
-  total_pages = max(1, (len(rows) + page_size - 1) // page_size)
-  page = max(0, min(page, total_pages - 1))
-  return rows[page * page_size:(page + 1) * page_size], page, total_pages, rows
 
 
 async def payout_user_label(
@@ -7099,9 +6996,9 @@ class PayoutListView(discord.ui.View):
     interaction: discord.Interaction,
     button: discord.ui.Button,
   ):
-    if not isinstance(interaction.user, discord.Member) or not has_leader_role(interaction.user):
+    if not isinstance(interaction.user, discord.Member) or not can_close_management_payout(interaction.user):
       await interaction.response.send_message(
-        "\U0001f512 \u0412\u0438\u043f\u043b\u0430\u0442\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u043e\u043c\u0443 \u0441\u043a\u043b\u0430\u0434\u0443 \u043c\u043e\u0436\u0435 \u0442\u0456\u043b\u044c\u043a\u0438 LEADER_ROLE_ID.",
+        "\U0001f512 \u0412\u0438\u043f\u043b\u0430\u0442\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u043e\u043c\u0443 \u0441\u043a\u043b\u0430\u0434\u0443 \u043c\u043e\u0436\u0435 LEADER_ROLE_ID \u0430\u0431\u043e \u0432\u043b\u0430\u0441\u043d\u0438\u043a \u0441\u0435\u0440\u0432\u0435\u0440\u0430.",
         ephemeral=True,
       )
       return
@@ -7147,10 +7044,16 @@ class PayoutPayView(discord.ui.View):
     self,
     guild_id: int,
     user_id: int,
+    can_pay: bool = True,
   ):
     super().__init__(timeout=180)
     self.guild_id = guild_id
     self.user_id = user_id
+    self.pay.disabled = not can_pay
+    if not can_pay:
+      self.pay.label = "\u0422\u0456\u043b\u044c\u043a\u0438 \u043b\u0456\u0434\u0435\u0440 / owner"
+      self.pay.emoji = "\U0001f512"
+      self.pay.style = discord.ButtonStyle.secondary
 
   @discord.ui.button(
     label="\u0412\u0438\u043f\u043b\u0430\u0442\u0438\u0442\u0438",
@@ -7178,11 +7081,11 @@ class PayoutPayView(discord.ui.View):
       return
 
     if (
-      await payout_requires_leader(guild, self.user_id)
-      and not has_leader_role(interaction.user)
+      await payout_is_management(guild, self.user_id)
+      and not can_close_management_payout(interaction.user)
     ):
       await interaction.response.send_message(
-        "\U0001f512 \u0412\u0438\u043f\u043b\u0430\u0442\u0443 \u043a\u0435\u0440\u0456\u0432\u043d\u043e\u043c\u0443 \u0441\u043a\u043b\u0430\u0434\u0443 \u043c\u043e\u0436\u0435 \u0437\u0430\u043a\u0440\u0438\u0442\u0438 \u0442\u0456\u043b\u044c\u043a\u0438 LEADER_ROLE_ID.",
+        "\U0001f512 \u0412\u0438\u043f\u043b\u0430\u0442\u0443 \u043a\u0435\u0440\u0456\u0432\u043d\u043e\u043c\u0443 \u0441\u043a\u043b\u0430\u0434\u0443 \u0437\u0430\u043a\u0440\u0438\u0432\u0430\u0454 LEADER_ROLE_ID \u0430\u0431\u043e \u0432\u043b\u0430\u0441\u043d\u0438\u043a \u0441\u0435\u0440\u0432\u0435\u0440\u0430.",
         ephemeral=True,
       )
       return
@@ -7288,9 +7191,9 @@ class PayoutCategoryConfirmView(discord.ui.View):
       )
       return
 
-    if self.category == "management" and not has_leader_role(interaction.user):
+    if self.category == "management" and not can_close_management_payout(interaction.user):
       await interaction.response.edit_message(
-        content="\U0001f512 \u0412\u0438\u043f\u043b\u0430\u0442\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u043e\u043c\u0443 \u0441\u043a\u043b\u0430\u0434\u0443 \u043c\u043e\u0436\u0435 \u0442\u0456\u043b\u044c\u043a\u0438 LEADER_ROLE_ID.",
+        content="\U0001f512 \u0412\u0438\u043f\u043b\u0430\u0442\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u043e\u043c\u0443 \u0441\u043a\u043b\u0430\u0434\u0443 \u043c\u043e\u0436\u0435 LEADER_ROLE_ID \u0430\u0431\u043e \u0432\u043b\u0430\u0441\u043d\u0438\u043a \u0441\u0435\u0440\u0432\u0435\u0440\u0430.",
         embed=None,
         view=None,
       )
@@ -7396,7 +7299,7 @@ async def split_payout_summary(
   management = []
 
   for row in summary:
-    if await payout_requires_leader(guild, row["user_id"]):
+    if await payout_is_management(guild, row["user_id"]):
       management.append(row)
     else:
       participants.append(row)
@@ -7418,7 +7321,14 @@ async def show_payout_user(
   )
   total = sum(row["amount_cents"] for row in rows)
   label = await payout_user_label(guild, user_id)
-  is_management = await payout_requires_leader(guild, user_id)
+  is_management = await payout_is_management(guild, user_id)
+  can_pay_selected = (
+    isinstance(interaction.user, discord.Member)
+    and (
+      not is_management
+      or can_close_management_payout(interaction.user)
+    )
+  )
 
   category_text = (
     "\U0001f6e1 **\u041a\u0415\u0420\u0406\u0412\u041d\u0418\u0419 \u0421\u041a\u041b\u0410\u0414** \u2022 "
@@ -7462,6 +7372,7 @@ async def show_payout_user(
     view=PayoutPayView(
       guild.id,
       user_id,
+      can_pay=can_pay_selected,
     ),
   )
 
@@ -7562,12 +7473,12 @@ async def send_payouts_list(
   )
 
   embed.set_footer(
-    text="\u0412\u0438\u043f\u043b\u0430\u0442\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u043e\u043c\u0443 \u0441\u043a\u043b\u0430\u0434\u0443 \u0437\u0430\u043a\u0440\u0438\u0432\u0430\u0454 \u0442\u0456\u043b\u044c\u043a\u0438 \u043b\u0456\u0434\u0435\u0440."
+    text="\u0412\u0438\u043f\u043b\u0430\u0442\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u043e\u043c\u0443 \u0441\u043a\u043b\u0430\u0434\u0443: LEADER_ROLE_ID \u0430\u0431\u043e owner \u0441\u0435\u0440\u0432\u0435\u0440\u0430."
   )
 
   can_pay_management = (
     isinstance(interaction.user, discord.Member)
-    and has_leader_role(interaction.user)
+    and can_close_management_payout(interaction.user)
   )
 
   view = PayoutListView(

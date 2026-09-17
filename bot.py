@@ -7034,15 +7034,19 @@ def bonus_next_close(
 
   weekday, hour, minute = schedule
   days_ahead = (weekday - start_local.weekday()) % 7
+
+  # Bonus periods are weekly. If the configured closing weekday is the
+  # same weekday as the period start, close on the NEXT week's occurrence,
+  # not a few hours later on the same day.
+  if days_ahead == 0:
+    days_ahead = 7
+
   candidate = (start_local + timedelta(days=days_ahead)).replace(
     hour=hour,
     minute=minute,
     second=0,
     microsecond=0,
   )
-
-  if candidate <= start_local:
-    candidate += timedelta(days=7)
 
   return candidate
 

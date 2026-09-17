@@ -25,6 +25,8 @@ LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0") or 0)
 # Automatic reporting channels.
 RATING_CHANNEL_ID = int(os.getenv("RATING_CHANNEL_ID", "0") or 0)
 FAMILY_STATS_CHANNEL_ID = int(os.getenv("FAMILY_STATS_CHANNEL_ID", "0") or 0)
+BONUS_RESULTS_CHANNEL_ID = int(os.getenv("BONUS_RESULTS_CHANNEL_ID", "0") or 0)
+PAYOUT_THREADS_CHANNEL_ID = int(os.getenv("PAYOUT_THREADS_CHANNEL_ID", "0") or 0)
 
 RATING_MORNING_HOUR = int(os.getenv("RATING_MORNING_HOUR", "9") or 9)
 RATING_EVENING_HOUR = int(os.getenv("RATING_EVENING_HOUR", "21") or 21)
@@ -588,6 +590,42 @@ class Database:
     """)
 
     self.conn.execute("""
+    CREATE TABLE IF NOT EXISTS bonus_periods (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id INTEGER NOT NULL,
+      start_at TEXT NOT NULL,
+      end_at TEXT NOT NULL,
+      family_earned_cents INTEGER NOT NULL DEFAULT 0,
+      threshold_level INTEGER NOT NULL DEFAULT 0,
+      prize_pool_cents INTEGER NOT NULL DEFAULT 0,
+      thresholds_json TEXT NOT NULL,
+      distribution_json TEXT NOT NULL,
+      ranking_json TEXT NOT NULL,
+      closed_by INTEGER,
+      close_mode TEXT NOT NULL DEFAULT 'manual',
+      created_at TEXT NOT NULL
+    )
+    """)
+
+    self.conn.execute("""
+    CREATE TABLE IF NOT EXISTS bonus_awards (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id INTEGER NOT NULL,
+      period_id INTEGER,
+      user_id INTEGER NOT NULL,
+      amount_cents INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      source TEXT NOT NULL DEFAULT 'auto',
+      rank INTEGER,
+      points_text TEXT,
+      note TEXT,
+      created_at TEXT NOT NULL,
+      paid_at TEXT,
+      paid_by INTEGER
+    )
+    """)
+
+    self.conn.execute("""
     CREATE TABLE IF NOT EXISTS birthdays (
       guild_id INTEGER NOT NULL,
       user_id INTEGER NOT NULL,
@@ -695,6 +733,18 @@ class Database:
       CREATE INDEX IF NOT EXISTS idx_birthdays_guild_month_day
       ON birthdays(guild_id, month, day)
       """,
+      """
+      CREATE INDEX IF NOT EXISTS idx_bonus_periods_guild_end
+      ON bonus_periods(guild_id, end_at)
+      """,
+      """
+      CREATE INDEX IF NOT EXISTS idx_bonus_awards_guild_user_status
+      ON bonus_awards(guild_id, user_id, status)
+      """,
+      """
+      CREATE INDEX IF NOT EXISTS idx_bonus_awards_period
+      ON bonus_awards(period_id)
+      """,
     ]
 
     for statement in statements:
@@ -731,6 +781,11 @@ class Database:
       self._create_performance_indexes()
       self._set_schema_version(4)
       version = 4
+
+    if version < 5:
+      self._create_performance_indexes()
+      self._set_schema_version(5)
+      version = 5
 
     return version
 
@@ -1568,6 +1623,355 @@ class Database:
     ))
     self.conn.commit()
 
+
+  # ----------------------------
+  # Bonus / premium system
+  # ----------------------------
+
+  def contracts_for_bonus_period(
+    self,
+    guild_id: int,
+    start_at: str,
+    end_at: str,
+  ):
+    return self.conn.execute("""
+    SELECT *
+    FROM contracts
+    WHERE guild_id = ?
+     AND status NOT IN ('cancelled', 'annulled')
+     AND created_at >= ?
+     AND created_at < ?
+    ORDER BY id ASC
+    """, (guild_id, start_at, end_at)).fetchall()
+
+  def family_fund_earned_between(
+    self,
+    guild_id: int,
+    start_at: str,
+    end_at: str,
+  ) -> int:
+    row = self.conn.execute("""
+    SELECT COALESCE(SUM(fomo_cents), 0) AS total
+    FROM contracts
+    WHERE guild_id = ?
+     AND status = 'paid'
+     AND paid_at IS NOT NULL
+     AND paid_at >= ?
+     AND paid_at < ?
+    """, (guild_id, start_at, end_at)).fetchone()
+    return int(row["total"] or 0)
+
+  def create_bonus_period_and_awards(
+    self,
+    guild_id: int,
+    start_at: str,
+    end_at: str,
+    family_earned_cents: int,
+    threshold_level: int,
+    prize_pool_cents: int,
+    thresholds_json: str,
+    distribution_json: str,
+    ranking_json: str,
+    closed_by: Optional[int],
+    close_mode: str,
+    awards: list[tuple[int, int, int, str]],
+  ) -> int:
+    now = utc_now_iso()
+
+    try:
+      self.conn.execute("BEGIN IMMEDIATE")
+
+      cur = self.conn.execute("""
+      INSERT INTO bonus_periods (
+        guild_id, start_at, end_at, family_earned_cents,
+        threshold_level, prize_pool_cents, thresholds_json,
+        distribution_json, ranking_json, closed_by,
+        close_mode, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      """, (
+        guild_id,
+        start_at,
+        end_at,
+        family_earned_cents,
+        threshold_level,
+        prize_pool_cents,
+        thresholds_json,
+        distribution_json,
+        ranking_json,
+        closed_by,
+        close_mode,
+        now,
+      ))
+
+      period_id = cur.lastrowid
+
+      for user_id, amount_cents, rank, points_text in awards:
+        if amount_cents <= 0:
+          continue
+        self.conn.execute("""
+        INSERT INTO bonus_awards (
+          guild_id, period_id, user_id, amount_cents,
+          status, source, rank, points_text, created_at
+        )
+        VALUES (?, ?, ?, ?, 'pending', 'auto', ?, ?, ?)
+        """, (
+          guild_id,
+          period_id,
+          user_id,
+          amount_cents,
+          rank,
+          points_text,
+          now,
+        ))
+
+      for key in (
+        "bonus_period_start_at",
+        "rating_reset_at",
+      ):
+        self.conn.execute("""
+        INSERT INTO bot_settings (guild_id, key, value)
+        VALUES (?, ?, ?)
+        ON CONFLICT(guild_id, key)
+        DO UPDATE SET value = excluded.value
+        """, (
+          guild_id,
+          key,
+          end_at,
+        ))
+
+      self.conn.commit()
+      return period_id
+    except Exception:
+      self.conn.rollback()
+      raise
+
+  def add_manual_bonus(
+    self,
+    guild_id: int,
+    user_id: int,
+    amount_cents: int,
+    status: str,
+    note: Optional[str],
+    created_by: int,
+  ) -> int:
+    normalized_status = "paid" if status == "paid" else "pending"
+    now = utc_now_iso()
+    paid_at = now if normalized_status == "paid" else None
+    paid_by = created_by if normalized_status == "paid" else None
+
+    cur = self.conn.execute("""
+    INSERT INTO bonus_awards (
+      guild_id, period_id, user_id, amount_cents,
+      status, source, rank, points_text, note,
+      created_at, paid_at, paid_by
+    )
+    VALUES (?, NULL, ?, ?, ?, 'manual', NULL, NULL, ?, ?, ?, ?)
+    """, (
+      guild_id,
+      user_id,
+      amount_cents,
+      normalized_status,
+      (note.strip() if note and note.strip() else None),
+      now,
+      paid_at,
+      paid_by,
+    ))
+    self.conn.commit()
+    return cur.lastrowid
+
+  def bonus_periods_for_guild(self, guild_id: int, limit: int = 10):
+    return self.conn.execute("""
+    SELECT *
+    FROM bonus_periods
+    WHERE guild_id = ?
+    ORDER BY id DESC
+    LIMIT ?
+    """, (guild_id, limit)).fetchall()
+
+  def bonus_awards_for_period(self, period_id: int):
+    return self.conn.execute("""
+    SELECT *
+    FROM bonus_awards
+    WHERE period_id = ?
+    ORDER BY COALESCE(rank, 999) ASC, id ASC
+    """, (period_id,)).fetchall()
+
+  def manual_bonus_history(self, guild_id: int, limit: int = 10):
+    return self.conn.execute("""
+    SELECT *
+    FROM bonus_awards
+    WHERE guild_id = ?
+     AND source = 'manual'
+    ORDER BY id DESC
+    LIMIT ?
+    """, (guild_id, limit)).fetchall()
+
+  def pending_payout_summary(self, guild_id: int):
+    return self.conn.execute("""
+    SELECT
+      user_id,
+      COUNT(*) AS accrual_count,
+      SUM(amount_cents) AS total_cents
+    FROM (
+      SELECT
+        a.user_id AS user_id,
+        a.amount_cents AS amount_cents
+      FROM payment_accruals a
+      JOIN contracts c ON c.id = a.contract_id
+      WHERE c.guild_id = ?
+       AND c.status = 'paid'
+       AND a.status = 'pending'
+
+      UNION ALL
+
+      SELECT
+        b.user_id AS user_id,
+        b.amount_cents AS amount_cents
+      FROM bonus_awards b
+      WHERE b.guild_id = ?
+       AND b.status = 'pending'
+    )
+    GROUP BY user_id
+    ORDER BY total_cents DESC, user_id ASC
+    """, (guild_id, guild_id)).fetchall()
+
+  def pending_payout_items_for_user(self, guild_id: int, user_id: int):
+    return self.conn.execute("""
+    SELECT
+      'contract' AS source_type,
+      a.id AS item_id,
+      a.user_id AS user_id,
+      a.amount_cents AS amount_cents,
+      a.created_at AS created_at,
+      a.contract_id AS contract_id,
+      c.message_id AS message_id,
+      c.channel_id AS channel_id,
+      c.contract_name AS contract_name,
+      NULL AS bonus_id,
+      NULL AS period_id,
+      NULL AS bonus_source,
+      NULL AS rank,
+      NULL AS points_text,
+      NULL AS note,
+      NULL AS period_start,
+      NULL AS period_end
+    FROM payment_accruals a
+    JOIN contracts c ON c.id = a.contract_id
+    WHERE c.guild_id = ?
+     AND c.status = 'paid'
+     AND a.user_id = ?
+     AND a.status = 'pending'
+
+    UNION ALL
+
+    SELECT
+      'bonus' AS source_type,
+      b.id AS item_id,
+      b.user_id AS user_id,
+      b.amount_cents AS amount_cents,
+      b.created_at AS created_at,
+      NULL AS contract_id,
+      NULL AS message_id,
+      NULL AS channel_id,
+      NULL AS contract_name,
+      b.id AS bonus_id,
+      b.period_id AS period_id,
+      b.source AS bonus_source,
+      b.rank AS rank,
+      b.points_text AS points_text,
+      b.note AS note,
+      p.start_at AS period_start,
+      p.end_at AS period_end
+    FROM bonus_awards b
+    LEFT JOIN bonus_periods p ON p.id = b.period_id
+    WHERE b.guild_id = ?
+     AND b.user_id = ?
+     AND b.status = 'pending'
+
+    ORDER BY 5 ASC
+    """, (guild_id, user_id, guild_id, user_id)).fetchall()
+
+  def settle_payouts_for_users(
+    self,
+    guild_id: int,
+    user_ids: list[int],
+    paid_by: int,
+  ):
+    normalized = sorted({int(uid) for uid in user_ids})
+    if not normalized:
+      return []
+
+    rows = []
+    for uid in normalized:
+      rows.extend(self.pending_payout_items_for_user(guild_id, uid))
+
+    if not rows:
+      return []
+
+    contract_ids = [
+      int(row["item_id"])
+      for row in rows
+      if row["source_type"] == "contract"
+    ]
+    bonus_ids = [
+      int(row["item_id"])
+      for row in rows
+      if row["source_type"] == "bonus"
+    ]
+
+    now = utc_now_iso()
+
+    try:
+      self.conn.execute("BEGIN IMMEDIATE")
+
+      if contract_ids:
+        placeholders = ",".join("?" for _ in contract_ids)
+        self.conn.execute(
+          f"""
+          UPDATE payment_accruals
+          SET status = 'paid',
+            paid_at = ?,
+            paid_by = ?
+          WHERE id IN ({placeholders})
+           AND status = 'pending'
+          """,
+          (now, paid_by, *contract_ids),
+        )
+
+      if bonus_ids:
+        placeholders = ",".join("?" for _ in bonus_ids)
+        self.conn.execute(
+          f"""
+          UPDATE bonus_awards
+          SET status = 'paid',
+            paid_at = ?,
+            paid_by = ?
+          WHERE id IN ({placeholders})
+           AND status = 'pending'
+          """,
+          (now, paid_by, *bonus_ids),
+        )
+
+      self.conn.commit()
+      return rows
+    except Exception:
+      self.conn.rollback()
+      raise
+
+  def settle_payouts_for_user(
+    self,
+    guild_id: int,
+    user_id: int,
+    paid_by: int,
+  ):
+    return self.settle_payouts_for_users(
+      guild_id,
+      [user_id],
+      paid_by,
+    )
+
+
   def birthdays_for_guild(self, guild_id: int):
     return self.conn.execute("""
     SELECT *
@@ -1613,15 +2017,27 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
       color = discord.Color.blurple()
       status_text = "\U0001f3e0 **\u041d\u0430 \u0444\u0430\u043c\u0443**"
     elif accruals:
-      if any(a["status"] == "pending" for a in accruals):
+      pending_count = sum(
+        1 for accrual in accruals
+        if accrual["status"] == "pending"
+      )
+      paid_count = sum(
+        1 for accrual in accruals
+        if accrual["status"] == "paid"
+      )
+
+      if pending_count and paid_count:
         color = discord.Color.gold()
-        status_text = "\U0001f7e1 **\u041d\u0430\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e \u2022 \u043e\u0447\u0456\u043a\u0443\u0454 \u0432\u0438\u043f\u043b\u0430\u0442\u0438**"
+        status_text = "\U0001f7e1 **\u0427\u0430\u0441\u0442\u043a\u043e\u0432\u043e \u0432\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u043e**"
+      elif pending_count:
+        color = discord.Color.gold()
+        status_text = "\U0001f7e1 **\u0414\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438**"
       else:
         color = discord.Color.green()
         status_text = "\U0001f7e2 **\u0412\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u043e**"
     else:
       color = discord.Color.green()
-      status_text = "\U0001f7e2 **\u041e\u043f\u043b\u0430\u0447\u0435\u043d\u043e \u2022 \u0441\u0442\u0430\u0440\u0430 \u0441\u0438\u0441\u0442\u0435\u043c\u0430**"
+      status_text = "\U0001f7e2 **\u0412\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u043e \u2022 \u0441\u0442\u0430\u0440\u0430 \u0441\u0438\u0441\u0442\u0435\u043c\u0430**"
   elif row["status"] == "annulled":
     color = discord.Color.dark_red()
     status_text = "\U0001f6ab **\u0410\u043d\u0443\u043b\u044c\u043e\u0432\u0430\u043d\u043e**"
@@ -1630,7 +2046,7 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
     status_text = "\u26ab **\u0421\u043a\u0430\u0441\u043e\u0432\u0430\u043d\u043e**"
   else:
     color = discord.Color.orange()
-    status_text = "\U0001f534 **\u041d\u0435 \u0440\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e**"
+    status_text = "\U0001f534 **\u041d\u0435 \u043d\u0430\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e**"
 
   if row["status"] == "annulled":
     title = "\U0001f6ab \u041a\u041e\u041d\u0422\u0420\u0410\u041a\u0422 \u0410\u041d\u0423\u041b\u042c\u041e\u0412\u0410\u041d\u041e"
@@ -1683,7 +2099,7 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
     calculated_ts = iso_to_unix(row["paid_at"])
     if calculated_ts:
       embed.add_field(
-        name="\U0001f9ee \u0420\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e",
+        name="\U0001f552 \u041d\u0430\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e",
         value=f"<t:{calculated_ts}:f>",
         inline=True,
       )
@@ -1716,7 +2132,7 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
       PAYMENT_MODE_LEGACY_FAMILY,
     ):
       embed.add_field(
-        name="\u2699\ufe0f \u0421\u043f\u043e\u0441\u0456\u0431 \u0440\u043e\u0437\u0440\u0430\u0445\u0443\u043d\u043a\u0443",
+        name="\u2699\ufe0f \u0421\u043f\u043e\u0441\u0456\u0431 \u043d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u043d\u044f",
         value=payment_mode_label(payment_mode),
         inline=False,
       )
@@ -1767,7 +2183,7 @@ def build_completed_embed(row: sqlite3.Row) -> discord.Embed:
 
     if calculated_ts:
       embed.add_field(
-        name="\u0411\u0443\u043b\u043e \u0440\u043e\u0437\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e",
+        name="\u0411\u0443\u043b\u043e \u043d\u0430\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u043e",
         value=f"<t:{calculated_ts}:f>",
         inline=True,
       )
@@ -6463,6 +6879,1899 @@ async def send_auto_family_stats(
   )
 
 
+
+# ----------------------------
+# Bonus / premium system
+# ----------------------------
+
+BONUS_SETTING_START = "bonus_period_start_at"
+BONUS_SETTING_THRESHOLDS = "bonus_thresholds"
+BONUS_SETTING_DISTRIBUTION = "bonus_distribution"
+BONUS_SETTING_AUTO = "bonus_auto_enabled"
+BONUS_SETTING_WEEKDAY = "bonus_close_weekday"
+BONUS_SETTING_TIME = "bonus_close_time"
+
+
+def bonus_parse_local_datetime(raw: str) -> datetime:
+  value = raw.strip()
+  for fmt in ("%d.%m.%Y %H:%M", "%d.%m.%Y"):
+    try:
+      parsed = datetime.strptime(value, fmt)
+      return parsed.replace(tzinfo=LOCAL_TZ)
+    except ValueError:
+      pass
+  raise ValueError("\u0424\u043e\u0440\u043c\u0430\u0442: \u0414\u0414.\u041c\u041c.\u0420\u0420\u0420\u0420 \u0430\u0431\u043e \u0414\u0414.\u041c\u041c.\u0420\u0420\u0420\u0420 \u0413\u0413:\u0425\u0425")
+
+
+def bonus_parse_weekday(raw: str) -> int:
+  value = raw.strip().lower().replace(".", "")
+  mapping = {
+    "\u043f\u043d": 0,
+    "\u043f\u043e\u043d\u0435\u0434\u0456\u043b\u043e\u043a": 0,
+    "\u0432\u0442": 1,
+    "\u0432\u0456\u0432\u0442\u043e\u0440\u043e\u043a": 1,
+    "\u0441\u0440": 2,
+    "\u0441\u0435\u0440\u0435\u0434\u0430": 2,
+    "\u0447\u0442": 3,
+    "\u0447\u0435\u0442\u0432\u0435\u0440": 3,
+    "\u043f\u0442": 4,
+    "\u043f'\u044f\u0442\u043d\u0438\u0446\u044f": 4,
+    "\u043f\u044f\u0442\u043d\u0438\u0446\u044f": 4,
+    "\u0441\u0431": 5,
+    "\u0441\u0443\u0431\u043e\u0442\u0430": 5,
+    "\u043d\u0434": 6,
+    "\u043d\u0435\u0434\u0456\u043b\u044f": 6,
+  }
+  if value in mapping:
+    return mapping[value]
+  if value.isdigit() and 1 <= int(value) <= 7:
+    return int(value) - 1
+  raise ValueError("\u0414\u0435\u043d\u044c: \u041f\u043d/\u0412\u0442/\u0421\u0440/\u0427\u0442/\u041f\u0442/\u0421\u0431/\u041d\u0434 \u0430\u0431\u043e \u0447\u0438\u0441\u043b\u043e 1\u20137")
+
+
+def bonus_parse_time(raw: str) -> tuple[int, int]:
+  try:
+    parsed = datetime.strptime(raw.strip(), "%H:%M")
+    return parsed.hour, parsed.minute
+  except ValueError:
+    raise ValueError("\u0427\u0430\u0441 \u043c\u0430\u0454 \u0431\u0443\u0442\u0438 \u0443 \u0444\u043e\u0440\u043c\u0430\u0442\u0456 \u0413\u0413:\u0425\u0425, \u043d\u0430\u043f\u0440\u0438\u043a\u043b\u0430\u0434 00:00")
+
+
+def bonus_get_thresholds(guild_id: int) -> list[dict]:
+  raw = db.get_setting(guild_id, BONUS_SETTING_THRESHOLDS)
+  if not raw:
+    return []
+  try:
+    values = json.loads(raw)
+    if not isinstance(values, list) or len(values) != 3:
+      return []
+    result = []
+    for item in values:
+      result.append({
+        "target_dollars": int(item["target_dollars"]),
+        "pool_dollars": int(item["pool_dollars"]),
+      })
+    return result
+  except Exception:
+    return []
+
+
+def bonus_get_distribution(guild_id: int) -> list[Decimal]:
+  raw = db.get_setting(guild_id, BONUS_SETTING_DISTRIBUTION)
+  if not raw:
+    return []
+  try:
+    values = json.loads(raw)
+    if not isinstance(values, list) or len(values) != 5:
+      return []
+    result = [Decimal(str(value)) for value in values]
+    if sum(result, Decimal("0")) != Decimal("100"):
+      return []
+    return result
+  except Exception:
+    return []
+
+
+def bonus_config_ready(guild_id: int) -> bool:
+  return (
+    len(bonus_get_thresholds(guild_id)) == 3
+    and len(bonus_get_distribution(guild_id)) == 5
+  )
+
+
+def bonus_get_start(guild_id: int) -> Optional[str]:
+  return db.get_setting(guild_id, BONUS_SETTING_START)
+
+
+def bonus_ensure_start(guild_id: int) -> str:
+  current = bonus_get_start(guild_id)
+  if current:
+    return current
+
+  fallback = db.get_setting(guild_id, "rating_reset_at") or utc_now_iso()
+  db.set_setting(guild_id, BONUS_SETTING_START, fallback)
+  return fallback
+
+
+def bonus_schedule_values(guild_id: int):
+  weekday_raw = db.get_setting(guild_id, BONUS_SETTING_WEEKDAY)
+  time_raw = db.get_setting(guild_id, BONUS_SETTING_TIME)
+  if weekday_raw is None or not time_raw:
+    return None
+
+  try:
+    weekday = int(weekday_raw)
+    hour, minute = bonus_parse_time(time_raw)
+    if weekday < 0 or weekday > 6:
+      return None
+    return weekday, hour, minute
+  except Exception:
+    return None
+
+
+def bonus_weekday_label(value: int) -> str:
+  labels = ["\u041f\u043d", "\u0412\u0442", "\u0421\u0440", "\u0427\u0442", "\u041f\u0442", "\u0421\u0431", "\u041d\u0434"]
+  return labels[value] if 0 <= value < 7 else "?"
+
+
+def bonus_next_close(
+  guild_id: int,
+  start_iso: Optional[str] = None,
+) -> Optional[datetime]:
+  schedule = bonus_schedule_values(guild_id)
+  start_iso = start_iso or bonus_get_start(guild_id)
+
+  if not schedule or not start_iso:
+    return None
+
+  try:
+    start_dt = datetime.fromisoformat(start_iso)
+    if start_dt.tzinfo is None:
+      start_dt = start_dt.replace(tzinfo=timezone.utc)
+    start_local = start_dt.astimezone(LOCAL_TZ)
+  except Exception:
+    return None
+
+  weekday, hour, minute = schedule
+  days_ahead = (weekday - start_local.weekday()) % 7
+  candidate = (start_local + timedelta(days=days_ahead)).replace(
+    hour=hour,
+    minute=minute,
+    second=0,
+    microsecond=0,
+  )
+
+  if candidate <= start_local:
+    candidate += timedelta(days=7)
+
+  return candidate
+
+
+def bonus_rating_between(
+  guild_id: int,
+  start_at: str,
+  end_at: str,
+):
+  rows = db.contracts_for_bonus_period(
+    guild_id,
+    start_at,
+    end_at,
+  )
+
+  points = defaultdict(lambda: Fraction(0, 1))
+  participations = Counter()
+
+  for row in rows:
+    members = parse_ids(row["participant_ids"])
+    if not members:
+      continue
+
+    share = Fraction(10, len(members))
+    for uid in members:
+      points[uid] += share
+      participations[uid] += 1
+
+  users = sorted(
+    points,
+    key=lambda uid: (
+      points[uid],
+      participations[uid],
+      -uid,
+    ),
+    reverse=True,
+  )
+
+  return points, participations, users
+
+
+def bonus_reached_level(
+  family_cents: int,
+  thresholds: list[dict],
+):
+  level = 0
+  pool_cents = 0
+
+  for index, item in enumerate(thresholds, start=1):
+    if family_cents >= int(item["target_dollars"]) * 100:
+      level = index
+      pool_cents = int(item["pool_dollars"]) * 100
+
+  return level, pool_cents
+
+
+def bonus_allocations(
+  pool_cents: int,
+  distribution: list[Decimal],
+) -> list[int]:
+  if pool_cents <= 0 or len(distribution) != 5:
+    return [0, 0, 0, 0, 0]
+
+  result = []
+  used = 0
+
+  for index, percent in enumerate(distribution):
+    if index == 4:
+      amount = pool_cents - used
+    else:
+      amount = int(
+        (
+          Decimal(pool_cents)
+          * percent
+          / Decimal("100")
+        ).quantize(Decimal("1"))
+      )
+      used += amount
+
+    result.append(max(0, amount))
+
+  return result
+
+
+def bonus_preview_data(
+  guild_id: int,
+  end_at: Optional[str] = None,
+):
+  start_at = bonus_ensure_start(guild_id)
+  end_at = end_at or utc_now_iso()
+
+  thresholds = bonus_get_thresholds(guild_id)
+  distribution = bonus_get_distribution(guild_id)
+
+  family_cents = db.family_fund_earned_between(
+    guild_id,
+    start_at,
+    end_at,
+  )
+
+  points, participations, users = bonus_rating_between(
+    guild_id,
+    start_at,
+    end_at,
+  )
+
+  top5 = users[:5]
+  level, pool_cents = bonus_reached_level(
+    family_cents,
+    thresholds,
+  )
+  allocations = bonus_allocations(
+    pool_cents,
+    distribution,
+  )
+
+  ranking = []
+
+  for index, uid in enumerate(top5, start=1):
+    ranking.append({
+      "user_id": uid,
+      "rank": index,
+      "points": format_points(points[uid]),
+      "participations": participations[uid],
+      "amount_cents": allocations[index - 1],
+    })
+
+  return {
+    "start_at": start_at,
+    "end_at": end_at,
+    "thresholds": thresholds,
+    "distribution": [str(x) for x in distribution],
+    "family_cents": family_cents,
+    "level": level,
+    "pool_cents": pool_cents,
+    "ranking": ranking,
+  }
+
+
+def bonus_period_text(
+  start_at: str,
+  end_at: str,
+) -> str:
+  start_day = local_date_from_iso(start_at)
+  end_day = local_date_from_iso(end_at)
+
+  if start_day and end_day:
+    return (
+      f"{start_day.strftime('%d.%m.%Y')} \u2014 "
+      f"{end_day.strftime('%d.%m.%Y')}"
+    )
+
+  return f"{start_at} \u2014 {end_at}"
+
+
+def build_bonus_preview_embed(
+  guild_id: int,
+  end_at: Optional[str] = None,
+) -> discord.Embed:
+  data = bonus_preview_data(guild_id, end_at)
+
+  level_text = (
+    str(data["level"])
+    if data["level"]
+    else "\u043d\u0435 \u0434\u043e\u0441\u044f\u0433\u043d\u0443\u0442\u043e"
+  )
+
+  embed = discord.Embed(
+    title="\U0001f4ca \u041f\u041e\u0422\u041e\u0427\u041d\u0418\u0419 \u0420\u041e\u0417\u0420\u0410\u0425\u0423\u041d\u041e\u041a \u041f\u0420\u0415\u041c\u0406\u0419",
+    description=(
+      f"\u041f\u0435\u0440\u0456\u043e\u0434: **{bonus_period_text(data['start_at'], data['end_at'])}**\n"
+      f"\u0424\u043e\u043d\u0434 \u0441\u0456\u043c'\u0457 \u0437\u0430\u0440\u043e\u0431\u0438\u0432: **{format_cents(data['family_cents'])}**\n"
+      f"\u0414\u043e\u0441\u044f\u0433\u043d\u0443\u0442\u0438\u0439 \u043f\u043e\u0440\u0456\u0433: **{level_text}**\n"
+      f"\u041f\u0440\u0435\u043c\u0456\u0430\u043b\u044c\u043d\u0438\u0439 \u0444\u043e\u043d\u0434: **{format_cents(data['pool_cents'])}**"
+    ),
+    color=discord.Color.gold(),
+  )
+
+  if not bonus_config_ready(guild_id):
+    embed.add_field(
+      name="\u26a0\ufe0f \u041d\u0430\u043b\u0430\u0448\u0442\u0443\u0432\u0430\u043d\u043d\u044f \u043d\u0435 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0456",
+      value="\u0417\u0430\u0434\u0430\u0439 3 \u043f\u043e\u0440\u043e\u0433\u0438/\u0444\u043e\u043d\u0434\u0438 \u0442\u0430 \u0440\u043e\u0437\u043f\u043e\u0434\u0456\u043b \u0422\u041e\u041f-5.",
+      inline=False,
+    )
+
+  if data["ranking"]:
+    medals = ["\U0001f947", "\U0001f948", "\U0001f949", "4\ufe0f\u20e3", "5\ufe0f\u20e3"]
+    lines = []
+
+    for row in data["ranking"]:
+      lines.append(
+        f"{medals[row['rank'] - 1]} <@{row['user_id']}> \u2022 "
+        f"**{row['points']} \u0431\u0430\u043b\u0456\u0432** \u2022 "
+        f"**{format_cents(row['amount_cents'])}**"
+      )
+
+    embed.add_field(
+      name="\U0001f3c6 \u0422\u041e\u041f-5",
+      value="\n".join(lines),
+      inline=False,
+    )
+  else:
+    embed.add_field(
+      name="\U0001f3c6 \u0422\u041e\u041f-5",
+      value="\u0423 \u0446\u044c\u043e\u043c\u0443 \u043f\u0435\u0440\u0456\u043e\u0434\u0456 \u0449\u0435 \u043d\u0435\u043c\u0430\u0454 \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443.",
+      inline=False,
+    )
+
+  return embed
+
+
+def build_bonus_panel_embed(guild_id: int) -> discord.Embed:
+  start_at = bonus_ensure_start(guild_id)
+  thresholds = bonus_get_thresholds(guild_id)
+  distribution = bonus_get_distribution(guild_id)
+  auto_enabled = (
+    db.get_setting(guild_id, BONUS_SETTING_AUTO) == "1"
+  )
+
+  next_close = bonus_next_close(guild_id, start_at)
+  family_cents = db.family_fund_earned_between(
+    guild_id,
+    start_at,
+    utc_now_iso(),
+  )
+  level, pool_cents = bonus_reached_level(
+    family_cents,
+    thresholds,
+  )
+
+  start_ts = iso_to_unix(start_at)
+  next_ts = (
+    int(next_close.timestamp())
+    if next_close
+    else None
+  )
+
+  level_text = str(level) if level else "\u043d\u0435 \u0434\u043e\u0441\u044f\u0433\u043d\u0443\u0442\u043e"
+  auto_text = "\u2705 \u0423\u0432\u0456\u043c\u043a\u043d\u0435\u043d\u0430" if auto_enabled else "\u26d4 \u0412\u0438\u043c\u043a\u043d\u0435\u043d\u0430"
+  next_text = (
+    f"<t:{next_ts}:f>"
+    if next_ts
+    else "\u043d\u0435 \u0437\u0430\u0434\u0430\u043d\u043e"
+  )
+
+  embed = discord.Embed(
+    title="\U0001f3c6 \u041f\u0420\u0415\u041c\u0406\u042e\u0412\u0410\u041d\u041d\u042f \u0421\u0406\u041c'\u0407",
+    description=(
+      f"\u041f\u043e\u0447\u0430\u0442\u043e\u043a \u043f\u0435\u0440\u0456\u043e\u0434\u0443: **<t:{start_ts}:f>**\n"
+      f"\u0424\u043e\u043d\u0434 \u0437\u0430 \u043f\u0435\u0440\u0456\u043e\u0434: **{format_cents(family_cents)}**\n"
+      f"\u041f\u043e\u0442\u043e\u0447\u043d\u0438\u0439 \u043f\u043e\u0440\u0456\u0433: **{level_text}**\n"
+      f"\u041f\u0440\u0435\u043c\u0456\u0430\u043b\u044c\u043d\u0438\u0439 \u0444\u043e\u043d\u0434 \u0437\u0430\u0440\u0430\u0437: **{format_cents(pool_cents)}**\n"
+      f"\u0410\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u043a\u0430: **{auto_text}**\n"
+      f"\u041d\u0430\u0441\u0442\u0443\u043f\u043d\u0435 \u0437\u0430\u043a\u0440\u0438\u0442\u0442\u044f: **{next_text}**"
+    ),
+    color=discord.Color.gold(),
+  )
+
+  if thresholds:
+    lines = [
+      (
+        f"{index}. {format_money_dollars(item['target_dollars'])}$ "
+        f"\u2192 {format_money_dollars(item['pool_dollars'])}$"
+      )
+      for index, item in enumerate(
+        thresholds,
+        start=1,
+      )
+    ]
+    embed.add_field(
+      name="\U0001f3e6 \u041f\u043e\u0440\u043e\u0433\u0438 \u2192 \u043f\u0440\u0435\u043c\u0456\u0430\u043b\u044c\u043d\u0438\u0439 \u0444\u043e\u043d\u0434",
+      value="\n".join(lines),
+      inline=False,
+    )
+  else:
+    embed.add_field(
+      name="\U0001f3e6 \u041f\u043e\u0440\u043e\u0433\u0438 \u2192 \u043f\u0440\u0435\u043c\u0456\u0430\u043b\u044c\u043d\u0438\u0439 \u0444\u043e\u043d\u0434",
+      value="\u0429\u0435 \u043d\u0435 \u043d\u0430\u043b\u0430\u0448\u0442\u043e\u0432\u0430\u043d\u043e.",
+      inline=False,
+    )
+
+  if distribution:
+    embed.add_field(
+      name="\U0001f3c6 \u0420\u043e\u0437\u043f\u043e\u0434\u0456\u043b \u0422\u041e\u041f-5",
+      value=" \u2022 ".join(
+        f"{index}: {value}%"
+        for index, value in enumerate(
+          distribution,
+          start=1,
+        )
+      ),
+      inline=False,
+    )
+
+  if not BONUS_RESULTS_CHANNEL_ID:
+    embed.set_footer(
+      text=(
+        "\u26a0\ufe0f BONUS_RESULTS_CHANNEL_ID \u043d\u0435 \u0437\u0430\u0434\u0430\u043d\u043e \u2014 "
+        "\u043f\u0456\u0434\u0441\u0443\u043c\u043a\u0438 \u043d\u0435 \u0437\u043c\u043e\u0436\u0443\u0442\u044c \u043f\u0443\u0431\u043b\u0456\u043a\u0443\u0432\u0430\u0442\u0438\u0441\u044f \u0432 \u043a\u0430\u043d\u0430\u043b."
+      )
+    )
+
+  return embed
+
+
+def build_bonus_settings_embed(
+  guild_id: int,
+) -> discord.Embed:
+  thresholds = bonus_get_thresholds(guild_id)
+  distribution = bonus_get_distribution(guild_id)
+
+  embed = discord.Embed(
+    title="\U0001f3e6 \u041d\u0410\u041b\u0410\u0428\u0422\u0423\u0412\u0410\u041d\u041d\u042f \u041f\u0420\u0415\u041c\u0406\u042e\u0412\u0410\u041d\u041d\u042f",
+    description=(
+      "\u0422\u0443\u0442 \u0432 \u043e\u0434\u043d\u043e\u043c\u0443 \u0440\u043e\u0437\u0434\u0456\u043b\u0456 \u0437\u0430\u0434\u0430\u044e\u0442\u044c\u0441\u044f 3 \u043f\u043e\u0440\u043e\u0433\u0438 \u0444\u043e\u043d\u0434\u0443, "
+      "\u043f\u0440\u0435\u043c\u0456\u0430\u043b\u044c\u043d\u0438\u0439 \u0444\u043e\u043d\u0434 \u043a\u043e\u0436\u043d\u043e\u0433\u043e \u043f\u043e\u0440\u043e\u0433\u0443 \u0442\u0430 \u0440\u043e\u0437\u043f\u043e\u0434\u0456\u043b \u043c\u0456\u0436 \u0422\u041e\u041f-5."
+    ),
+    color=discord.Color.blurple(),
+  )
+
+  if thresholds:
+    embed.add_field(
+      name="3 \u043f\u043e\u0440\u043e\u0433\u0438",
+      value="\n".join(
+        (
+          f"{index}. \u0424\u043e\u043d\u0434 \u0441\u0456\u043c'\u0457 "
+          f"**{format_money_dollars(item['target_dollars'])}$** "
+          f"\u2192 \u043f\u0440\u0435\u043c\u0456\u0457 "
+          f"**{format_money_dollars(item['pool_dollars'])}$**"
+        )
+        for index, item in enumerate(
+          thresholds,
+          start=1,
+        )
+      ),
+      inline=False,
+    )
+  else:
+    embed.add_field(
+      name="3 \u043f\u043e\u0440\u043e\u0433\u0438",
+      value="\u041d\u0435 \u0437\u0430\u0434\u0430\u043d\u0456.",
+      inline=False,
+    )
+
+  if distribution:
+    embed.add_field(
+      name="\u0420\u043e\u0437\u043f\u043e\u0434\u0456\u043b \u0422\u041e\u041f-5",
+      value="\n".join(
+        f"{index} \u043c\u0456\u0441\u0446\u0435: **{value}%**"
+        for index, value in enumerate(
+          distribution,
+          start=1,
+        )
+      ),
+      inline=False,
+    )
+  else:
+    embed.add_field(
+      name="\u0420\u043e\u0437\u043f\u043e\u0434\u0456\u043b \u0422\u041e\u041f-5",
+      value="\u041d\u0435 \u0437\u0430\u0434\u0430\u043d\u0438\u0439.",
+      inline=False,
+    )
+
+  return embed
+
+
+def build_bonus_period_embed(
+  guild_id: int,
+) -> discord.Embed:
+  start_at = bonus_ensure_start(guild_id)
+  start_ts = iso_to_unix(start_at)
+  schedule = bonus_schedule_values(guild_id)
+  next_close = bonus_next_close(
+    guild_id,
+    start_at,
+  )
+
+  next_ts = (
+    int(next_close.timestamp())
+    if next_close
+    else None
+  )
+
+  if schedule:
+    weekday, hour, minute = schedule
+    schedule_text = (
+      f"{bonus_weekday_label(weekday)} "
+      f"{hour:02d}:{minute:02d}"
+    )
+  else:
+    schedule_text = "\u043d\u0435 \u0437\u0430\u0434\u0430\u043d\u043e"
+
+  next_text = (
+    f"<t:{next_ts}:f>"
+    if next_ts
+    else "\u043d\u0435 \u0437\u0430\u0434\u0430\u043d\u043e"
+  )
+
+  return discord.Embed(
+    title="\U0001f4c5 \u041f\u0415\u0420\u0406\u041e\u0414 \u041f\u0420\u0415\u041c\u0406\u042e\u0412\u0410\u041d\u041d\u042f",
+    description=(
+      f"\u041f\u043e\u0447\u0430\u0442\u043e\u043a: **<t:{start_ts}:f>**\n"
+      f"\u0410\u0432\u0442\u043e\u0437\u0430\u043a\u0440\u0438\u0442\u0442\u044f: **{schedule_text}**\n"
+      f"\u041d\u0430\u0441\u0442\u0443\u043f\u043d\u0435 \u0437\u0430\u043a\u0440\u0438\u0442\u0442\u044f: **{next_text}**\n\n"
+      "\u041f\u0440\u0438 \u0437\u0430\u043a\u0440\u0438\u0442\u0442\u0456 \u0431\u043e\u0442 \u0441\u043f\u043e\u0447\u0430\u0442\u043a\u0443 \u0444\u0456\u043a\u0441\u0443\u0454 \u0444\u043e\u043d\u0434 \u0456 \u0422\u041e\u041f-5, "
+      "\u043d\u0430\u0440\u0430\u0445\u043e\u0432\u0443\u0454 \u043f\u0440\u0435\u043c\u0456\u0457, \u0430 \u043f\u043e\u0442\u0456\u043c \u043e\u0431\u043d\u0443\u043b\u044f\u0454 \u0440\u0435\u0439\u0442\u0438\u043d\u0433 "
+      "\u043d\u0430 \u043d\u043e\u0432\u0438\u0439 \u043f\u0435\u0440\u0456\u043e\u0434."
+    ),
+    color=discord.Color.blurple(),
+  )
+
+
+def build_bonus_history_embed(
+  guild_id: int,
+) -> discord.Embed:
+  periods = db.bonus_periods_for_guild(
+    guild_id,
+    5,
+  )
+  manual = db.manual_bonus_history(
+    guild_id,
+    8,
+  )
+
+  embed = discord.Embed(
+    title="\U0001f4dc \u0406\u0421\u0422\u041e\u0420\u0406\u042f \u041f\u0420\u0415\u041c\u0406\u042e\u0412\u0410\u041d\u042c",
+    color=discord.Color.dark_gold(),
+  )
+
+  if periods:
+    for period in periods:
+      awards = db.bonus_awards_for_period(
+        period["id"]
+      )
+
+      lines = [
+        (
+          f"\u0424\u043e\u043d\u0434 \u0441\u0456\u043c'\u0457: **{format_cents(period['family_earned_cents'])}**\n"
+          f"\u041f\u043e\u0440\u0456\u0433: **{period['threshold_level'] or '\u2014'}** \u2022 "
+          f"\u041f\u0440\u0435\u043c\u0456\u0430\u043b\u044c\u043d\u0438\u0439 \u0444\u043e\u043d\u0434: **{format_cents(period['prize_pool_cents'])}**"
+        )
+      ]
+
+      if awards:
+        lines.append("")
+        medals = ["\U0001f947", "\U0001f948", "\U0001f949", "4\ufe0f\u20e3", "5\ufe0f\u20e3"]
+
+        for award in awards[:5]:
+          rank = int(award["rank"] or 0)
+          medal = (
+            medals[rank - 1]
+            if 1 <= rank <= 5
+            else "\U0001f3c6"
+          )
+          status = (
+            "\u2705"
+            if award["status"] == "paid"
+            else "\U0001f4b0"
+          )
+          points_text = award["points_text"] or "0"
+
+          lines.append(
+            f"{medal} <@{award['user_id']}> \u2022 "
+            f"{points_text} \u0431\u0430\u043b\u0456\u0432 \u2022 "
+            f"**{format_cents(award['amount_cents'])}** {status}"
+          )
+      else:
+        lines.append("")
+        lines.append(
+          "\u041f\u0440\u0435\u043c\u0456\u0457 \u043d\u0435 \u043d\u0430\u0440\u0430\u0445\u043e\u0432\u0443\u0432\u0430\u043b\u0438\u0441\u044c."
+        )
+
+      embed.add_field(
+        name=(
+          f"#{period['id']} \u2022 "
+          f"{bonus_period_text(period['start_at'], period['end_at'])}"
+        ),
+        value="\n".join(lines),
+        inline=False,
+      )
+  else:
+    embed.add_field(
+      name="\u0417\u0430\u043a\u0440\u0438\u0442\u0456 \u043f\u0435\u0440\u0456\u043e\u0434\u0438",
+      value="\u0429\u0435 \u043d\u0435\u043c\u0430\u0454.",
+      inline=False,
+    )
+
+  if manual:
+    lines = []
+
+    for row in manual:
+      status = (
+        "\u2705 \u0432\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u043e"
+        if row["status"] == "paid"
+        else "\U0001f4b0 \u0434\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438"
+      )
+      note = (
+        f" \u2022 {row['note']}"
+        if row["note"]
+        else ""
+      )
+
+      lines.append(
+        f"<@{row['user_id']}> \u2014 "
+        f"**{format_cents(row['amount_cents'])}** \u2022 "
+        f"{status}{note}"
+      )
+
+    embed.add_field(
+      name="\u2795 \u0420\u0443\u0447\u043d\u0456 \u043f\u0440\u0435\u043c\u0456\u0457",
+      value="\n".join(lines),
+      inline=False,
+    )
+
+  return embed
+
+def build_bonus_results_embed(
+  data: dict,
+  period_id: int,
+) -> discord.Embed:
+  level_text = (
+    str(data["level"])
+    if data["level"]
+    else "\u043d\u0435 \u0434\u043e\u0441\u044f\u0433\u043d\u0443\u0442\u043e"
+  )
+
+  embed = discord.Embed(
+    title="\U0001f3c6 \u041f\u0406\u0414\u0421\u0423\u041c\u041a\u0418 \u041f\u0420\u0415\u041c\u0406\u042e\u0412\u0410\u041d\u041d\u042f",
+    description=(
+      f"\u041f\u0435\u0440\u0456\u043e\u0434: **{bonus_period_text(data['start_at'], data['end_at'])}**\n"
+      f"\u0424\u043e\u043d\u0434 \u0441\u0456\u043c'\u0457 \u0437\u0430\u0440\u043e\u0431\u0438\u0432: **{format_cents(data['family_cents'])}**\n"
+      f"\u0414\u043e\u0441\u044f\u0433\u043d\u0443\u0442\u0438\u0439 \u043f\u043e\u0440\u0456\u0433: **{level_text}**\n"
+      f"\u041f\u0440\u0435\u043c\u0456\u0430\u043b\u044c\u043d\u0438\u0439 \u0444\u043e\u043d\u0434: **{format_cents(data['pool_cents'])}**"
+    ),
+    color=discord.Color.gold(),
+  )
+
+  if data["ranking"]:
+    medals = ["\U0001f947", "\U0001f948", "\U0001f949", "4\ufe0f\u20e3", "5\ufe0f\u20e3"]
+    lines = []
+
+    for row in data["ranking"]:
+      lines.append(
+        f"{medals[row['rank'] - 1]} <@{row['user_id']}> \u2022 "
+        f"**{row['points']} \u0431\u0430\u043b\u0456\u0432** \u2022 "
+        f"**{format_cents(row['amount_cents'])}**"
+      )
+
+    embed.add_field(
+      name="\u0422\u041e\u041f-5 \u0422\u0418\u0416\u041d\u042f",
+      value="\n".join(lines),
+      inline=False,
+    )
+
+  if data["level"] == 0:
+    embed.add_field(
+      name="\u041f\u0440\u0435\u043c\u0456\u0457",
+      value=(
+        "\u041f\u0435\u0440\u0448\u0438\u0439 \u043f\u043e\u0440\u0456\u0433 \u0444\u043e\u043d\u0434\u0443 \u043d\u0435 \u0434\u043e\u0441\u044f\u0433\u043d\u0443\u0442\u043e \u2014 "
+        "\u043f\u0440\u0435\u043c\u0456\u0457 \u0437\u0430 \u0446\u0435\u0439 \u043f\u0435\u0440\u0456\u043e\u0434 \u043d\u0435 \u043d\u0430\u0440\u0430\u0445\u043e\u0432\u0430\u043d\u0456."
+      ),
+      inline=False,
+    )
+
+  embed.set_footer(
+    text=f"\u041f\u0435\u0440\u0456\u043e\u0434 \u043f\u0440\u0435\u043c\u0456\u044e\u0432\u0430\u043d\u043d\u044f #{period_id}"
+  )
+
+  return embed
+
+
+async def send_bonus_results(
+  bot_instance: commands.Bot,
+  guild: discord.Guild,
+  embed: discord.Embed,
+):
+  if not BONUS_RESULTS_CHANNEL_ID:
+    return
+
+  channel = guild.get_channel(
+    BONUS_RESULTS_CHANNEL_ID
+  )
+
+  if channel is None:
+    try:
+      channel = await bot_instance.fetch_channel(
+        BONUS_RESULTS_CHANNEL_ID
+      )
+    except discord.DiscordException:
+      return
+
+  if hasattr(channel, "send"):
+    try:
+      await channel.send(embed=embed)
+    except discord.DiscordException as exc:
+      print(f"[BONUS] Could not send results: {exc}")
+
+
+async def close_bonus_period(
+  guild: discord.Guild,
+  closed_by: Optional[int],
+  close_mode: str,
+  end_local: Optional[datetime] = None,
+  bot_instance: Optional[commands.Bot] = None,
+):
+  if not bonus_config_ready(guild.id):
+    raise ValueError(
+      "\u0421\u043f\u043e\u0447\u0430\u0442\u043a\u0443 \u043d\u0430\u043b\u0430\u0448\u0442\u0443\u0439 3 \u043f\u043e\u0440\u043e\u0433\u0438 \u0442\u0430 \u0440\u043e\u0437\u043f\u043e\u0434\u0456\u043b \u0422\u041e\u041f-5."
+    )
+
+  start_at = bonus_ensure_start(guild.id)
+  end_local = end_local or datetime.now(LOCAL_TZ)
+
+  if end_local.tzinfo is None:
+    end_local = end_local.replace(
+      tzinfo=LOCAL_TZ
+    )
+
+  end_at = (
+    end_local
+    .astimezone(timezone.utc)
+    .isoformat()
+  )
+
+  try:
+    start_dt = datetime.fromisoformat(
+      start_at
+    )
+    if start_dt.tzinfo is None:
+      start_dt = start_dt.replace(
+        tzinfo=timezone.utc
+      )
+  except Exception:
+    raise ValueError(
+      "\u041d\u0435\u043a\u043e\u0440\u0435\u043a\u0442\u043d\u0430 \u0434\u0430\u0442\u0430 \u043f\u043e\u0447\u0430\u0442\u043a\u0443 \u043f\u0435\u0440\u0456\u043e\u0434\u0443."
+    )
+
+  if start_dt >= datetime.fromisoformat(end_at):
+    raise ValueError(
+      "\u041a\u0456\u043d\u0435\u0446\u044c \u043f\u0435\u0440\u0456\u043e\u0434\u0443 \u043c\u0430\u0454 \u0431\u0443\u0442\u0438 \u043f\u0456\u0437\u043d\u0456\u0448\u0435 \u0437\u0430 \u0439\u043e\u0433\u043e \u043f\u043e\u0447\u0430\u0442\u043e\u043a."
+    )
+
+  data = bonus_preview_data(
+    guild.id,
+    end_at,
+  )
+
+  awards = [
+    (
+      row["user_id"],
+      row["amount_cents"],
+      row["rank"],
+      row["points"],
+    )
+    for row in data["ranking"]
+    if row["amount_cents"] > 0
+  ]
+
+  period_id = db.create_bonus_period_and_awards(
+    guild.id,
+    data["start_at"],
+    data["end_at"],
+    data["family_cents"],
+    data["level"],
+    data["pool_cents"],
+    json.dumps(
+      data["thresholds"],
+      ensure_ascii=True,
+    ),
+    json.dumps(
+      data["distribution"],
+      ensure_ascii=True,
+    ),
+    json.dumps(
+      data["ranking"],
+      ensure_ascii=True,
+    ),
+    closed_by,
+    close_mode,
+    awards,
+  )
+
+  result_embed = build_bonus_results_embed(
+    data,
+    period_id,
+  )
+
+  if bot_instance is not None:
+    await send_bonus_results(
+      bot_instance,
+      guild,
+      result_embed,
+    )
+
+  await audit_log(
+    guild,
+    "\U0001f3c6 \u041f\u0435\u0440\u0456\u043e\u0434 \u043f\u0440\u0435\u043c\u0456\u044e\u0432\u0430\u043d\u043d\u044f \u0437\u0430\u043a\u0440\u0438\u0442\u043e",
+    (
+      f"\u041f\u0435\u0440\u0456\u043e\u0434: {bonus_period_text(data['start_at'], data['end_at'])}\n"
+      f"\u0424\u043e\u043d\u0434: {format_cents(data['family_cents'])}\n"
+      f"\u041f\u043e\u0440\u0456\u0433: {data['level'] or '\u2014'}\n"
+      f"\u041f\u0440\u0435\u043c\u0456\u0430\u043b\u044c\u043d\u0438\u0439 \u0444\u043e\u043d\u0434: {format_cents(data['pool_cents'])}\n"
+      f"\u0420\u0435\u0436\u0438\u043c: {close_mode}"
+    ),
+    discord.Color.gold(),
+  )
+
+  return period_id, data, result_embed
+
+
+class BonusStartModal(discord.ui.Modal):
+  def __init__(self, guild_id: int):
+    super().__init__(
+      title="\u041f\u043e\u0447\u0430\u0442\u043e\u043a \u043f\u0440\u0435\u043c\u0456\u0430\u043b\u044c\u043d\u043e\u0433\u043e \u043f\u0435\u0440\u0456\u043e\u0434\u0443"
+    )
+    self.guild_id = guild_id
+
+    current = bonus_get_start(guild_id)
+    current_value = ""
+
+    if current:
+      try:
+        dt = datetime.fromisoformat(current)
+        if dt.tzinfo is None:
+          dt = dt.replace(
+            tzinfo=timezone.utc
+          )
+        current_value = (
+          dt.astimezone(LOCAL_TZ)
+          .strftime("%d.%m.%Y %H:%M")
+        )
+      except Exception:
+        pass
+
+    self.start_value = discord.ui.TextInput(
+      label="\u041f\u043e\u0447\u0430\u0442\u043e\u043a \u043f\u0435\u0440\u0456\u043e\u0434\u0443",
+      placeholder="09.09.2026 00:00",
+      default=current_value or None,
+      required=True,
+      max_length=16,
+    )
+    self.add_item(self.start_value)
+
+  async def on_submit(
+    self,
+    interaction: discord.Interaction,
+  ):
+    try:
+      local_dt = bonus_parse_local_datetime(
+        str(self.start_value)
+      )
+
+      if local_dt > datetime.now(LOCAL_TZ):
+        raise ValueError(
+          "\u041f\u043e\u0447\u0430\u0442\u043e\u043a \u043f\u0435\u0440\u0456\u043e\u0434\u0443 \u043d\u0435 \u043c\u043e\u0436\u0435 \u0431\u0443\u0442\u0438 \u0432 \u043c\u0430\u0439\u0431\u0443\u0442\u043d\u044c\u043e\u043c\u0443."
+        )
+
+      iso_value = (
+        local_dt
+        .astimezone(timezone.utc)
+        .isoformat()
+      )
+
+      db.set_setting(
+        self.guild_id,
+        BONUS_SETTING_START,
+        iso_value,
+      )
+      db.set_setting(
+        self.guild_id,
+        "rating_reset_at",
+        iso_value,
+      )
+
+      await interaction.response.edit_message(
+        embed=build_bonus_period_embed(
+          self.guild_id
+        ),
+        view=BonusPeriodView(
+          self.guild_id
+        ),
+      )
+    except ValueError as exc:
+      await interaction.response.send_message(
+        f"\u274c {exc}",
+        ephemeral=True,
+      )
+
+
+class BonusScheduleModal(discord.ui.Modal):
+  def __init__(self, guild_id: int):
+    super().__init__(
+      title="\u0410\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u043d\u0435 \u0437\u0430\u043a\u0440\u0438\u0442\u0442\u044f \u043f\u0435\u0440\u0456\u043e\u0434\u0443"
+    )
+    self.guild_id = guild_id
+
+    schedule = bonus_schedule_values(
+      guild_id
+    )
+    weekday_default = ""
+    time_default = "00:00"
+
+    if schedule:
+      weekday, hour, minute = schedule
+      weekday_default = bonus_weekday_label(
+        weekday
+      )
+      time_default = (
+        f"{hour:02d}:{minute:02d}"
+      )
+
+    self.weekday = discord.ui.TextInput(
+      label="\u0414\u0435\u043d\u044c \u0442\u0438\u0436\u043d\u044f",
+      placeholder="\u041f\u043d / \u0412\u0442 / ... / \u041d\u0434",
+      default=weekday_default or None,
+      required=True,
+      max_length=12,
+    )
+
+    self.time_value = discord.ui.TextInput(
+      label="\u0427\u0430\u0441",
+      placeholder="00:00",
+      default=time_default,
+      required=True,
+      max_length=5,
+    )
+
+    self.add_item(self.weekday)
+    self.add_item(self.time_value)
+
+  async def on_submit(
+    self,
+    interaction: discord.Interaction,
+  ):
+    try:
+      weekday = bonus_parse_weekday(
+        str(self.weekday)
+      )
+      hour, minute = bonus_parse_time(
+        str(self.time_value)
+      )
+
+      db.set_setting(
+        self.guild_id,
+        BONUS_SETTING_WEEKDAY,
+        str(weekday),
+      )
+      db.set_setting(
+        self.guild_id,
+        BONUS_SETTING_TIME,
+        f"{hour:02d}:{minute:02d}",
+      )
+
+      await interaction.response.edit_message(
+        embed=build_bonus_period_embed(
+          self.guild_id
+        ),
+        view=BonusPeriodView(
+          self.guild_id
+        ),
+      )
+    except ValueError as exc:
+      await interaction.response.send_message(
+        f"\u274c {exc}",
+        ephemeral=True,
+      )
+
+
+class BonusThresholdsModal(discord.ui.Modal):
+  def __init__(self, guild_id: int):
+    super().__init__(
+      title="3 \u043f\u043e\u0440\u043e\u0433\u0438 \u0442\u0430 \u043f\u0440\u0435\u043c\u0456\u0430\u043b\u044c\u043d\u0456 \u0444\u043e\u043d\u0434\u0438"
+    )
+    self.guild_id = guild_id
+    current = bonus_get_thresholds(
+      guild_id
+    )
+    self.inputs = []
+
+    for index in range(3):
+      default = None
+
+      if len(current) == 3:
+        default = (
+          f"{current[index]['target_dollars']} | "
+          f"{current[index]['pool_dollars']}"
+        )
+
+      item = discord.ui.TextInput(
+        label=(
+          f"\u041f\u043e\u0440\u0456\u0433 {index + 1}: "
+          "\u0444\u043e\u043d\u0434 | \u043f\u0440\u0435\u043c\u0456\u0457"
+        ),
+        placeholder="1000000 | 200000",
+        default=default,
+        required=True,
+        max_length=50,
+      )
+
+      self.inputs.append(item)
+      self.add_item(item)
+
+  async def on_submit(
+    self,
+    interaction: discord.Interaction,
+  ):
+    try:
+      thresholds = []
+
+      for item in self.inputs:
+        raw = str(item).strip()
+        parts = re.split(
+          r"[|;/]",
+          raw,
+        )
+
+        if len(parts) != 2:
+          raise ValueError(
+            "\u041a\u043e\u0436\u0435\u043d \u0440\u044f\u0434\u043e\u043a: \u043f\u043e\u0440\u0456\u0433 | \u043f\u0440\u0435\u043c\u0456\u0430\u043b\u044c\u043d\u0438\u0439 \u0444\u043e\u043d\u0434"
+          )
+
+        target = parse_money(parts[0])
+        pool = parse_money(parts[1])
+
+        thresholds.append({
+          "target_dollars": target,
+          "pool_dollars": pool,
+        })
+
+      targets = [
+        item["target_dollars"]
+        for item in thresholds
+      ]
+
+      if (
+        targets != sorted(targets)
+        or len(set(targets)) != 3
+      ):
+        raise ValueError(
+          "\u041f\u043e\u0440\u043e\u0433\u0438 \u043c\u0430\u044e\u0442\u044c \u0437\u0440\u043e\u0441\u0442\u0430\u0442\u0438: 1 < 2 < 3."
+        )
+
+      db.set_setting(
+        self.guild_id,
+        BONUS_SETTING_THRESHOLDS,
+        json.dumps(
+          thresholds,
+          ensure_ascii=True,
+        ),
+      )
+
+      await interaction.response.edit_message(
+        embed=build_bonus_settings_embed(
+          self.guild_id
+        ),
+        view=BonusSettingsView(
+          self.guild_id
+        ),
+      )
+    except ValueError as exc:
+      await interaction.response.send_message(
+        f"\u274c {exc}",
+        ephemeral=True,
+      )
+
+
+class BonusDistributionModal(discord.ui.Modal):
+  def __init__(self, guild_id: int):
+    super().__init__(
+      title="\u0420\u043e\u0437\u043f\u043e\u0434\u0456\u043b \u0422\u041e\u041f-5"
+    )
+    self.guild_id = guild_id
+    current = bonus_get_distribution(
+      guild_id
+    )
+    default = (
+      ", ".join(str(x) for x in current)
+      if current
+      else None
+    )
+
+    self.values_input = discord.ui.TextInput(
+      label="1, 2, 3, 4, 5 \u043c\u0456\u0441\u0446\u0435 (%)",
+      placeholder="35, 25, 18, 13, 9",
+      default=default,
+      required=True,
+      max_length=80,
+    )
+    self.add_item(self.values_input)
+
+  async def on_submit(
+    self,
+    interaction: discord.Interaction,
+  ):
+    try:
+      parts = [
+        x.strip().replace("%", "")
+        for x in re.split(
+          r"[,;]",
+          str(self.values_input),
+        )
+        if x.strip()
+      ]
+
+      if len(parts) != 5:
+        raise ValueError(
+          "\u041f\u043e\u0442\u0440\u0456\u0431\u043d\u043e \u0440\u0456\u0432\u043d\u043e 5 \u0437\u043d\u0430\u0447\u0435\u043d\u044c \u2014 "
+          "\u0434\u043b\u044f \u043c\u0456\u0441\u0446\u044c 1\u20135."
+        )
+
+      values = [
+        Decimal(x)
+        for x in parts
+      ]
+
+      if any(x < 0 for x in values):
+        raise ValueError(
+          "\u0412\u0456\u0434\u0441\u043e\u0442\u043a\u0438 \u043d\u0435 \u043c\u043e\u0436\u0443\u0442\u044c \u0431\u0443\u0442\u0438 \u0432\u0456\u0434'\u0454\u043c\u043d\u0438\u043c\u0438."
+        )
+
+      if (
+        sum(values, Decimal("0"))
+        != Decimal("100")
+      ):
+        raise ValueError(
+          "\u0421\u0443\u043c\u0430 \u0440\u043e\u0437\u043f\u043e\u0434\u0456\u043b\u0443 \u043c\u0430\u0454 \u0431\u0443\u0442\u0438 \u0440\u0456\u0432\u043d\u043e 100%."
+        )
+
+      db.set_setting(
+        self.guild_id,
+        BONUS_SETTING_DISTRIBUTION,
+        json.dumps(
+          [str(x) for x in values],
+          ensure_ascii=True,
+        ),
+      )
+
+      await interaction.response.edit_message(
+        embed=build_bonus_settings_embed(
+          self.guild_id
+        ),
+        view=BonusSettingsView(
+          self.guild_id
+        ),
+      )
+    except Exception as exc:
+      await interaction.response.send_message(
+        f"\u274c {exc}",
+        ephemeral=True,
+      )
+
+
+class ManualBonusModal(discord.ui.Modal):
+  def __init__(
+    self,
+    guild_id: int,
+    user_id: int,
+    status: str,
+  ):
+    super().__init__(
+      title="\u0420\u0443\u0447\u043d\u0430 \u043f\u0440\u0435\u043c\u0456\u044f"
+    )
+    self.guild_id = guild_id
+    self.user_id = user_id
+    self.status = status
+
+    self.amount = discord.ui.TextInput(
+      label="\u0421\u0443\u043c\u0430 \u043f\u0440\u0435\u043c\u0456\u0457",
+      placeholder="200000",
+      required=True,
+      max_length=30,
+    )
+
+    self.note = discord.ui.TextInput(
+      label="\u041f\u0440\u0438\u043c\u0456\u0442\u043a\u0430 (\u043d\u0435\u043e\u0431\u043e\u0432'\u044f\u0437\u043a\u043e\u0432\u043e)",
+      placeholder=(
+        "\u041d\u0430\u043f\u0440\u0438\u043a\u043b\u0430\u0434: \u0441\u0442\u0430\u0440\u0430 \u043f\u0440\u0435\u043c\u0456\u044f "
+        "\u0434\u043e \u0437\u0430\u043f\u0443\u0441\u043a\u0443 \u0441\u0438\u0441\u0442\u0435\u043c\u0438"
+      ),
+      required=False,
+      max_length=300,
+      style=discord.TextStyle.paragraph,
+    )
+
+    self.add_item(self.amount)
+    self.add_item(self.note)
+
+  async def on_submit(
+    self,
+    interaction: discord.Interaction,
+  ):
+    try:
+      dollars = parse_money(
+        str(self.amount)
+      )
+
+      bonus_id = db.add_manual_bonus(
+        self.guild_id,
+        self.user_id,
+        dollars * 100,
+        self.status,
+        str(self.note),
+        interaction.user.id,
+      )
+
+      status_text = (
+        "\u2705 \u0412\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u043e"
+        if self.status == "paid"
+        else "\U0001f4b0 \u0414\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438"
+      )
+
+      await interaction.response.edit_message(
+        content=(
+          f"\u2705 \u0420\u0443\u0447\u043d\u0443 \u043f\u0440\u0435\u043c\u0456\u044e #{bonus_id} \u0434\u043e\u0434\u0430\u043d\u043e "
+          f"\u0434\u043b\u044f <@{self.user_id}>: "
+          f"**{format_cents(dollars * 100)}**\n"
+          f"\u0421\u0442\u0430\u0442\u0443\u0441: **{status_text}**"
+        ),
+        embed=None,
+        view=BonusBackView(
+          self.guild_id
+        ),
+      )
+    except ValueError as exc:
+      await interaction.response.send_message(
+        f"\u274c {exc}",
+        ephemeral=True,
+      )
+
+
+class ManualBonusUserSelect(discord.ui.UserSelect):
+  def __init__(self, guild_id: int):
+    self.guild_id = guild_id
+    super().__init__(
+      placeholder="\u041e\u0431\u0440\u0430\u0442\u0438 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430",
+      min_values=1,
+      max_values=1,
+      row=0,
+    )
+
+  async def callback(
+    self,
+    interaction: discord.Interaction,
+  ):
+    user = self.values[0]
+
+    await interaction.response.edit_message(
+      content=(
+        f"\u0423\u0447\u0430\u0441\u043d\u0438\u043a: <@{user.id}>\n"
+        "\u041e\u0431\u0435\u0440\u0456\u0442\u044c \u0441\u0442\u0430\u0442\u0443\u0441 \u0440\u0443\u0447\u043d\u043e\u0457 \u043f\u0440\u0435\u043c\u0456\u0457:"
+      ),
+      embed=None,
+      view=ManualBonusStatusView(
+        self.guild_id,
+        user.id,
+      ),
+    )
+
+
+class ManualBonusUserView(discord.ui.View):
+  def __init__(self, guild_id: int):
+    super().__init__(timeout=300)
+    self.guild_id = guild_id
+    self.add_item(
+      ManualBonusUserSelect(guild_id)
+    )
+
+  @discord.ui.button(
+    label="\u041d\u0430\u0437\u0430\u0434",
+    emoji="\u21a9\ufe0f",
+    style=discord.ButtonStyle.secondary,
+    row=1,
+  )
+  async def back(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      content=None,
+      embed=build_bonus_panel_embed(
+        self.guild_id
+      ),
+      view=BonusPanelView(
+        self.guild_id
+      ),
+    )
+
+
+class ManualBonusStatusView(discord.ui.View):
+  def __init__(
+    self,
+    guild_id: int,
+    user_id: int,
+  ):
+    super().__init__(timeout=300)
+    self.guild_id = guild_id
+    self.user_id = user_id
+
+  @discord.ui.button(
+    label="\u0414\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438",
+    emoji="\U0001f4b0",
+    style=discord.ButtonStyle.success,
+  )
+  async def pending(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.send_modal(
+      ManualBonusModal(
+        self.guild_id,
+        self.user_id,
+        "pending",
+      )
+    )
+
+  @discord.ui.button(
+    label="\u0412\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u043e",
+    emoji="\u2705",
+    style=discord.ButtonStyle.primary,
+  )
+  async def paid(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.send_modal(
+      ManualBonusModal(
+        self.guild_id,
+        self.user_id,
+        "paid",
+      )
+    )
+
+  @discord.ui.button(
+    label="\u041d\u0430\u0437\u0430\u0434",
+    emoji="\u21a9\ufe0f",
+    style=discord.ButtonStyle.secondary,
+  )
+  async def back(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      content="\u2795 \u041e\u0431\u0435\u0440\u0438 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430 \u0434\u043b\u044f \u0440\u0443\u0447\u043d\u043e\u0457 \u043f\u0440\u0435\u043c\u0456\u0457:",
+      embed=None,
+      view=ManualBonusUserView(
+        self.guild_id
+      ),
+    )
+
+
+class BonusBackView(discord.ui.View):
+  def __init__(self, guild_id: int):
+    super().__init__(timeout=300)
+    self.guild_id = guild_id
+
+  @discord.ui.button(
+    label="\u041d\u0430\u0437\u0430\u0434 \u0434\u043e \u043f\u0440\u0435\u043c\u0456\u044e\u0432\u0430\u043d\u043d\u044f",
+    emoji="\u21a9\ufe0f",
+    style=discord.ButtonStyle.secondary,
+  )
+  async def back(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      content=None,
+      embed=build_bonus_panel_embed(
+        self.guild_id
+      ),
+      view=BonusPanelView(
+        self.guild_id
+      ),
+    )
+
+
+class BonusPeriodView(discord.ui.View):
+  def __init__(self, guild_id: int):
+    super().__init__(timeout=300)
+    self.guild_id = guild_id
+
+  @discord.ui.button(
+    label="\u041f\u043e\u0447\u0430\u0442\u043e\u043a \u043f\u0435\u0440\u0456\u043e\u0434\u0443",
+    emoji="\U0001f4c5",
+    style=discord.ButtonStyle.primary,
+  )
+  async def start(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.send_modal(
+      BonusStartModal(
+        self.guild_id
+      )
+    )
+
+  @discord.ui.button(
+    label="\u0413\u0440\u0430\u0444\u0456\u043a \u0437\u0430\u043a\u0440\u0438\u0442\u0442\u044f",
+    emoji="\u23f0",
+    style=discord.ButtonStyle.primary,
+  )
+  async def schedule(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.send_modal(
+      BonusScheduleModal(
+        self.guild_id
+      )
+    )
+
+  @discord.ui.button(
+    label="\u041d\u0430\u0437\u0430\u0434",
+    emoji="\u21a9\ufe0f",
+    style=discord.ButtonStyle.secondary,
+  )
+  async def back(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      embed=build_bonus_panel_embed(
+        self.guild_id
+      ),
+      view=BonusPanelView(
+        self.guild_id
+      ),
+    )
+
+
+class BonusSettingsView(discord.ui.View):
+  def __init__(self, guild_id: int):
+    super().__init__(timeout=300)
+    self.guild_id = guild_id
+
+  @discord.ui.button(
+    label="3 \u043f\u043e\u0440\u043e\u0433\u0438 + \u0444\u043e\u043d\u0434\u0438",
+    emoji="\U0001f3e6",
+    style=discord.ButtonStyle.primary,
+  )
+  async def thresholds(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.send_modal(
+      BonusThresholdsModal(
+        self.guild_id
+      )
+    )
+
+  @discord.ui.button(
+    label="\u0420\u043e\u0437\u043f\u043e\u0434\u0456\u043b \u0422\u041e\u041f-5",
+    emoji="\U0001f3c6",
+    style=discord.ButtonStyle.primary,
+  )
+  async def distribution(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.send_modal(
+      BonusDistributionModal(
+        self.guild_id
+      )
+    )
+
+  @discord.ui.button(
+    label="\u041d\u0430\u0437\u0430\u0434",
+    emoji="\u21a9\ufe0f",
+    style=discord.ButtonStyle.secondary,
+  )
+  async def back(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      embed=build_bonus_panel_embed(
+        self.guild_id
+      ),
+      view=BonusPanelView(
+        self.guild_id
+      ),
+    )
+
+
+class BonusCloseConfirmView(discord.ui.View):
+  def __init__(self, guild_id: int):
+    super().__init__(timeout=180)
+    self.guild_id = guild_id
+
+  @discord.ui.button(
+    label="\u0417\u0430\u043a\u0440\u0438\u0442\u0438 \u043f\u0435\u0440\u0456\u043e\u0434",
+    emoji="\u2705",
+    style=discord.ButtonStyle.danger,
+  )
+  async def confirm(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    if (
+      not isinstance(
+        interaction.user,
+        discord.Member,
+      )
+      or not management_member(
+        interaction.user
+      )
+    ):
+      await interaction.response.send_message(
+        "\u274c \u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u0443.",
+        ephemeral=True,
+      )
+      return
+
+    guild = interaction.guild
+    if guild is None:
+      return
+
+    await interaction.response.edit_message(
+      content="\u23f3 \u0417\u0430\u043a\u0440\u0438\u0432\u0430\u044e \u043f\u0440\u0435\u043c\u0456\u0430\u043b\u044c\u043d\u0438\u0439 \u043f\u0435\u0440\u0456\u043e\u0434...",
+      embed=None,
+      view=None,
+    )
+
+    try:
+      _, _, result_embed = await close_bonus_period(
+        guild,
+        interaction.user.id,
+        "manual",
+        bot_instance=interaction.client,
+      )
+
+      await interaction.edit_original_response(
+        content=None,
+        embed=result_embed,
+        view=BonusBackView(
+          self.guild_id
+        ),
+      )
+    except ValueError as exc:
+      await interaction.edit_original_response(
+        content=f"\u274c {exc}",
+        embed=None,
+        view=BonusBackView(
+          self.guild_id
+        ),
+      )
+
+  @discord.ui.button(
+    label="\u0421\u043a\u0430\u0441\u0443\u0432\u0430\u0442\u0438",
+    emoji="\u21a9\ufe0f",
+    style=discord.ButtonStyle.secondary,
+  )
+  async def cancel(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      content=None,
+      embed=build_bonus_panel_embed(
+        self.guild_id
+      ),
+      view=BonusPanelView(
+        self.guild_id
+      ),
+    )
+
+
+class BonusPanelView(discord.ui.View):
+  def __init__(self, guild_id: int):
+    super().__init__(timeout=300)
+    self.guild_id = guild_id
+
+  @discord.ui.button(
+    label="\u041f\u0435\u0440\u0456\u043e\u0434",
+    emoji="\U0001f4c5",
+    style=discord.ButtonStyle.primary,
+    row=0,
+  )
+  async def period(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      embed=build_bonus_period_embed(
+        self.guild_id
+      ),
+      view=BonusPeriodView(
+        self.guild_id
+      ),
+    )
+
+  @discord.ui.button(
+    label="\u041d\u0430\u043b\u0430\u0448\u0442\u0443\u0432\u0430\u043d\u043d\u044f \u043f\u0440\u0435\u043c\u0456\u044e\u0432\u0430\u043d\u043d\u044f",
+    emoji="\U0001f3e6",
+    style=discord.ButtonStyle.primary,
+    row=0,
+  )
+  async def settings(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      embed=build_bonus_settings_embed(
+        self.guild_id
+      ),
+      view=BonusSettingsView(
+        self.guild_id
+      ),
+    )
+
+  @discord.ui.button(
+    label="\u041f\u043e\u0442\u043e\u0447\u043d\u0438\u0439 \u0440\u043e\u0437\u0440\u0430\u0445\u0443\u043d\u043e\u043a",
+    emoji="\U0001f4ca",
+    style=discord.ButtonStyle.secondary,
+    row=1,
+  )
+  async def preview(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      embed=build_bonus_preview_embed(
+        self.guild_id
+      ),
+      view=BonusBackView(
+        self.guild_id
+      ),
+    )
+
+  @discord.ui.button(
+    label="\u0417\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u0438 \u043f\u0435\u0440\u0456\u043e\u0434",
+    emoji="\u2705",
+    style=discord.ButtonStyle.danger,
+    row=1,
+  )
+  async def close_period(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    if not bonus_config_ready(
+      self.guild_id
+    ):
+      await interaction.response.send_message(
+        (
+          "\u274c \u0421\u043f\u043e\u0447\u0430\u0442\u043a\u0443 \u043d\u0430\u043b\u0430\u0448\u0442\u0443\u0439 3 \u043f\u043e\u0440\u043e\u0433\u0438 "
+          "\u0442\u0430 \u0440\u043e\u0437\u043f\u043e\u0434\u0456\u043b \u0422\u041e\u041f-5."
+        ),
+        ephemeral=True,
+      )
+      return
+
+    await interaction.response.edit_message(
+      embed=build_bonus_preview_embed(
+        self.guild_id
+      ),
+      view=BonusCloseConfirmView(
+        self.guild_id
+      ),
+    )
+
+  @discord.ui.button(
+    label="\u0410\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u043a\u0430 ON/OFF",
+    emoji="\u2699\ufe0f",
+    style=discord.ButtonStyle.secondary,
+    row=2,
+  )
+  async def toggle_auto(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    enabled = (
+      db.get_setting(
+        self.guild_id,
+        BONUS_SETTING_AUTO,
+      )
+      == "1"
+    )
+
+    if not enabled:
+      if not bonus_schedule_values(
+        self.guild_id
+      ):
+        await interaction.response.send_message(
+          (
+            "\u274c \u0421\u043f\u043e\u0447\u0430\u0442\u043a\u0443 \u0437\u0430\u0434\u0430\u0439 \u0434\u0435\u043d\u044c \u0456 \u0447\u0430\u0441 "
+            "\u0443 \u0440\u043e\u0437\u0434\u0456\u043b\u0456 \u00ab\u041f\u0435\u0440\u0456\u043e\u0434\u00bb."
+          ),
+          ephemeral=True,
+        )
+        return
+
+      if not bonus_config_ready(
+        self.guild_id
+      ):
+        await interaction.response.send_message(
+          "\u274c \u0421\u043f\u043e\u0447\u0430\u0442\u043a\u0443 \u043d\u0430\u043b\u0430\u0448\u0442\u0443\u0439 \u043f\u0440\u0435\u043c\u0456\u044e\u0432\u0430\u043d\u043d\u044f.",
+          ephemeral=True,
+        )
+        return
+
+    db.set_setting(
+      self.guild_id,
+      BONUS_SETTING_AUTO,
+      "0" if enabled else "1",
+    )
+
+    await interaction.response.edit_message(
+      embed=build_bonus_panel_embed(
+        self.guild_id
+      ),
+      view=BonusPanelView(
+        self.guild_id
+      ),
+    )
+
+  @discord.ui.button(
+    label="\u0406\u0441\u0442\u043e\u0440\u0456\u044f",
+    emoji="\U0001f4dc",
+    style=discord.ButtonStyle.secondary,
+    row=2,
+  )
+  async def history(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      embed=build_bonus_history_embed(
+        self.guild_id
+      ),
+      view=BonusBackView(
+        self.guild_id
+      ),
+    )
+
+  @discord.ui.button(
+    label="\u0420\u0443\u0447\u043d\u0430 \u043f\u0440\u0435\u043c\u0456\u044f",
+    emoji="\u2795",
+    style=discord.ButtonStyle.success,
+    row=3,
+  )
+  async def manual_bonus(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      content=(
+        "\u2795 \u041e\u0431\u0435\u0440\u0438 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430 \u0434\u043b\u044f \u0440\u0443\u0447\u043d\u043e\u0457 \u043f\u0440\u0435\u043c\u0456\u0457:"
+      ),
+      embed=None,
+      view=ManualBonusUserView(
+        self.guild_id
+      ),
+    )
+
+
+async def maybe_auto_close_bonus(
+  bot_instance: commands.Bot,
+  now: datetime,
+):
+  if not GUILD_ID:
+    return
+
+  if (
+    db.get_setting(
+      GUILD_ID,
+      BONUS_SETTING_AUTO,
+    )
+    != "1"
+  ):
+    return
+
+  start_at = bonus_get_start(GUILD_ID)
+
+  if (
+    not start_at
+    or not bonus_config_ready(GUILD_ID)
+  ):
+    return
+
+  due = bonus_next_close(
+    GUILD_ID,
+    start_at,
+  )
+
+  if due is None or now < due:
+    return
+
+  guild = bot_instance.get_guild(
+    GUILD_ID
+  )
+  if guild is None:
+    return
+
+  try:
+    period_id, _, _ = await close_bonus_period(
+      guild,
+      None,
+      "auto",
+      end_local=due,
+      bot_instance=bot_instance,
+    )
+    print(
+      f"[BONUS] Auto-closed period #{period_id}"
+    )
+  except Exception as exc:
+    print(
+      f"[BONUS] Auto-close error: {exc}"
+    )
+
+
 async def scheduled_posts_loop(bot_instance: commands.Bot):
   await bot_instance.wait_until_ready()
 
@@ -6518,6 +8827,9 @@ async def scheduled_posts_loop(bot_instance: commands.Bot):
           today_key,
         )
         print(f"[BIRTHDAY] Reminder check completed for {today_key}")
+
+      # Bonus period auto-close.
+      await maybe_auto_close_bonus(bot_instance, now)
 
       # At midnight post the previous completed calendar day.
       if FAMILY_STATS_CHANNEL_ID and now.hour == FAMILY_STATS_HOUR:
@@ -6578,6 +8890,8 @@ class ContractBot(commands.Bot):
       "[AUTO] "
       f"rating_channel={RATING_CHANNEL_ID or 'disabled'} "
       f"family_stats_channel={FAMILY_STATS_CHANNEL_ID or 'disabled'} "
+      f"bonus_results_channel={BONUS_RESULTS_CHANNEL_ID or 'disabled'} "
+      f"payout_threads_channel={PAYOUT_THREADS_CHANNEL_ID or 'disabled'} "
       f"rating_hours={RATING_MORNING_HOUR}/{RATING_EVENING_HOUR} "
       f"family_stats_hour={FAMILY_STATS_HOUR} "
       f"birthday_input={BIRTHDAY_INPUT_CHANNEL_ID or 'disabled'} "
@@ -6607,6 +8921,49 @@ class ContractBot(commands.Bot):
 
 
 bot = ContractBot()
+
+
+@bot.tree.command(
+  name="premii",
+  description="\u041f\u0430\u043d\u0435\u043b\u044c \u043f\u0440\u0435\u043c\u0456\u044e\u0432\u0430\u043d\u043d\u044f \u0441\u0456\u043c'\u0457",
+)
+async def bonus_panel_command(
+  interaction: discord.Interaction,
+):
+  if (
+    not isinstance(
+      interaction.user,
+      discord.Member,
+    )
+    or not management_member(
+      interaction.user
+    )
+  ):
+    await interaction.response.send_message(
+      "\u274c \u041f\u0430\u043d\u0435\u043b\u044c \u043f\u0440\u0435\u043c\u0456\u044e\u0432\u0430\u043d\u043d\u044f \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u0443.",
+      ephemeral=True,
+    )
+    return
+
+  guild = interaction.guild
+  if guild is None:
+    await interaction.response.send_message(
+      "\u274c \u0426\u0435 \u043f\u0440\u0430\u0446\u044e\u0454 \u0442\u0456\u043b\u044c\u043a\u0438 \u043d\u0430 \u0441\u0435\u0440\u0432\u0435\u0440\u0456.",
+      ephemeral=True,
+    )
+    return
+
+  bonus_ensure_start(guild.id)
+
+  await interaction.response.send_message(
+    embed=build_bonus_panel_embed(
+      guild.id
+    ),
+    view=BonusPanelView(
+      guild.id
+    ),
+    ephemeral=True,
+  )
 
 
 @bot.tree.command(name="setup", description="\u0421\u0442\u0432\u043e\u0440\u0438\u0442\u0438 \u043f\u0430\u043d\u0435\u043b\u044c \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432")
@@ -6839,6 +9196,228 @@ async def payout_user_label(
   return member.display_name if member else f"ID {user_id}"
 
 
+def payout_period_short(start_at: Optional[str], end_at: Optional[str]) -> str:
+  start_day = local_date_from_iso(start_at) if start_at else None
+  end_day = local_date_from_iso(end_at) if end_at else None
+
+  if start_day and end_day:
+    return f"{start_day.strftime('%d.%m.%Y')} \u2014 {end_day.strftime('%d.%m.%Y')}"
+
+  return "\u043f\u0435\u0440\u0456\u043e\u0434"
+
+
+def payout_chunk_lines(lines: list[str], max_chars: int = 900) -> list[str]:
+  chunks = []
+  current = ""
+
+  for line in lines:
+    candidate = f"{current}\n{line}" if current else line
+
+    if len(candidate) > max_chars and current:
+      chunks.append(current)
+      current = line
+    else:
+      current = candidate
+
+  if current:
+    chunks.append(current)
+
+  return chunks
+
+
+def payout_thread_setting_key(user_id: int) -> str:
+  return f"payout_thread_{user_id}"
+
+
+def payout_thread_name(member: discord.Member) -> str:
+  raw = member.display_name.strip() or str(member.id)
+  cleaned = " ".join(raw.split())
+  return f"\u0432\u0438\u043f\u043b\u0430\u0442\u0438-{cleaned}"[:100]
+
+
+async def resolve_payout_thread(
+  guild: discord.Guild,
+  member: discord.Member,
+) -> Optional[discord.Thread]:
+  """
+  Find or create one private payout thread for this member.
+  Thread id is persisted in bot_settings, so the same personal
+  payout history is reused on every future payout.
+  """
+  if not PAYOUT_THREADS_CHANNEL_ID:
+    return None
+
+  parent = guild.get_channel(PAYOUT_THREADS_CHANNEL_ID)
+
+  if parent is None:
+    try:
+      parent = await guild.fetch_channel(PAYOUT_THREADS_CHANNEL_ID)
+    except discord.DiscordException:
+      return None
+
+  if not isinstance(parent, discord.TextChannel):
+    return None
+
+  key = payout_thread_setting_key(member.id)
+  saved_thread_id = db.get_setting(guild.id, key)
+  thread = None
+
+  if saved_thread_id and saved_thread_id.isdigit():
+    thread_id = int(saved_thread_id)
+    thread = guild.get_thread(thread_id)
+
+    if thread is None:
+      try:
+        async for archived in parent.archived_threads(
+          private=True,
+          joined=True,
+          limit=None,
+        ):
+          if archived.id == thread_id:
+            thread = archived
+            break
+      except discord.DiscordException:
+        thread = None
+
+    if thread is not None:
+      try:
+        if thread.archived:
+          await thread.edit(
+            archived=False,
+            reason="\u041d\u043e\u0432\u0430 \u0432\u0438\u043f\u043b\u0430\u0442\u0430 Agosto",
+          )
+        await thread.add_user(member)
+        return thread
+      except discord.DiscordException:
+        thread = None
+
+  try:
+    thread = await parent.create_thread(
+      name=payout_thread_name(member),
+      type=discord.ChannelType.private_thread,
+      auto_archive_duration=10080,
+      invitable=False,
+      reason="\u041f\u0440\u0438\u0432\u0430\u0442\u043d\u0430 \u0456\u0441\u0442\u043e\u0440\u0456\u044f \u0432\u0438\u043f\u043b\u0430\u0442 Agosto",
+    )
+
+    await thread.add_user(member)
+    db.set_setting(guild.id, key, str(thread.id))
+    return thread
+
+  except (discord.Forbidden, discord.HTTPException):
+    return None
+
+
+async def send_payout_notification(
+  guild: discord.Guild,
+  user_id: int,
+  rows,
+  paid_by: int,
+) -> bool:
+  """
+  Post a payout receipt in the recipient's private payout thread.
+  Ordinary members cannot see other members' private threads.
+  Failure to publish never rolls back the payout.
+  """
+  if not rows:
+    return False
+
+  member = await fetch_member_safe(guild, user_id)
+  if member is None:
+    return False
+
+  thread = await resolve_payout_thread(guild, member)
+  if thread is None:
+    return False
+
+  contract_rows = [
+    row for row in rows
+    if row["source_type"] == "contract"
+  ]
+  bonus_rows = [
+    row for row in rows
+    if row["source_type"] == "bonus"
+  ]
+
+  total = sum(int(row["amount_cents"]) for row in rows)
+  contract_total = sum(int(row["amount_cents"]) for row in contract_rows)
+  bonus_total = sum(int(row["amount_cents"]) for row in bonus_rows)
+
+  paid_local = datetime.now(timezone.utc).astimezone(LOCAL_TZ)
+
+  lines = [
+    f"<@{user_id}>",
+    "",
+    "\U0001f4b8 \u041d\u041e\u0412\u0410 \u0412\u0418\u041f\u041b\u0410\u0422\u0410",
+    "",
+    f"\U0001f4b0 \u0417\u0430\u0433\u0430\u043b\u044c\u043d\u0430 \u0441\u0443\u043c\u0430: {format_cents(total)}",
+  ]
+
+  if contract_rows:
+    lines.extend([
+      "",
+      f"\U0001f4cb \u041a\u041e\u041d\u0422\u0420\u0410\u041a\u0422\u0418 \u2022 {format_cents(contract_total)}",
+    ])
+
+    for row in contract_rows:
+      lines.append(
+        f"#{row['contract_id']} \u2022 {row['contract_name']} \u2014 "
+        f"{format_cents(row['amount_cents'])}"
+      )
+
+  if bonus_rows:
+    lines.extend([
+      "",
+      f"\U0001f3c6 \u041f\u0420\u0415\u041c\u0406\u042f \u2022 {format_cents(bonus_total)}",
+    ])
+
+    for row in bonus_rows:
+      if row["period_start"] and row["period_end"]:
+        period_text = payout_period_short(
+          row["period_start"],
+          row["period_end"],
+        )
+        rank_text = (
+          f" \u2022 {row['rank']} \u043c\u0456\u0441\u0446\u0435"
+          if row["rank"]
+          else ""
+        )
+        lines.append(
+          f"\u0417\u0430 {period_text}{rank_text}"
+        )
+      else:
+        note_text = f" \u2022 {row['note']}" if row["note"] else ""
+        lines.append(
+          f"\u0420\u0443\u0447\u043d\u0430 \u043f\u0440\u0435\u043c\u0456\u044f{note_text}"
+        )
+
+  lines.extend([
+    "",
+    f"\U0001f4b3 \u0412\u0438\u043f\u043b\u0430\u0442\u0438\u0432 - <@{paid_by}>",
+    "",
+    f"\U0001f552 \u0412\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u043e - {paid_local.strftime('%d.%m.%Y %H:%M')}",
+  ])
+
+  try:
+    if thread.archived:
+      await thread.edit(
+        archived=False,
+        reason="\u041d\u043e\u0432\u0430 \u0432\u0438\u043f\u043b\u0430\u0442\u0430 Agosto",
+      )
+
+    await thread.send(
+      "\n".join(lines),
+      allowed_mentions=discord.AllowedMentions(
+        users=True,
+        roles=False,
+        everyone=False,
+      ),
+    )
+    return True
+
+  except (discord.Forbidden, discord.HTTPException):
+    return False
+
 
 
 class PayoutUserSelect(discord.ui.Select):
@@ -6858,7 +9437,7 @@ class PayoutUserSelect(discord.ui.Select):
         value=str(row["user_id"]),
         description=(
           f"\u0414\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438: {format_cents(row['total_cents'])} \u2022 "
-          f"{row['accrual_count']} \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442(\u0456\u0432)"
+          f"{row['accrual_count']} \u043d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u044c"
         )[:100],
       )
       for row in rows[:25]
@@ -7090,7 +9669,7 @@ class PayoutPayView(discord.ui.View):
       )
       return
 
-    rows = db.pending_accruals_for_user(
+    rows = db.pending_payout_items_for_user(
       self.guild_id,
       self.user_id,
     )
@@ -7111,7 +9690,7 @@ class PayoutPayView(discord.ui.View):
       view=None,
     )
 
-    settled = db.settle_accruals_for_user(
+    settled = db.settle_payouts_for_user(
       self.guild_id,
       self.user_id,
       interaction.user.id,
@@ -7120,11 +9699,18 @@ class PayoutPayView(discord.ui.View):
     message_ids = sorted({
       row["message_id"]
       for row in settled
-      if row["message_id"]
+      if row["source_type"] == "contract" and row["message_id"]
     })
 
     for message_id in message_ids:
       await refresh_completed_message(message_id)
+
+    notification_sent = await send_payout_notification(
+      interaction.guild,
+      self.user_id,
+      settled,
+      interaction.user.id,
+    )
 
     await audit_log(
       interaction.guild,
@@ -7132,7 +9718,8 @@ class PayoutPayView(discord.ui.View):
       (
         f"\u0423\u0447\u0430\u0441\u043d\u0438\u043a: <@{self.user_id}>\n"
         f"\u0421\u0443\u043c\u0430: **{format_cents(total)}**\n"
-        f"\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432: **{len(settled)}**\n"
+        f"\u041d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u044c: **{len(settled)}**\n"
+        f"\u0421\u043f\u043e\u0432\u0456\u0449\u0435\u043d\u043d\u044f: **{'\u2705 \u043e\u043f\u0443\u0431\u043b\u0456\u043a\u043e\u0432\u0430\u043d\u043e' if notification_sent else '\u26a0\ufe0f \u043d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f'}**\n"
         f"\u0412\u0438\u043f\u043b\u0430\u0442\u0438\u0432/\u043b\u0430: <@{interaction.user.id}>"
       ),
       discord.Color.green(),
@@ -7141,7 +9728,8 @@ class PayoutPayView(discord.ui.View):
     await interaction.edit_original_response(
       content=(
         f"\u2705 <@{self.user_id}> \u0432\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u043e **{format_cents(total)}**.\n"
-        "\u0411\u0430\u043b\u0430\u043d\u0441 \u0434\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438 \u0437\u0430\u043a\u0440\u0438\u0442\u043e."
+        "\u0411\u0430\u043b\u0430\u043d\u0441 \u0434\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438 \u0437\u0430\u043a\u0440\u0438\u0442\u043e.\n"
+        f"\u0413\u0456\u043b\u043a\u0430 \u0432\u0438\u043f\u043b\u0430\u0442: **{'\u2705 \u043e\u043f\u0443\u0431\u043b\u0456\u043a\u043e\u0432\u0430\u043d\u043e' if notification_sent else '\u26a0\ufe0f \u043d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f'}**"
       ),
       embed=None,
       view=None,
@@ -7227,7 +9815,7 @@ class PayoutCategoryConfirmView(discord.ui.View):
       view=None,
     )
 
-    rows = db.settle_accruals_for_users(
+    rows = db.settle_payouts_for_users(
       self.guild_id,
       user_ids,
       interaction.user.id,
@@ -7239,11 +9827,29 @@ class PayoutCategoryConfirmView(discord.ui.View):
     message_ids = sorted({
       row["message_id"]
       for row in rows
-      if row["message_id"]
+      if row["source_type"] == "contract" and row["message_id"]
     })
 
     for message_id in message_ids:
       await refresh_completed_message(message_id)
+
+    rows_by_user = defaultdict(list)
+    for row in rows:
+      rows_by_user[int(row["user_id"])].append(row)
+
+    notification_sent_count = 0
+    notification_failed_count = 0
+
+    for user_id, user_rows in rows_by_user.items():
+      if await send_payout_notification(
+        guild,
+        user_id,
+        user_rows,
+        interaction.user.id,
+      ):
+        notification_sent_count += 1
+      else:
+        notification_failed_count += 1
 
     category_label = (
       "\u043a\u0435\u0440\u0456\u0432\u043d\u043e\u043c\u0443 \u0441\u043a\u043b\u0430\u0434\u0443"
@@ -7259,6 +9865,7 @@ class PayoutCategoryConfirmView(discord.ui.View):
         f"\u041b\u044e\u0434\u0435\u0439: **{len(users)}**\n"
         f"\u041d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u044c: **{len(rows)}**\n"
         f"\u0421\u0443\u043c\u0430: **{format_cents(total)}**\n"
+        f"\u0413\u0456\u043b\u043a\u0438 \u0432\u0438\u043f\u043b\u0430\u0442: **{notification_sent_count} \u043e\u043f\u0443\u0431\u043b\u0456\u043a\u043e\u0432\u0430\u043d\u043e / {notification_failed_count} \u043d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f**\n"
         f"\u0412\u0438\u043f\u043b\u0430\u0442\u0438\u0432/\u043b\u0430: <@{interaction.user.id}>"
       ),
       discord.Color.green(),
@@ -7268,7 +9875,8 @@ class PayoutCategoryConfirmView(discord.ui.View):
       content=(
         f"\u2705 \u0412\u0438\u043f\u043b\u0430\u0442\u0438 **{category_label}** \u0437\u0430\u043a\u0440\u0438\u0442\u043e.\n"
         f"\u041b\u044e\u0434\u0435\u0439: **{len(users)}**\n"
-        f"\u0421\u0443\u043c\u0430: **{format_cents(total)}**"
+        f"\u0421\u0443\u043c\u0430: **{format_cents(total)}**\n"
+        f"\u0413\u0456\u043b\u043a\u0438 \u0432\u0438\u043f\u043b\u0430\u0442: **{notification_sent_count} \u043e\u043f\u0443\u0431\u043b\u0456\u043a\u043e\u0432\u0430\u043d\u043e / {notification_failed_count} \u043d\u0435 \u0432\u0434\u0430\u043b\u043e\u0441\u044f**"
       ),
       embed=None,
       view=None,
@@ -7294,7 +9902,7 @@ class PayoutCategoryConfirmView(discord.ui.View):
 async def split_payout_summary(
   guild: discord.Guild,
 ):
-  summary = db.pending_accrual_summary(guild.id)
+  summary = db.pending_payout_summary(guild.id)
   participants = []
   management = []
 
@@ -7315,7 +9923,7 @@ async def show_payout_user(
   if guild is None:
     return
 
-  rows = db.pending_accruals_for_user(
+  rows = db.pending_payout_items_for_user(
     guild.id,
     user_id,
   )
@@ -7332,7 +9940,7 @@ async def show_payout_user(
 
   category_text = (
     "\U0001f6e1 **\u041a\u0415\u0420\u0406\u0412\u041d\u0418\u0419 \u0421\u041a\u041b\u0410\u0414** \u2022 "
-    "\u0432\u0438\u043f\u043b\u0430\u0442\u0443 \u0437\u0430\u043a\u0440\u0438\u0432\u0430\u0454 \u0442\u0456\u043b\u044c\u043a\u0438 \u043b\u0456\u0434\u0435\u0440"
+    "\u0432\u0438\u043f\u043b\u0430\u0442\u0443 \u0437\u0430\u043a\u0440\u0438\u0432\u0430\u0454 LEADER_ROLE_ID \u0430\u0431\u043e owner \u0441\u0435\u0440\u0432\u0435\u0440\u0430"
     if is_management
     else "\U0001f465 **\u041e\u0421\u041d\u041e\u0412\u041d\u0418\u0419 \u0421\u041a\u041b\u0410\u0414**"
   )
@@ -7343,28 +9951,69 @@ async def show_payout_user(
       f"{category_text}\n"
       f"**{label}** \u2022 <@{user_id}>\n"
       f"\u0417\u0430\u0433\u0430\u043b\u044c\u043d\u0430 \u0441\u0443\u043c\u0430: **{format_cents(total)}**\n"
-      f"\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432: **{len(rows)}**"
+      f"\u041d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u044c: **{len(rows)}**"
     ),
     color=discord.Color.gold(),
   )
 
   if rows:
-    lines = [
-      (
-        f"#{row['contract_id']} \u2022 {row['contract_name']} \u2014 "
-        f"**{format_cents(row['amount_cents'])}**"
-      )
-      for row in rows[:15]
+    contract_rows = [
+      row for row in rows
+      if row["source_type"] == "contract"
+    ]
+    bonus_rows = [
+      row for row in rows
+      if row["source_type"] == "bonus"
     ]
 
-    if len(rows) > 15:
-      lines.append(f"\u2026\u0456 \u0449\u0435 {len(rows) - 15}")
+    if contract_rows:
+      contract_lines = [
+        (
+          f"#{row['contract_id']} \u2022 {row['contract_name']} \u2014 "
+          f"**{format_cents(row['amount_cents'])}**"
+        )
+        for row in contract_rows[:12]
+      ]
+      if len(contract_rows) > 12:
+        contract_lines.append(f"\u2026\u0456 \u0449\u0435 {len(contract_rows) - 12}")
 
-    embed.add_field(
-      name="\u041d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u043d\u044f",
-      value="\n".join(lines),
-      inline=False,
-    )
+      embed.add_field(
+        name="\U0001f4cb \u041a\u041e\u041d\u0422\u0420\u0410\u041a\u0422\u0418",
+        value="\n".join(contract_lines),
+        inline=False,
+      )
+
+    if bonus_rows:
+      bonus_lines = []
+      for row in bonus_rows[:12]:
+        if row["period_start"] and row["period_end"]:
+          start_day = local_date_from_iso(row["period_start"])
+          end_day = local_date_from_iso(row["period_end"])
+          period_text = (
+            f"{start_day.strftime('%d.%m')}\u2013{end_day.strftime('%d.%m')}"
+            if start_day and end_day
+            else "\u043f\u0435\u0440\u0456\u043e\u0434"
+          )
+          rank_text = f" \u2022 #{row['rank']}" if row["rank"] else ""
+          bonus_lines.append(
+            f"\U0001f3c6 \u041f\u0440\u0435\u043c\u0456\u044f \u0437\u0430 \u043f\u0435\u0440\u0456\u043e\u0434 {period_text}{rank_text} \u2014 "
+            f"**{format_cents(row['amount_cents'])}**"
+          )
+        else:
+          note_text = f" \u2022 {row['note']}" if row["note"] else ""
+          bonus_lines.append(
+            f"\U0001f3c6 \u0420\u0443\u0447\u043d\u0430 \u043f\u0440\u0435\u043c\u0456\u044f{note_text} \u2014 "
+            f"**{format_cents(row['amount_cents'])}**"
+          )
+
+      if len(bonus_rows) > 12:
+        bonus_lines.append(f"\u2026\u0456 \u0449\u0435 {len(bonus_rows) - 12}")
+
+      embed.add_field(
+        name="\U0001f3c6 \u041f\u0420\u0415\u041c\u0406\u0407",
+        value="\n".join(bonus_lines),
+        inline=False,
+      )
 
   await interaction.response.edit_message(
     content=None,
@@ -7422,7 +10071,7 @@ async def send_payouts_list(
   participant_lines = [
     (
       f"<@{row['user_id']}> \u2014 **{format_cents(row['total_cents'])}** "
-      f"\u2022 {row['accrual_count']} \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442(\u0456\u0432)"
+      f"\u2022 {row['accrual_count']} \u043d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u044c"
     )
     for row in participant_rows[:20]
   ] or ["\u2014"]
@@ -7430,7 +10079,7 @@ async def send_payouts_list(
   management_lines = [
     (
       f"<@{row['user_id']}> \u2014 **{format_cents(row['total_cents'])}** "
-      f"\u2022 {row['accrual_count']} \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442(\u0456\u0432)"
+      f"\u2022 {row['accrual_count']} \u043d\u0430\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u044c"
     )
     for row in management_rows[:20]
   ] or ["\u2014"]

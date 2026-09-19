@@ -213,6 +213,22 @@ def bonus_rating_between(
 
     share = Fraction(10, len(members))
     for uid in members:
+      member_reset = db.get_member_reset(
+        guild_id,
+        uid,
+        "rating",
+      )
+      cutoff = start_at
+      if (
+        member_reset
+        and member_reset <= end_at
+        and member_reset > cutoff
+      ):
+        cutoff = member_reset
+
+      if row["created_at"] < cutoff:
+        continue
+
       points[uid] += share
       participations[uid] += 1
 

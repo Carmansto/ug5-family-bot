@@ -27,6 +27,7 @@ import payouts
 import stats
 import bonuses
 import birthdays
+import storage
 
 
 async def scheduled_posts_loop(bot_instance: commands.Bot):
@@ -97,10 +98,12 @@ class ContractBot(commands.Bot):
 
   async def setup_hook(self):
     contracts.set_bot(self)
+    storage.set_bot(self)
 
     self.add_view(contracts.MainContractPanelView(self))
     self.add_view(contracts.UnpaidCompletedView(self))
     self.add_view(birthdays.BirthdayPanelView())
+    self.add_view(storage.StoragePanelView())
 
     if not self._commands_registered:
       contracts.register_commands(self)
@@ -108,6 +111,7 @@ class ContractBot(commands.Bot):
       stats.register_commands(self)
       bonuses.register_commands(self)
       birthdays.register_commands(self)
+      storage.register_commands(self)
       self._commands_registered = True
 
     if self._scheduled_posts_task is None:
@@ -143,6 +147,11 @@ class ContractBot(commands.Bot):
       await birthdays.ensure_birthday_panel(self)
     except Exception as exc:
       print(f"[BIRTHDAY] Could not ensure panel: {exc}")
+
+    try:
+      await storage.ensure_storage_panel(self)
+    except Exception as exc:
+      print(f"[STORAGE] Could not ensure panel: {exc}")
 
     if not self._unpaid_refreshed and GUILD_ID:
       self._unpaid_refreshed = True

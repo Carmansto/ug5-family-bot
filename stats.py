@@ -18,31 +18,41 @@ from config import *
 from database import db
 from utils import *
 
-def build_public_rating_embed(guild_id: int) -> discord.Embed:
-  rows = db.all_non_cancelled(guild_id)
-  rating_reset_at = db.get_setting(guild_id, "rating_reset_at")
 
-  rating_rows = [
-    row for row in rows
-    if not rating_reset_at or row["created_at"] >= rating_reset_at
-  ]
+def _later_reset_at(*values: Optional[str]) -> Optional[str]:
+  candidates = []
 
-  points = defaultdict(lambda: Fraction(0, 1))
-
-  for row in rating_rows:
-    members = parse_ids(row["participant_ids"])
-    if not members:
+  for value in values:
+    if not value:
+      continue
+    try:
+      parsed = datetime.fromisoformat(value)
+      if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+      candidates.append((parsed, value))
+    except Exception:
       continue
 
-    share = Fraction(10, len(members))
-    for uid in members:
-      points[uid] += share
+  if not candidates:
+    return None
 
-  ranking = sorted(
-    points,
-    key=lambda uid: points[uid],
-    reverse=True,
+  return max(candidates, key=lambda item: item[0])[1]
+
+
+def effective_member_reset_at(
+  guild_id: int,
+  user_id: int,
+  reset_type: str,
+  global_reset_at: Optional[str],
+) -> Optional[str]:
+  return _later_reset_at(
+    global_reset_at,
+    db.get_member_reset(guild_id, user_id, reset_type),
   )
+
+
+def build_public_rating_embed(guild_id: int) -> discord.Embed:
+  points, participations, ranking, rating_reset_at = rating_data_for_guild(guild_id)
 
   reset_ts = iso_to_unix(rating_reset_at) if rating_reset_at else None
   subtitle = (
@@ -74,7 +84,9 @@ def build_public_rating_embed(guild_id: int) -> discord.Embed:
     value="\n".join(lines),
     inline=False,
   )
-  embed.set_footer(text="\u0423 \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443 \u043f\u043e\u043a\u0430\u0437\u0443\u044e\u0442\u044c\u0441\u044f \u0442\u0456\u043b\u044c\u043a\u0438 \u0431\u0430\u043b\u0438.")
+  embed.set_footer(
+    text="\u0423 \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443 \u043f\u043e\u043a\u0430\u0437\u0443\u044e\u0442\u044c\u0441\u044f \u0442\u0456\u043b\u044c\u043a\u0438 \u0431\u0430\u043b\u0438. \u0406\u043d\u0434\u0438\u0432\u0456\u0434\u0443\u0430\u043b\u044c\u043d\u0456 \u043e\u0431\u043d\u0443\u043b\u0435\u043d\u043d\u044f \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432 \u0432\u0440\u0430\u0445\u043e\u0432\u0443\u044e\u0442\u044c\u0441\u044f."
+  )
   return embed
 
 
@@ -82,21 +94,34 @@ def rating_data_for_guild(guild_id: int):
   rows = db.all_non_cancelled(guild_id)
   rating_reset_at = db.get_setting(guild_id, "rating_reset_at")
 
-  rating_rows = [
-    row for row in rows
-    if not rating_reset_at or row["created_at"] >= rating_reset_at
-  ]
-
   points = defaultdict(lambda: Fraction(0, 1))
   participations = Counter()
 
-  for row in rating_rows:
+  reset_cache: dict[int, Optional[str]] = {}
+
+  for row in rows:
+    if rating_reset_at and row["created_at"] < rating_reset_at:
+      continue
+
     members = parse_ids(row["participant_ids"])
     if not members:
       continue
 
     share = Fraction(10, len(members))
+
     for uid in members:
+      if uid not in reset_cache:
+        reset_cache[uid] = effective_member_reset_at(
+          guild_id,
+          uid,
+          "rating",
+          rating_reset_at,
+        )
+
+      cutoff = reset_cache[uid]
+      if cutoff and row["created_at"] < cutoff:
+        continue
+
       points[uid] += share
       participations[uid] += 1
 
@@ -298,6 +323,7 @@ class LeaderboardSettingsView(discord.ui.View):
     )
 
 
+
 def earnings_data_for_guild(guild_id: int):
   rows = db.all_non_cancelled(guild_id)
   paid_rows_all = [r for r in rows if r["status"] == "paid"]
@@ -318,8 +344,24 @@ def earnings_data_for_guild(guild_id: int):
   ]
 
   member_earnings = Counter()
+  reset_cache: dict[int, Optional[str]] = {}
+
   for payout in payouts:
-    member_earnings[payout["user_id"]] += payout["amount_cents"]
+    uid = int(payout["user_id"])
+
+    if uid not in reset_cache:
+      reset_cache[uid] = effective_member_reset_at(
+        guild_id,
+        uid,
+        "earnings",
+        reset_at,
+      )
+
+    cutoff = reset_cache[uid]
+    if cutoff and payout["created_at"] < cutoff:
+      continue
+
+    member_earnings[uid] += payout["amount_cents"]
 
   return {
     "rows": rows,
@@ -355,6 +397,19 @@ def build_my_stats_embed(guild_id: int, user_id: int) -> discord.Embed:
   points, participations, users, rating_reset_at = rating_data_for_guild(guild_id)
   earnings = earnings_data_for_guild(guild_id)
 
+  member_rating_reset = effective_member_reset_at(
+    guild_id,
+    user_id,
+    "rating",
+    rating_reset_at,
+  )
+  member_earnings_reset = effective_member_reset_at(
+    guild_id,
+    user_id,
+    "earnings",
+    earnings["reset_at"],
+  )
+
   position = users.index(user_id) + 1 if user_id in users else None
   personal_earnings = earnings["member_earnings"].get(user_id, 0)
   pending_payout = db.pending_accrual_total(guild_id, user_id)
@@ -362,14 +417,29 @@ def build_my_stats_embed(guild_id: int, user_id: int) -> discord.Embed:
   paid_period_rows = [
     row for row in earnings["paid_rows"]
     if user_id in parse_ids(row["participant_ids"])
+    and (
+      not member_earnings_reset
+      or (
+        row["paid_at"]
+        and row["paid_at"] >= member_earnings_reset
+      )
+    )
   ]
   unpaid_now_rows = [
     row for row in earnings["unpaid_rows"]
     if user_id in parse_ids(row["participant_ids"])
   ]
 
-  rating_ts = iso_to_unix(rating_reset_at) if rating_reset_at else None
-  earnings_ts = iso_to_unix(earnings["reset_at"]) if earnings["reset_at"] else None
+  rating_ts = (
+    iso_to_unix(member_rating_reset)
+    if member_rating_reset
+    else None
+  )
+  earnings_ts = (
+    iso_to_unix(member_earnings_reset)
+    if member_earnings_reset
+    else None
+  )
 
   period_lines = []
   period_lines.append(
@@ -483,8 +553,18 @@ def personal_daily_rows(guild_id: int, user_id: int):
   earnings = earnings_data_for_guild(guild_id)
   grouped = {}
 
+  member_reset = effective_member_reset_at(
+    guild_id,
+    user_id,
+    "earnings",
+    earnings["reset_at"],
+  )
+
   for payout in earnings["payouts"]:
     if payout["user_id"] != user_id:
+      continue
+
+    if member_reset and payout["created_at"] < member_reset:
       continue
 
     day = local_date_from_iso(payout["created_at"])
@@ -668,7 +748,7 @@ def build_admin_general_stats_embed(guild_id: int) -> discord.Embed:
   gross = sum(row["price"] * 100 for row in calculated_rows)
   family = sum((row["fomo_cents"] or 0) for row in calculated_rows)
   accrued = sum((row["net_cents"] or 0) for row in calculated_rows)
-  actually_paid = sum(earnings["member_earnings"].values())
+  actually_paid = sum(payout["amount_cents"] for payout in earnings["payouts"])
   pending_payouts = db.pending_accrual_total(guild_id)
   uncalculated = sum(row["price"] * 100 for row in uncalculated_rows)
 
@@ -1038,10 +1118,17 @@ def build_member_stats_embed(
 
   pending_payout = db.pending_accrual_total(guild_id, user_id)
 
+  member_earnings_reset = effective_member_reset_at(
+    guild_id,
+    user_id,
+    "earnings",
+    earnings["reset_at"],
+  )
+
   current_family_contribution = db.family_contribution_for_user(
     guild_id,
     user_id,
-    earnings["reset_at"],
+    member_earnings_reset,
   )
   all_family_contribution = db.family_contribution_for_user(
     guild_id,
@@ -1056,6 +1143,13 @@ def build_member_stats_embed(
   paid_period = [
     row for row in earnings["paid_rows"]
     if user_id in parse_ids(row["participant_ids"])
+    and (
+      not member_earnings_reset
+      or (
+        row["paid_at"]
+        and row["paid_at"] >= member_earnings_reset
+      )
+    )
   ]
 
   embed = discord.Embed(
@@ -2073,7 +2167,292 @@ async def send_auto_family_stats(
 
 
 
+
+async def stats_audit_log(
+  guild: Optional[discord.Guild],
+  title: str,
+  description: str,
+  color: discord.Color = discord.Color.blurple(),
+):
+  if guild is None or not LOG_CHANNEL_ID:
+    return
+
+  try:
+    channel = guild.get_channel(LOG_CHANNEL_ID)
+    if channel is None:
+      channel = await guild.fetch_channel(LOG_CHANNEL_ID)
+
+    if isinstance(channel, (discord.TextChannel, discord.Thread)):
+      await channel.send(
+        embed=discord.Embed(
+          title=title,
+          description=description,
+          color=color,
+          timestamp=datetime.now(timezone.utc),
+        )
+      )
+  except discord.DiscordException:
+    pass
+
+
+def build_reset_member_embed(
+  guild_id: int,
+  user_id: int,
+) -> discord.Embed:
+  resets = db.get_member_resets(guild_id, user_id)
+
+  rating_reset = resets["rating_reset_at"] if resets else None
+  earnings_reset = resets["earnings_reset_at"] if resets else None
+
+  rating_ts = iso_to_unix(rating_reset) if rating_reset else None
+  earnings_ts = iso_to_unix(earnings_reset) if earnings_reset else None
+
+  rating_text = (
+    f"<t:{rating_ts}:f>"
+    if rating_ts
+    else "\u043e\u043a\u0440\u0435\u043c\u043e \u0449\u0435 \u043d\u0435 \u043e\u0431\u043d\u0443\u043b\u044f\u0432\u0441\u044f"
+  )
+  earnings_text = (
+    f"<t:{earnings_ts}:f>"
+    if earnings_ts
+    else "\u043e\u043a\u0440\u0435\u043c\u043e \u0449\u0435 \u043d\u0435 \u043e\u0431\u043d\u0443\u043b\u044f\u0432\u0441\u044f"
+  )
+
+  return discord.Embed(
+    title="\u267b\ufe0f \u041e\u0431\u043d\u0443\u043b\u0435\u043d\u043d\u044f \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430",
+    description=(
+      f"\u0423\u0447\u0430\u0441\u043d\u0438\u043a: <@{user_id}>\n\n"
+      f"\U0001f3c6 \u0420\u0435\u0439\u0442\u0438\u043d\u0433: **{rating_text}**\n"
+      f"\U0001f4b0 \u0417\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a: **{earnings_text}**\n\n"
+      "\u0406\u0441\u0442\u043e\u0440\u0456\u044f \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432 \u0456 \u0432\u0438\u043f\u043b\u0430\u0442 \u043d\u0435 \u0432\u0438\u0434\u0430\u043b\u044f\u0454\u0442\u044c\u0441\u044f. "
+      "\u041f\u043e\u0442\u043e\u0447\u043d\u0438\u0439 \u0431\u0430\u043b\u0430\u043d\u0441 `\u0414\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438` \u0432 `/payouts` \u0442\u0430\u043a\u043e\u0436 \u043d\u0435 \u0437\u043c\u0456\u043d\u044e\u0454\u0442\u044c\u0441\u044f."
+    ),
+    color=discord.Color.orange(),
+  )
+
+
+class ResetMemberConfirmView(discord.ui.View):
+  def __init__(
+    self,
+    guild_id: int,
+    user_id: int,
+    mode: str,
+  ):
+    super().__init__(timeout=90)
+    self.guild_id = guild_id
+    self.user_id = user_id
+    self.mode = mode
+
+  @discord.ui.button(
+    label="\u041f\u0456\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u0438",
+    emoji="\u2705",
+    style=discord.ButtonStyle.danger,
+  )
+  async def confirm(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    if (
+      not isinstance(interaction.user, discord.Member)
+      or not management_member(interaction.user)
+    ):
+      await interaction.response.edit_message(
+        content="\u274c \u041d\u0435\u043c\u0430\u0454 \u043f\u0440\u0430\u0432\u0430.",
+        embed=None,
+        view=None,
+      )
+      return
+
+    reset_at = utc_now_iso()
+
+    if self.mode in ("rating", "all"):
+      db.set_member_reset(
+        self.guild_id,
+        self.user_id,
+        "rating",
+        reset_at,
+      )
+
+    if self.mode in ("earnings", "all"):
+      db.set_member_reset(
+        self.guild_id,
+        self.user_id,
+        "earnings",
+        reset_at,
+      )
+
+    labels = {
+      "rating": "\U0001f3c6 \u0440\u0435\u0439\u0442\u0438\u043d\u0433",
+      "earnings": "\U0001f4b0 \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a",
+      "all": "\u267b\ufe0f \u0440\u0435\u0439\u0442\u0438\u043d\u0433 \u0456 \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a",
+    }
+    label = labels[self.mode]
+
+    await stats_audit_log(
+      interaction.guild,
+      "\u267b\ufe0f \u041e\u0431\u043d\u0443\u043b\u0435\u043d\u043d\u044f \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430",
+      (
+        f"\u0423\u0447\u0430\u0441\u043d\u0438\u043a: <@{self.user_id}>\n"
+        f"\u041e\u0431\u043d\u0443\u043b\u0435\u043d\u043e: **{label}**\n"
+        f"\u0412\u0438\u043a\u043e\u043d\u0430\u0432/\u043b\u0430: <@{interaction.user.id}>"
+      ),
+      discord.Color.orange(),
+    )
+
+    await interaction.response.edit_message(
+      content=(
+        f"\u2705 \u0414\u043b\u044f <@{self.user_id}> \u043e\u0431\u043d\u0443\u043b\u0435\u043d\u043e **{label}**.\n"
+        "\u0421\u0442\u0430\u0440\u0430 \u0456\u0441\u0442\u043e\u0440\u0456\u044f \u0437\u0430\u043b\u0438\u0448\u0438\u043b\u0430\u0441\u044c \u0443 \u0431\u0430\u0437\u0456. "
+        "\u041d\u0435\u0432\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0439 \u0431\u0430\u043b\u0430\u043d\u0441 \u0443 `/payouts` \u043d\u0435 \u0437\u043c\u0456\u043d\u0435\u043d\u043e."
+      ),
+      embed=None,
+      view=None,
+    )
+
+  @discord.ui.button(
+    label="\u0421\u043a\u0430\u0441\u0443\u0432\u0430\u0442\u0438",
+    emoji="\u21a9\ufe0f",
+    style=discord.ButtonStyle.secondary,
+  )
+  async def cancel(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      embed=build_reset_member_embed(
+        self.guild_id,
+        self.user_id,
+      ),
+      view=ResetMemberMenuView(
+        self.guild_id,
+        self.user_id,
+      ),
+    )
+
+
+class ResetMemberMenuView(discord.ui.View):
+  def __init__(
+    self,
+    guild_id: int,
+    user_id: int,
+  ):
+    super().__init__(timeout=180)
+    self.guild_id = guild_id
+    self.user_id = user_id
+
+  async def open_confirm(
+    self,
+    interaction: discord.Interaction,
+    mode: str,
+    text: str,
+  ):
+    await interaction.response.edit_message(
+      content=(
+        f"\u26a0\ufe0f {text} \u0434\u043b\u044f <@{self.user_id}>?\n"
+        "\u0406\u0441\u0442\u043e\u0440\u0456\u044f \u043d\u0435 \u0432\u0438\u0434\u0430\u043b\u044f\u0454\u0442\u044c\u0441\u044f."
+      ),
+      embed=None,
+      view=ResetMemberConfirmView(
+        self.guild_id,
+        self.user_id,
+        mode,
+      ),
+    )
+
+  @discord.ui.button(
+    label="\u0420\u0435\u0439\u0442\u0438\u043d\u0433",
+    emoji="\U0001f3c6",
+    style=discord.ButtonStyle.primary,
+  )
+  async def rating(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await self.open_confirm(
+      interaction,
+      "rating",
+      "\u041e\u0431\u043d\u0443\u043b\u0438\u0442\u0438 \u043f\u043e\u0442\u043e\u0447\u043d\u0438\u0439 \u0440\u0435\u0439\u0442\u0438\u043d\u0433",
+    )
+
+  @discord.ui.button(
+    label="\u0417\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a",
+    emoji="\U0001f4b0",
+    style=discord.ButtonStyle.primary,
+  )
+  async def earnings(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await self.open_confirm(
+      interaction,
+      "earnings",
+      "\u041e\u0431\u043d\u0443\u043b\u0438\u0442\u0438 \u043f\u043e\u0442\u043e\u0447\u043d\u0438\u0439 \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a",
+    )
+
+  @discord.ui.button(
+    label="\u0412\u0441\u0435",
+    emoji="\u267b\ufe0f",
+    style=discord.ButtonStyle.danger,
+  )
+  async def all_stats(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await self.open_confirm(
+      interaction,
+      "all",
+      "\u041e\u0431\u043d\u0443\u043b\u0438\u0442\u0438 \u0440\u0435\u0439\u0442\u0438\u043d\u0433 \u0456 \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a",
+    )
+
+
+
 def register_commands(bot: commands.Bot):
+  @bot.tree.command(
+    name="reset-member",
+    description="\u041e\u0431\u043d\u0443\u043b\u0438\u0442\u0438 \u0440\u0435\u0439\u0442\u0438\u043d\u0433 \u0430\u0431\u043e \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a \u043e\u043a\u0440\u0435\u043c\u043e\u0433\u043e \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430",
+  )
+  @app_commands.describe(
+    member="\u0423\u0447\u0430\u0441\u043d\u0438\u043a, \u044f\u043a\u043e\u043c\u0443 \u0442\u0440\u0435\u0431\u0430 \u043f\u043e\u0447\u0430\u0442\u0438 \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0443 \u0437 \u043d\u0443\u043b\u044f",
+  )
+  async def reset_member(
+    interaction: discord.Interaction,
+    member: discord.Member,
+  ):
+    if (
+      not isinstance(interaction.user, discord.Member)
+      or not management_member(interaction.user)
+    ):
+      await interaction.response.send_message(
+        "\u274c \u041a\u043e\u043c\u0430\u043d\u0434\u0430 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u0443.",
+        ephemeral=True,
+      )
+      return
+
+    if member.bot:
+      await interaction.response.send_message(
+        "\u274c \u0414\u043b\u044f \u0431\u043e\u0442\u0456\u0432 \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u043d\u0435 \u043e\u0431\u043d\u0443\u043b\u044e\u0454\u0442\u044c\u0441\u044f.",
+        ephemeral=True,
+      )
+      return
+
+    await interaction.response.send_message(
+      embed=build_reset_member_embed(
+        interaction.guild_id,
+        member.id,
+      ),
+      view=ResetMemberMenuView(
+        interaction.guild_id,
+        member.id,
+      ),
+      ephemeral=True,
+    )
+
+
   @bot.tree.command(
     name="leaderboard-settings",
     description="\u041d\u0430\u043b\u0430\u0448\u0442\u0443\u0432\u0430\u0442\u0438 \u0440\u043e\u043b\u0456 \u043e\u0441\u043d\u043e\u0432\u043d\u043e\u0433\u043e \u0441\u043a\u043b\u0430\u0434\u0443",

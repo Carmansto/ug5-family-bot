@@ -159,6 +159,47 @@ class Database:
     """)
 
     self.conn.execute("""
+    CREATE TABLE IF NOT EXISTS member_resets (
+      guild_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      rating_reset_at TEXT,
+      earnings_reset_at TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (guild_id, user_id)
+    )
+    """)
+
+    self.conn.execute("""
+    CREATE TABLE IF NOT EXISTS storage_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id INTEGER NOT NULL,
+      name TEXT COLLATE NOCASE NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 0,
+      unit TEXT NOT NULL DEFAULT '\u0448\u0442.',
+      active INTEGER NOT NULL DEFAULT 1,
+      created_by INTEGER,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(guild_id, name)
+    )
+    """)
+
+    self.conn.execute("""
+    CREATE TABLE IF NOT EXISTS storage_movements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id INTEGER NOT NULL,
+      item_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      movement_type TEXT NOT NULL,
+      quantity INTEGER NOT NULL,
+      before_quantity INTEGER NOT NULL,
+      after_quantity INTEGER NOT NULL,
+      note TEXT,
+      created_at TEXT NOT NULL
+    )
+    """)
+
+    self.conn.execute("""
     CREATE TABLE IF NOT EXISTS bot_settings (
       guild_id INTEGER NOT NULL,
       key TEXT NOT NULL,
@@ -265,6 +306,22 @@ class Database:
       CREATE INDEX IF NOT EXISTS idx_bonus_awards_period
       ON bonus_awards(period_id)
       """,
+      """
+      CREATE INDEX IF NOT EXISTS idx_member_resets_guild_user
+      ON member_resets(guild_id, user_id)
+      """,
+      """
+      CREATE INDEX IF NOT EXISTS idx_storage_items_guild_active
+      ON storage_items(guild_id, active, name)
+      """,
+      """
+      CREATE INDEX IF NOT EXISTS idx_storage_movements_guild_created
+      ON storage_movements(guild_id, created_at)
+      """,
+      """
+      CREATE INDEX IF NOT EXISTS idx_storage_movements_item_created
+      ON storage_movements(item_id, created_at)
+      """,
     ]
 
     for statement in statements:
@@ -306,6 +363,11 @@ class Database:
       self._create_performance_indexes()
       self._set_schema_version(5)
       version = 5
+
+    if version < 6:
+      self._create_performance_indexes()
+      self._set_schema_version(6)
+      version = 6
 
     return version
 
@@ -1402,6 +1464,437 @@ class Database:
     WHERE guild_id = ?
     ORDER BY month ASC, day ASC, user_id ASC
     """, (guild_id,)).fetchall()
+
+
+
+  # ----------------------------
+  # Individual member resets
+  # ----------------------------
+
+  def get_member_resets(self, guild_id: int, user_id: int):
+    return self.conn.execute("""
+    SELECT rating_reset_at, earnings_reset_at
+    FROM member_resets
+    WHERE guild_id = ? AND user_id = ?
+    """, (guild_id, user_id)).fetchone()
+
+  def get_member_reset(
+    self,
+    guild_id: int,
+    user_id: int,
+    reset_type: str,
+  ) -> Optional[str]:
+    if reset_type not in ("rating", "earnings"):
+      raise ValueError("Unknown member reset type")
+
+    row = self.get_member_resets(guild_id, user_id)
+    if not row:
+      return None
+
+    column = (
+      "rating_reset_at"
+      if reset_type == "rating"
+      else "earnings_reset_at"
+    )
+    return row[column]
+
+  def set_member_reset(
+    self,
+    guild_id: int,
+    user_id: int,
+    reset_type: str,
+    reset_at: str,
+  ):
+    if reset_type not in ("rating", "earnings"):
+      raise ValueError("Unknown member reset type")
+
+    now = utc_now_iso()
+
+    if reset_type == "rating":
+      self.conn.execute("""
+      INSERT INTO member_resets (
+        guild_id, user_id, rating_reset_at, earnings_reset_at, updated_at
+      )
+      VALUES (?, ?, ?, NULL, ?)
+      ON CONFLICT(guild_id, user_id)
+      DO UPDATE SET
+        rating_reset_at = excluded.rating_reset_at,
+        updated_at = excluded.updated_at
+      """, (guild_id, user_id, reset_at, now))
+    else:
+      self.conn.execute("""
+      INSERT INTO member_resets (
+        guild_id, user_id, rating_reset_at, earnings_reset_at, updated_at
+      )
+      VALUES (?, ?, NULL, ?, ?)
+      ON CONFLICT(guild_id, user_id)
+      DO UPDATE SET
+        earnings_reset_at = excluded.earnings_reset_at,
+        updated_at = excluded.updated_at
+      """, (guild_id, user_id, reset_at, now))
+
+    self.conn.commit()
+
+  # ----------------------------
+  # Family item storage
+  # ----------------------------
+
+  def storage_items_for_guild(
+    self,
+    guild_id: int,
+    active_only: bool = True,
+  ):
+    sql = """
+    SELECT *
+    FROM storage_items
+    WHERE guild_id = ?
+    """
+    params = [guild_id]
+
+    if active_only:
+      sql += " AND active = 1"
+
+    sql += " ORDER BY name COLLATE NOCASE ASC, id ASC"
+    return self.conn.execute(sql, params).fetchall()
+
+  def get_storage_item(
+    self,
+    guild_id: int,
+    item_id: int,
+    active_only: bool = True,
+  ):
+    sql = """
+    SELECT *
+    FROM storage_items
+    WHERE guild_id = ? AND id = ?
+    """
+    params = [guild_id, item_id]
+
+    if active_only:
+      sql += " AND active = 1"
+
+    return self.conn.execute(sql, params).fetchone()
+
+  def search_storage_items(
+    self,
+    guild_id: int,
+    query: str,
+    limit: int = 25,
+  ):
+    needle = query.strip().casefold()
+    if not needle:
+      return []
+
+    rows = self.storage_items_for_guild(
+      guild_id,
+      active_only=True,
+    )
+
+    matched = [
+      row for row in rows
+      if needle in row["name"].casefold()
+    ]
+
+    matched.sort(
+      key=lambda row: (
+        0 if row["name"].casefold().startswith(needle) else 1,
+        row["name"].casefold(),
+        row["id"],
+      )
+    )
+    return matched[:limit]
+
+  def create_storage_item(
+    self,
+    guild_id: int,
+    name: str,
+    quantity: int,
+    unit: str,
+    created_by: int,
+  ) -> int:
+    clean_name = " ".join(name.strip().split())
+    clean_unit = unit.strip() or "\u0448\u0442."
+
+    if not clean_name:
+      raise ValueError("\u041d\u0430\u0437\u0432\u0430 \u043f\u0440\u0435\u0434\u043c\u0435\u0442\u0430 \u043f\u043e\u0440\u043e\u0436\u043d\u044f.")
+    if quantity < 0:
+      raise ValueError("\u041f\u043e\u0447\u0430\u0442\u043a\u043e\u0432\u0430 \u043a\u0456\u043b\u044c\u043a\u0456\u0441\u0442\u044c \u043d\u0435 \u043c\u043e\u0436\u0435 \u0431\u0443\u0442\u0438 \u0432\u0456\u0434'\u0454\u043c\u043d\u043e\u044e.")
+
+    existing = next(
+      (
+        row
+        for row in self.storage_items_for_guild(
+          guild_id,
+          active_only=False,
+        )
+        if row["name"].casefold() == clean_name.casefold()
+      ),
+      None,
+    )
+
+    now = utc_now_iso()
+
+    try:
+      self.conn.execute("BEGIN IMMEDIATE")
+
+      if existing:
+        if existing["active"]:
+          raise ValueError("\u0422\u0430\u043a\u0438\u0439 \u043f\u0440\u0435\u0434\u043c\u0435\u0442 \u0443\u0436\u0435 \u0454 \u043d\u0430 \u0441\u043a\u043b\u0430\u0434\u0456.")
+
+        self.conn.execute("""
+        UPDATE storage_items
+        SET active = 1,
+          quantity = ?,
+          unit = ?,
+          created_by = ?,
+          updated_at = ?
+        WHERE id = ?
+        """, (
+          quantity,
+          clean_unit,
+          created_by,
+          now,
+          existing["id"],
+        ))
+        item_id = int(existing["id"])
+      else:
+        cur = self.conn.execute("""
+        INSERT INTO storage_items (
+          guild_id, name, quantity, unit, active,
+          created_by, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+        """, (
+          guild_id,
+          clean_name,
+          quantity,
+          clean_unit,
+          created_by,
+          now,
+          now,
+        ))
+        item_id = int(cur.lastrowid)
+
+      if quantity > 0:
+        self.conn.execute("""
+        INSERT INTO storage_movements (
+          guild_id, item_id, user_id, movement_type,
+          quantity, before_quantity, after_quantity,
+          note, created_at
+        )
+        VALUES (?, ?, ?, 'ADD', ?, 0, ?, ?, ?)
+        """, (
+          guild_id,
+          item_id,
+          created_by,
+          quantity,
+          quantity,
+          "\u041f\u043e\u0447\u0430\u0442\u043a\u043e\u0432\u0438\u0439 \u0437\u0430\u043b\u0438\u0448\u043e\u043a",
+          now,
+        ))
+
+      self.conn.commit()
+      return item_id
+    except Exception:
+      self.conn.rollback()
+      raise
+
+  def rename_storage_item(
+    self,
+    guild_id: int,
+    item_id: int,
+    new_name: str,
+  ):
+    clean_name = " ".join(new_name.strip().split())
+    if not clean_name:
+      raise ValueError("\u041d\u0430\u0437\u0432\u0430 \u043f\u0440\u0435\u0434\u043c\u0435\u0442\u0430 \u043f\u043e\u0440\u043e\u0436\u043d\u044f.")
+
+    duplicate = next(
+      (
+        row
+        for row in self.storage_items_for_guild(
+          guild_id,
+          active_only=False,
+        )
+        if row["id"] != item_id
+        and row["name"].casefold() == clean_name.casefold()
+      ),
+      None,
+    )
+
+    if duplicate:
+      raise ValueError("\u041f\u0440\u0435\u0434\u043c\u0435\u0442 \u0437 \u0442\u0430\u043a\u043e\u044e \u043d\u0430\u0437\u0432\u043e\u044e \u0432\u0436\u0435 \u0456\u0441\u043d\u0443\u0454.")
+
+    cur = self.conn.execute("""
+    UPDATE storage_items
+    SET name = ?, updated_at = ?
+    WHERE guild_id = ? AND id = ? AND active = 1
+    """, (
+      clean_name,
+      utc_now_iso(),
+      guild_id,
+      item_id,
+    ))
+
+    if cur.rowcount == 0:
+      raise ValueError("\u041f\u0440\u0435\u0434\u043c\u0435\u0442 \u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u043e.")
+
+    self.conn.commit()
+
+  def archive_storage_item(
+    self,
+    guild_id: int,
+    item_id: int,
+  ):
+    cur = self.conn.execute("""
+    UPDATE storage_items
+    SET active = 0, updated_at = ?
+    WHERE guild_id = ? AND id = ? AND active = 1
+    """, (
+      utc_now_iso(),
+      guild_id,
+      item_id,
+    ))
+
+    if cur.rowcount == 0:
+      raise ValueError("\u041f\u0440\u0435\u0434\u043c\u0435\u0442 \u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u043e.")
+
+    self.conn.commit()
+
+  def change_storage_quantity(
+    self,
+    guild_id: int,
+    item_id: int,
+    user_id: int,
+    movement_type: str,
+    quantity: int,
+    note: Optional[str] = None,
+  ):
+    if movement_type not in ("ADD", "TAKE"):
+      raise ValueError("\u041d\u0435\u0432\u0456\u0434\u043e\u043c\u0438\u0439 \u0442\u0438\u043f \u043e\u043f\u0435\u0440\u0430\u0446\u0456\u0457.")
+    if quantity <= 0:
+      raise ValueError("\u041a\u0456\u043b\u044c\u043a\u0456\u0441\u0442\u044c \u043c\u0430\u0454 \u0431\u0443\u0442\u0438 \u0431\u0456\u043b\u044c\u0448\u043e\u044e \u0437\u0430 0.")
+
+    try:
+      self.conn.execute("BEGIN IMMEDIATE")
+
+      row = self.conn.execute("""
+      SELECT *
+      FROM storage_items
+      WHERE guild_id = ? AND id = ? AND active = 1
+      """, (guild_id, item_id)).fetchone()
+
+      if not row:
+        raise ValueError("\u041f\u0440\u0435\u0434\u043c\u0435\u0442 \u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u043e.")
+
+      before = int(row["quantity"])
+
+      if movement_type == "TAKE":
+        if quantity > before:
+          raise ValueError(
+            f"\u041d\u0430 \u0441\u043a\u043b\u0430\u0434\u0456 \u043b\u0438\u0448\u0435 {before} {row['unit']}."
+          )
+        after = before - quantity
+      else:
+        after = before + quantity
+
+      now = utc_now_iso()
+
+      self.conn.execute("""
+      UPDATE storage_items
+      SET quantity = ?, updated_at = ?
+      WHERE id = ?
+      """, (after, now, item_id))
+
+      self.conn.execute("""
+      INSERT INTO storage_movements (
+        guild_id, item_id, user_id, movement_type,
+        quantity, before_quantity, after_quantity,
+        note, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      """, (
+        guild_id,
+        item_id,
+        user_id,
+        movement_type,
+        quantity,
+        before,
+        after,
+        (note.strip() if note and note.strip() else None),
+        now,
+      ))
+
+      self.conn.commit()
+      return {
+        "before": before,
+        "after": after,
+        "item_name": row["name"],
+        "unit": row["unit"],
+      }
+    except Exception:
+      self.conn.rollback()
+      raise
+
+  def latest_storage_movement(
+    self,
+    guild_id: int,
+    item_id: Optional[int] = None,
+  ):
+    sql = """
+    SELECT
+      sm.*,
+      si.name AS item_name,
+      si.unit AS item_unit
+    FROM storage_movements sm
+    JOIN storage_items si ON si.id = sm.item_id
+    WHERE sm.guild_id = ?
+    """
+    params = [guild_id]
+
+    if item_id is not None:
+      sql += " AND sm.item_id = ?"
+      params.append(item_id)
+
+    sql += " ORDER BY sm.id DESC LIMIT 1"
+    return self.conn.execute(sql, params).fetchone()
+
+  def storage_movements(
+    self,
+    guild_id: int,
+    item_id: Optional[int] = None,
+    limit: int = 20,
+  ):
+    sql = """
+    SELECT
+      sm.*,
+      si.name AS item_name,
+      si.unit AS item_unit
+    FROM storage_movements sm
+    JOIN storage_items si ON si.id = sm.item_id
+    WHERE sm.guild_id = ?
+    """
+    params = [guild_id]
+
+    if item_id is not None:
+      sql += " AND sm.item_id = ?"
+      params.append(item_id)
+
+    sql += " ORDER BY sm.id DESC LIMIT ?"
+    params.append(limit)
+    return self.conn.execute(sql, params).fetchall()
+
+  def storage_summary(self, guild_id: int):
+    count_row = self.conn.execute("""
+    SELECT COUNT(*) AS cnt
+    FROM storage_items
+    WHERE guild_id = ? AND active = 1
+    """, (guild_id,)).fetchone()
+
+    return {
+      "positions": int(count_row["cnt"] or 0),
+      "latest": self.latest_storage_movement(guild_id),
+    }
 
 
   def get_setting(self, guild_id: int, key: str) -> Optional[str]:

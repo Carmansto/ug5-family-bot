@@ -20,6 +20,8 @@ from utils import *
 
 from contracts import audit_log
 
+_bonus_bot = None
+
 BONUS_SETTING_START = "bonus_period_start_at"
 
 BONUS_SETTING_THRESHOLDS = "bonus_thresholds"
@@ -288,9 +290,10 @@ def bonus_allocations(
   return result
 
 
-def bonus_preview_data(
+async def bonus_preview_data(
   guild_id: int,
   end_at: Optional[str] = None,
+  guild: Optional[discord.Guild] = None,
 ):
   start_at = bonus_ensure_start(guild_id)
   end_at = end_at or utc_now_iso()
@@ -310,7 +313,20 @@ def bonus_preview_data(
     end_at,
   )
 
-  top5 = users[:5]
+  # Match the configured main-roster leaderboard: any selected role qualifies.
+  # Do NOT default to all members when no roles are configured.
+  from stats import get_leaderboard_role_ids
+  role_ids = set(get_leaderboard_role_ids(guild_id))
+  guild = guild or (_bonus_bot.get_guild(guild_id) if _bonus_bot else None)
+  qualified = []
+  if guild is not None and role_ids:
+    valid_roles = {rid for rid in role_ids if guild.get_role(rid) is not None}
+    for uid in users:
+      member = await fetch_member_safe(guild, uid)
+      if member is not None and valid_roles.intersection(role.id for role in member.roles):
+        qualified.append(uid)
+
+  top5 = qualified[:5]
   level, pool_cents = bonus_reached_level(
     family_cents,
     thresholds,
@@ -359,11 +375,11 @@ def bonus_period_text(
   return f"{start_at} \u2014 {end_at}"
 
 
-def build_bonus_preview_embed(
+async def build_bonus_preview_embed(
   guild_id: int,
   end_at: Optional[str] = None,
 ) -> discord.Embed:
-  data = bonus_preview_data(guild_id, end_at)
+  data = await bonus_preview_data(guild_id, end_at)
 
   level_text = (
     str(data["level"])
@@ -386,6 +402,15 @@ def build_bonus_preview_embed(
     embed.add_field(
       name="\u26a0\ufe0f \u041d\u0430\u043b\u0430\u0448\u0442\u0443\u0432\u0430\u043d\u043d\u044f \u043d\u0435 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0456",
       value="\u0417\u0430\u0434\u0430\u0439 3 \u043f\u043e\u0440\u043e\u0433\u0438/\u0444\u043e\u043d\u0434\u0438 \u0442\u0430 \u0440\u043e\u0437\u043f\u043e\u0434\u0456\u043b \u0422\u041e\u041f-5.",
+      inline=False,
+    )
+
+  from stats import get_leaderboard_role_ids
+  selected_roles = get_leaderboard_role_ids(guild_id)
+  if not selected_roles:
+    embed.add_field(
+      name="\u26a0\ufe0f \u0420\u043e\u043b\u0456 \u0434\u043b\u044f \u043f\u0440\u0435\u043c\u0456\u044e\u0432\u0430\u043d\u043d\u044f",
+      value="\u041d\u0430\u043b\u0430\u0448\u0442\u0443\u0439\u0442\u0435 \u0440\u043e\u043b\u0456 \u0443 `/leaderboard-settings`.",
       inline=False,
     )
 
@@ -810,6 +835,9 @@ async def close_bonus_period(
   end_local: Optional[datetime] = None,
   bot_instance: Optional[commands.Bot] = None,
 ):
+  from stats import get_leaderboard_role_ids
+  if not get_leaderboard_role_ids(guild.id):
+    raise ValueError("\u0414\u043b\u044f \u043f\u0440\u0435\u043c\u0456\u0439 \u0441\u043f\u043e\u0447\u0430\u0442\u043a\u0443 \u043e\u0431\u0435\u0440\u0456\u0442\u044c \u0440\u043e\u043b\u0456 \u0432 `/leaderboard-settings`.")
   if not bonus_config_ready(guild.id):
     raise ValueError(
       "\u0421\u043f\u043e\u0447\u0430\u0442\u043a\u0443 \u043d\u0430\u043b\u0430\u0448\u0442\u0443\u0439 3 \u043f\u043e\u0440\u043e\u0433\u0438 \u0442\u0430 \u0440\u043e\u0437\u043f\u043e\u0434\u0456\u043b \u0422\u041e\u041f-5."
@@ -847,9 +875,10 @@ async def close_bonus_period(
       "\u041a\u0456\u043d\u0435\u0446\u044c \u043f\u0435\u0440\u0456\u043e\u0434\u0443 \u043c\u0430\u0454 \u0431\u0443\u0442\u0438 \u043f\u0456\u0437\u043d\u0456\u0448\u0435 \u0437\u0430 \u0439\u043e\u0433\u043e \u043f\u043e\u0447\u0430\u0442\u043e\u043a."
     )
 
-  data = bonus_preview_data(
+  data = await bonus_preview_data(
     guild.id,
     end_at,
+    guild=guild,
   )
 
   awards = [
@@ -1740,8 +1769,9 @@ class BonusPanelView(discord.ui.View):
     interaction: discord.Interaction,
     button: discord.ui.Button,
   ):
-    await interaction.response.edit_message(
-      embed=build_bonus_preview_embed(
+    await interaction.response.defer()
+    await interaction.edit_original_response(
+      embed=await build_bonus_preview_embed(
         self.guild_id
       ),
       view=BonusBackView(
@@ -1772,8 +1802,9 @@ class BonusPanelView(discord.ui.View):
       )
       return
 
-    await interaction.response.edit_message(
-      embed=build_bonus_preview_embed(
+    await interaction.response.defer()
+    await interaction.edit_original_response(
+      embed=await build_bonus_preview_embed(
         self.guild_id
       ),
       view=BonusCloseConfirmView(
@@ -1937,6 +1968,8 @@ async def maybe_auto_close_bonus(
 
 
 def register_commands(bot: commands.Bot):
+  global _bonus_bot
+  _bonus_bot = bot
   @bot.tree.command(
     name="premii",
     description="\u041f\u0430\u043d\u0435\u043b\u044c \u043f\u0440\u0435\u043c\u0456\u044e\u0432\u0430\u043d\u043d\u044f \u0441\u0456\u043c'\u0457",

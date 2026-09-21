@@ -1,11 +1,12 @@
 
+from datetime import datetime
 from typing import Optional
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from config import GUILD_ID, STORAGE_CHANNEL_ID
+from config import GUILD_ID, LOCAL_TZ, STORAGE_CHANNEL_ID
 from database import db
 from utils import (
   iso_to_unix,
@@ -37,6 +38,14 @@ def parse_storage_quantity(raw: str, allow_zero: bool = False) -> int:
     raise ValueError("\u041a\u0456\u043b\u044c\u043a\u0456\u0441\u0442\u044c \u043c\u0430\u0454 \u0431\u0443\u0442\u0438 \u0431\u0456\u043b\u044c\u0448\u043e\u044e \u0437\u0430 0.")
 
   return value
+
+
+def format_storage_time(value: str) -> str:
+  """Show the recorded local date/time instead of a changing relative time."""
+  timestamp = iso_to_unix(value)
+  if timestamp is None:
+    return value
+  return datetime.fromtimestamp(timestamp, LOCAL_TZ).strftime("%d.%m.%Y %H:%M")
 
 
 def storage_channel_id_for_guild(guild_id: int) -> int:
@@ -79,8 +88,7 @@ def storage_panel_embed(guild_id: int) -> discord.Embed:
 
   if latest:
     action = "\U0001f4e5 \u0434\u043e\u0434\u0430\u0432" if latest["movement_type"] == "ADD" else "\U0001f4e4 \u0432\u0437\u044f\u0432"
-    ts = iso_to_unix(latest["created_at"])
-    when = f"<t:{ts}:R>" if ts else latest["created_at"]
+    when = format_storage_time(latest["created_at"])
 
     description.extend([
       "",
@@ -125,8 +133,7 @@ def storage_item_embed(guild_id: int, item_id: int) -> discord.Embed:
 
   if latest:
     action = "\U0001f4e5 \u0414\u043e\u0434\u0430\u043d\u043e" if latest["movement_type"] == "ADD" else "\U0001f4e4 \u0412\u0437\u044f\u0442\u043e"
-    ts = iso_to_unix(latest["created_at"])
-    when = f"<t:{ts}:R>" if ts else latest["created_at"]
+    when = format_storage_time(latest["created_at"])
 
     description.extend([
       "",
@@ -183,8 +190,7 @@ def storage_history_embed(
   for row in rows:
     emoji = "\U0001f4e5" if row["movement_type"] == "ADD" else "\U0001f4e4"
     sign = "+" if row["movement_type"] == "ADD" else "\u2212"
-    ts = iso_to_unix(row["created_at"])
-    when = f"<t:{ts}:R>" if ts else row["created_at"]
+    when = format_storage_time(row["created_at"])
     note = f" \u2022 {row['note']}" if row["note"] else ""
 
     lines.append(
@@ -253,6 +259,7 @@ async def install_storage_panel(
   bot_instance: commands.Bot,
   guild: discord.Guild,
   channel: discord.TextChannel,
+  move_to_bottom: bool = False,
 ):
   old_message_id = db.get_setting(
     guild.id,
@@ -264,18 +271,42 @@ async def install_storage_panel(
       old_message = await channel.fetch_message(
         int(old_message_id)
       )
+    except discord.NotFound:
+      old_message = None
+    except (discord.Forbidden, discord.HTTPException):
+      # Access errors must not silently create duplicate panels.
+      raise
+
+    if old_message is not None and not move_to_bottom:
       await old_message.edit(
         embed=storage_panel_embed(guild.id),
         view=StoragePanelView(),
       )
-      db.set_setting(
-        guild.id,
-        "storage_channel_id",
-        str(channel.id),
-      )
+      db.set_setting(guild.id, "storage_channel_id", str(channel.id))
       return old_message
-    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-      pass
+
+    if old_message is not None:
+      # Send the replacement first: if sending fails, the old panel remains.
+      new_message = await channel.send(
+        embed=storage_panel_embed(guild.id),
+        view=StoragePanelView(),
+      )
+      try:
+        await old_message.delete()
+      except discord.NotFound:
+        # Someone removed the old panel after it was fetched.
+        pass
+      except discord.DiscordException:
+        # Do not leave a duplicate panel when we cannot remove the old one.
+        try:
+          await new_message.delete()
+        except discord.DiscordException:
+          pass
+        raise
+
+      db.set_setting(guild.id, "storage_channel_id", str(channel.id))
+      db.set_setting(guild.id, "storage_panel_message_id", str(new_message.id))
+      return new_message
 
   message = await channel.send(
     embed=storage_panel_embed(guild.id),
@@ -1372,6 +1403,7 @@ def register_commands(bot: commands.Bot):
         bot,
         guild,
         channel,
+        move_to_bottom=True,
       )
 
       await interaction.followup.send(

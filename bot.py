@@ -88,10 +88,34 @@ async def scheduled_posts_loop(bot_instance: commands.Bot):
     await asyncio.sleep(30)
 
 
+class AgostoCommandTree(discord.app_commands.CommandTree):
+  async def interaction_check(self, interaction: discord.Interaction) -> bool:
+    # Hard allow-list: commands can run only inside the configured Agosto guild.
+    if interaction.guild_id != GUILD_ID:
+      try:
+        if not interaction.response.is_done():
+          await interaction.response.send_message(
+            "\U0001f512 This bot is private and works only on the Agosto server.",
+            ephemeral=True,
+          )
+      except discord.DiscordException:
+        pass
+      print(
+        "[SECURITY] Blocked interaction "
+        f"guild_id={interaction.guild_id} user_id={interaction.user.id}"
+      )
+      return False
+    return True
+
+
 class ContractBot(commands.Bot):
   def __init__(self):
     intents = discord.Intents.default()
-    super().__init__(command_prefix="!", intents=intents)
+    super().__init__(
+      command_prefix="!",
+      intents=intents,
+      tree_cls=AgostoCommandTree,
+    )
     self._unpaid_refreshed = False
     self._scheduled_posts_task = None
     self._commands_registered = False
@@ -117,17 +141,55 @@ class ContractBot(commands.Bot):
     if self._scheduled_posts_task is None:
       self._scheduled_posts_task = asyncio.create_task(scheduled_posts_loop(self))
 
-    if GUILD_ID:
-      guild = discord.Object(id=GUILD_ID)
-      self.tree.copy_global_to(guild=guild)
-      await self.tree.sync(guild=guild)
-      print(f"[SYNC] Commands synced to guild {GUILD_ID}")
-    else:
-      await self.tree.sync()
-      print("[SYNC] Global commands synced")
+    guild = discord.Object(id=GUILD_ID)
+    self.tree.copy_global_to(guild=guild)
+    await self.tree.sync(guild=guild)
+    print(f"[SYNC] Commands synced only to allowed guild {GUILD_ID}")
+
+    # Remove any global commands left from an older deployment.
+    # The guild-specific copy above remains available on Agosto.
+    self.tree.clear_commands(guild=None)
+    await self.tree.sync()
+    print("[SECURITY] Global application commands cleared")
+
+  async def on_guild_join(self, guild: discord.Guild):
+    if guild.id == GUILD_ID:
+      print(f"[SECURITY] Allowed guild joined: {guild.name} ({guild.id})")
+      return
+
+    print(f"[SECURITY] Unauthorized guild rejected: {guild.name} ({guild.id})")
+    try:
+      await guild.leave()
+      print(f"[SECURITY] Left unauthorized guild {guild.id}")
+    except discord.DiscordException as exc:
+      print(f"[SECURITY] Could not leave unauthorized guild {guild.id}: {exc}")
+
+  async def _leave_unauthorized_guilds(self):
+    for guild in list(self.guilds):
+      if guild.id == GUILD_ID:
+        continue
+      print(
+        f"[SECURITY] Found unauthorized guild on startup: "
+        f"{guild.name} ({guild.id})"
+      )
+      try:
+        await guild.leave()
+        print(f"[SECURITY] Left unauthorized guild {guild.id}")
+      except discord.DiscordException as exc:
+        print(f"[SECURITY] Could not leave unauthorized guild {guild.id}: {exc}")
 
   async def on_ready(self):
     print(f"[READY] Logged in as {self.user} ({self.user.id})")
+    await self._leave_unauthorized_guilds()
+
+    allowed_guild = self.get_guild(GUILD_ID)
+    if allowed_guild is None:
+      print(f"[SECURITY] WARNING: allowed guild {GUILD_ID} is not connected")
+    else:
+      print(
+        f"[SECURITY] Guild lock active: "
+        f"{allowed_guild.name} ({allowed_guild.id})"
+      )
     print(
       "[AUTO] "
       f"rating_channel={RATING_CHANNEL_ID or 'disabled'} "

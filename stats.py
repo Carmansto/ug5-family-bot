@@ -18,6 +18,31 @@ from config import *
 from database import db
 from utils import *
 
+RATING_RULE_V2_SETTING = "rating_rule_v2_at"
+
+
+def rating_points_for_row(guild_id: int, row) -> int:
+  """Use legacy rating until /rating-v2 is activated; then use V2 for newer contracts."""
+  activated_at = db.get_setting(guild_id, RATING_RULE_V2_SETTING)
+  if not activated_at:
+    return 10
+
+  created_at = row["created_at"]
+  try:
+    created_dt = datetime.fromisoformat(created_at)
+    activated_dt = datetime.fromisoformat(activated_at)
+    if created_dt.tzinfo is None:
+      created_dt = created_dt.replace(tzinfo=timezone.utc)
+    if activated_dt.tzinfo is None:
+      activated_dt = activated_dt.replace(tzinfo=timezone.utc)
+    if created_dt >= activated_dt:
+      return rating_total_points_v2(row["payment_mode"], len(parse_ids(row["participant_ids"])))
+  except Exception:
+    pass
+
+  return 10
+
+
 
 def _later_reset_at(*values: Optional[str]) -> Optional[str]:
   candidates = []
@@ -107,7 +132,7 @@ def rating_data_for_guild(guild_id: int):
     if not members:
       continue
 
-    share = Fraction(10, len(members))
+    share = Fraction(rating_points_for_row(guild_id, row), len(members))
 
     for uid in members:
       if uid not in reset_cache:
@@ -144,7 +169,7 @@ def rating_data_for_guild_all_time(guild_id: int):
     if not members:
       continue
 
-    share = Fraction(10, len(members))
+    share = Fraction(rating_points_for_row(guild_id, row), len(members))
     for uid in members:
       points[uid] += share
       participations[uid] += 1
@@ -1492,7 +1517,7 @@ def build_period_stats_embed(
     if not members:
       continue
 
-    share = Fraction(10, len(members))
+    share = Fraction(rating_points_for_row(guild_id, row), len(members))
 
     for uid in members:
       rating_points[uid] += share
@@ -2412,6 +2437,41 @@ class ResetMemberMenuView(discord.ui.View):
 
 
 def register_commands(bot: commands.Bot):
+  @bot.tree.command(
+    name="rating-v2",
+    description="Увімкнути нове правило рейтингу На фаму x1.5/x2 з цього моменту",
+  )
+  async def rating_v2(interaction: discord.Interaction):
+    if (
+      not isinstance(interaction.user, discord.Member)
+      or not management_member(interaction.user)
+    ):
+      await interaction.response.send_message(
+        "❌ Команда доступна тільки керівництву.",
+        ephemeral=True,
+      )
+      return
+
+    current = db.get_setting(interaction.guild_id, RATING_RULE_V2_SETTING)
+    if current:
+      await interaction.response.send_message(
+        f"ℹ️ Нове правило рейтингу вже увімкнене з <t:{iso_to_unix(current)}:F>. Повторно перемикати його не потрібно.",
+        ephemeral=True,
+      )
+      return
+
+    activated_at = utc_now_iso()
+    db.set_setting(interaction.guild_id, RATING_RULE_V2_SETTING, activated_at)
+
+    await interaction.response.send_message(
+      "✅ Нове правило рейтингу увімкнено з цього моменту.\n\n"
+      "• звичайний контракт — 10 балів\n"
+      "• 🏠 На фаму, 1–3 виконавці — 15 балів\n"
+      "• 🏠 На фаму, 4+ виконавці — 20 балів\n\n"
+      f"Старі контракти до <t:{iso_to_unix(activated_at)}:F> не перераховуються.",
+      ephemeral=False,
+    )
+
   @bot.tree.command(
     name="reset-member",
     description="\u041e\u0431\u043d\u0443\u043b\u0438\u0442\u0438 \u0440\u0435\u0439\u0442\u0438\u043d\u0433 \u0430\u0431\u043e \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a \u043e\u043a\u0440\u0435\u043c\u043e\u0433\u043e \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430",

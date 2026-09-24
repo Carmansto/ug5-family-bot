@@ -200,6 +200,33 @@ class Database:
     """)
 
     self.conn.execute("""
+    CREATE TABLE IF NOT EXISTS lotteries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, channel_id INTEGER NOT NULL, message_id INTEGER, creator_id INTEGER NOT NULL,
+      name TEXT NOT NULL, prize_type TEXT NOT NULL, prize_cents INTEGER NOT NULL DEFAULT 0, prize_description TEXT, ticket_price_cents INTEGER NOT NULL,
+      total_tickets INTEGER NOT NULL, ticket_limit_per_user INTEGER NOT NULL DEFAULT 0, winner_count INTEGER NOT NULL DEFAULT 1, ends_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, drawn_at TEXT
+    )
+    """)
+    self.conn.execute("""
+    CREATE TABLE IF NOT EXISTS lottery_tickets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, lottery_id INTEGER NOT NULL, number INTEGER NOT NULL, user_id INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'reserved',
+      reserved_at TEXT NOT NULL, confirmed_at TEXT, verified_by INTEGER, UNIQUE(lottery_id, number)
+    )
+    """)
+    self.conn.execute("""
+    CREATE TABLE IF NOT EXISTS lottery_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, lottery_id INTEGER NOT NULL, user_id INTEGER NOT NULL, numbers_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'reserved',
+      created_at TEXT NOT NULL, verified_at TEXT, verified_by INTEGER, note TEXT
+    )
+    """)
+    self.conn.execute("""
+    CREATE TABLE IF NOT EXISTS lottery_payouts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, user_id INTEGER NOT NULL, lottery_id INTEGER NOT NULL, ticket_number INTEGER NOT NULL,
+      amount_cents INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, paid_at TEXT, paid_by INTEGER
+    )
+    """)
+
+    self.conn.execute("""
     CREATE TABLE IF NOT EXISTS bot_settings (
       guild_id INTEGER NOT NULL,
       key TEXT NOT NULL,
@@ -322,6 +349,21 @@ class Database:
       CREATE INDEX IF NOT EXISTS idx_storage_movements_item_created
       ON storage_movements(item_id, created_at)
       """,
+      """
+      CREATE INDEX IF NOT EXISTS idx_lotteries_guild_status ON lotteries(guild_id, status, ends_at)
+      """,
+      """
+      CREATE INDEX IF NOT EXISTS idx_lottery_tickets_lottery_status ON lottery_tickets(lottery_id, status)
+      """,
+      """
+      CREATE INDEX IF NOT EXISTS idx_lottery_tickets_user ON lottery_tickets(lottery_id, user_id, status)
+      """,
+      """
+      CREATE INDEX IF NOT EXISTS idx_lottery_requests_status ON lottery_requests(lottery_id, status)
+      """,
+      """
+      CREATE INDEX IF NOT EXISTS idx_lottery_payouts_user_status ON lottery_payouts(guild_id, user_id, status)
+      """,
     ]
 
     for statement in statements:
@@ -368,6 +410,11 @@ class Database:
       self._create_performance_indexes()
       self._set_schema_version(6)
       version = 6
+
+    if version < 7:
+      self._create_performance_indexes()
+      self._set_schema_version(7)
+      version = 7
 
     return version
 
@@ -1316,10 +1363,16 @@ class Database:
       FROM bonus_awards b
       WHERE b.guild_id = ?
        AND b.status = 'pending'
+
+      UNION ALL
+
+      SELECT l.user_id AS user_id, l.amount_cents AS amount_cents
+      FROM lottery_payouts l
+      WHERE l.guild_id = ? AND l.status = 'pending'
     )
     GROUP BY user_id
     ORDER BY total_cents DESC, user_id ASC
-    """, (guild_id, guild_id)).fetchall()
+    """, (guild_id, guild_id, guild_id)).fetchall()
 
   def pending_payout_items_for_user(self, guild_id: int, user_id: int):
     return self.conn.execute("""
@@ -1339,8 +1392,7 @@ class Database:
       NULL AS rank,
       NULL AS points_text,
       NULL AS note,
-      NULL AS period_start,
-      NULL AS period_end
+      NULL AS period_start, NULL AS period_end, NULL AS lottery_id, NULL AS ticket_number
     FROM payment_accruals a
     JOIN contracts c ON c.id = a.contract_id
     WHERE c.guild_id = ?
@@ -1366,16 +1418,20 @@ class Database:
       b.rank AS rank,
       b.points_text AS points_text,
       b.note AS note,
-      p.start_at AS period_start,
-      p.end_at AS period_end
+      p.start_at AS period_start, p.end_at AS period_end, NULL AS lottery_id, NULL AS ticket_number
     FROM bonus_awards b
     LEFT JOIN bonus_periods p ON p.id = b.period_id
     WHERE b.guild_id = ?
      AND b.user_id = ?
      AND b.status = 'pending'
 
+    UNION ALL
+
+    SELECT 'lottery' AS source_type, l.id AS item_id, l.user_id, l.amount_cents, l.created_at, NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,l.lottery_id,l.ticket_number
+    FROM lottery_payouts l WHERE l.guild_id=? AND l.user_id=? AND l.status='pending'
+
     ORDER BY 5 ASC
-    """, (guild_id, user_id, guild_id, user_id)).fetchall()
+    """, (guild_id, user_id, guild_id, user_id, guild_id, user_id)).fetchall()
 
   def settle_payouts_for_users(
     self,
@@ -1404,6 +1460,7 @@ class Database:
       for row in rows
       if row["source_type"] == "bonus"
     ]
+    lottery_ids = [int(row["item_id"]) for row in rows if row["source_type"] == "lottery"]
 
     now = utc_now_iso()
 
@@ -1437,6 +1494,12 @@ class Database:
           """,
           (now, paid_by, *bonus_ids),
         )
+
+
+
+      if lottery_ids:
+        placeholders = ",".join("?" for _ in lottery_ids)
+        self.conn.execute(f"UPDATE lottery_payouts SET status='paid', paid_at=?, paid_by=? WHERE id IN ({placeholders}) AND status='pending'", (now, paid_by, *lottery_ids))
 
       self.conn.commit()
       return rows
@@ -1896,6 +1959,49 @@ class Database:
       "latest": self.latest_storage_movement(guild_id),
     }
 
+
+  def create_lottery(self, guild_id, channel_id, creator_id, name, prize_type, prize_cents, prize_description, ticket_price_cents, total_tickets, ticket_limit_per_user, winner_count, ends_at):
+    cur=self.conn.execute("INSERT INTO lotteries (guild_id,channel_id,creator_id,name,prize_type,prize_cents,prize_description,ticket_price_cents,total_tickets,ticket_limit_per_user,winner_count,ends_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (guild_id,channel_id,creator_id,name,prize_type,prize_cents,prize_description,ticket_price_cents,total_tickets,ticket_limit_per_user,winner_count,ends_at,utc_now_iso())); self.conn.commit(); return cur.lastrowid
+  def set_lottery_message(self, lottery_id, message_id): self.conn.execute("UPDATE lotteries SET message_id=? WHERE id=?",(message_id,lottery_id)); self.conn.commit()
+  def lottery_request(self, request_id): return self.conn.execute("SELECT r.*,l.name AS lottery_name,l.ticket_price_cents,l.guild_id,l.total_tickets,l.status AS lottery_status FROM lottery_requests r JOIN lotteries l ON l.id=r.lottery_id WHERE r.id=?",(request_id,)).fetchone()
+  def reserve_lottery_tickets(self, lottery_id, user_id, numbers):
+    numbers=sorted(set(int(n) for n in numbers)); row=self.conn.execute("SELECT * FROM lotteries WHERE id=?",(lottery_id,)).fetchone()
+    if not row or row['status']!='active': return False,None,'Продаж лотереї вже завершено.'
+    now=utc_now_iso()
+    try:
+      self.conn.execute('BEGIN IMMEDIATE'); ph=','.join('?' for _ in numbers)
+      existing=self.conn.execute(f"SELECT number FROM lottery_tickets WHERE lottery_id=? AND number IN ({ph})",(lottery_id,*numbers)).fetchall()
+      if existing: self.conn.rollback(); return False,None,'Один або кілька вибраних номерів уже зайняті.'
+      current=self.conn.execute("SELECT COUNT(*) c FROM lottery_tickets WHERE lottery_id=? AND status IN ('reserved','confirmed')",(lottery_id,)).fetchone()['c']
+      if current+len(numbers)>row['total_tickets']: self.conn.rollback(); return False,None,'Вільних квитків недостатньо.'
+      user_count=self.conn.execute("SELECT COUNT(*) c FROM lottery_tickets WHERE lottery_id=? AND user_id=? AND status IN ('reserved','confirmed')",(lottery_id,user_id)).fetchone()['c']
+      if row['ticket_limit_per_user'] and user_count+len(numbers)>row['ticket_limit_per_user']: self.conn.rollback(); return False,None,f"Твій ліміт — {row['ticket_limit_per_user']} квитків."
+      cur=self.conn.execute("INSERT INTO lottery_requests (lottery_id,user_id,numbers_json,status,created_at) VALUES (?,?,?,?,?)",(lottery_id,user_id,json.dumps(numbers),'reserved',now)); rid=cur.lastrowid
+      for n in numbers: self.conn.execute("INSERT INTO lottery_tickets (lottery_id,number,user_id,status,reserved_at) VALUES (?,?,?,?,?)",(lottery_id,n,user_id,'reserved',now))
+      self.conn.commit(); return True,rid,''
+    except Exception: self.conn.rollback(); raise
+  def mark_lottery_payment_pending(self, request_id): self.conn.execute("UPDATE lottery_requests SET status='payment_pending' WHERE id=? AND status='reserved'",(request_id,)); self.conn.commit()
+  def confirm_lottery_request(self, request_id, verified_by):
+    req=self.lottery_request(request_id)
+    if not req: return False
+    nums=json.loads(req['numbers_json']); ph=','.join('?' for _ in nums); now=utc_now_iso()
+    self.conn.execute("UPDATE lottery_requests SET status='confirmed',verified_at=?,verified_by=? WHERE id=? AND status='payment_pending'",(now,verified_by,request_id))
+    self.conn.execute(f"UPDATE lottery_tickets SET status='confirmed',confirmed_at=?,verified_by=? WHERE lottery_id=? AND user_id=? AND number IN ({ph}) AND status='reserved'",(now,verified_by,req['lottery_id'],req['user_id'],*nums)); self.conn.commit(); return True
+  def reject_lottery_request(self, request_id, verified_by, note):
+    req=self.lottery_request(request_id)
+    if not req: return False
+    nums=json.loads(req['numbers_json']); ph=','.join('?' for _ in nums); now=utc_now_iso()
+    self.conn.execute("UPDATE lottery_requests SET status='rejected',verified_at=?,verified_by=?,note=? WHERE id=? AND status IN ('reserved','payment_pending')",(now,verified_by,note,request_id))
+    self.conn.execute(f"UPDATE lottery_tickets SET status='released' WHERE lottery_id=? AND user_id=? AND number IN ({ph}) AND status='reserved'",(req['lottery_id'],req['user_id'],*nums)); self.conn.commit(); return True
+  def pending_lottery_requests(self,guild_id): return self.conn.execute("SELECT r.*,l.name lottery_name,l.ticket_price_cents FROM lottery_requests r JOIN lotteries l ON l.id=r.lottery_id WHERE l.guild_id=? AND r.status='payment_pending' ORDER BY r.created_at",(guild_id,)).fetchall()
+  def active_lotteries(self,guild_id): return self.conn.execute("SELECT * FROM lotteries WHERE guild_id=? AND status='active' ORDER BY id DESC",(guild_id,)).fetchall()
+  def draw_lottery(self,lottery_id,drawn_by):
+    row=self.conn.execute("SELECT * FROM lotteries WHERE id=?",(lottery_id,)).fetchone()
+    if not row or row['status'] not in ('active','finished'): return False,'Лотерея вже завершена.',[]
+    tickets=self.conn.execute("SELECT number FROM lottery_tickets WHERE lottery_id=? AND status='confirmed'",(lottery_id,)).fetchall()
+    if len(tickets)<int(row['winner_count']): return False,'Недостатньо підтверджених квитків для всіх переможців.',[]
+    winners=__import__('random').sample([int(r['number']) for r in tickets],int(row['winner_count'])); self.conn.execute("UPDATE lotteries SET status='drawn',drawn_at=? WHERE id=?",(utc_now_iso(),lottery_id)); self.conn.commit(); return True,'',winners
+  def create_lottery_payout(self,guild_id,user_id,lottery_id,ticket_number,amount_cents): self.conn.execute("INSERT INTO lottery_payouts (guild_id,user_id,lottery_id,ticket_number,amount_cents,created_at) VALUES (?,?,?,?,?,?)",(guild_id,user_id,lottery_id,ticket_number,amount_cents,utc_now_iso())); self.conn.commit()
 
   def get_setting(self, guild_id: int, key: str) -> Optional[str]:
     row = self.conn.execute("""

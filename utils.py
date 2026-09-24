@@ -92,6 +92,31 @@ def ukrainian_sort_key(text: str):
   )
 
 
+def rating_total_points(payment_mode: str | None, performer_count: int) -> int:
+  """Return the legacy total rating points for one completed contract.
+
+  Normal contract: 10 total points.
+  The new "На фаму" multiplier rule is enabled separately by the
+  /rating-v2 command and is applied only to contracts created after
+  the activation timestamp.
+  """
+  if performer_count <= 0:
+    return 0
+
+  return 10
+
+
+def rating_total_points_v2(payment_mode: str | None, performer_count: int) -> int:
+  """Return total rating points under the new Agosto rule."""
+  if performer_count <= 0:
+    return 0
+
+  if (payment_mode or PAYMENT_MODE_NORMAL) == PAYMENT_MODE_LEGACY_FAMILY:
+    return 20 if performer_count >= 4 else 15
+
+  return 10
+
+
 def format_points(value: Fraction) -> str:
   if value.denominator == 1:
     return str(value.numerator)
@@ -422,4 +447,4 @@ async def payout_is_management(
   return bool(member and management_payout_member(member))
 
 
-__all__ = ['PAYMENT_MODE_FAMILY_SHARE', 'PAYMENT_MODE_LEGACY_FAMILY', 'PAYMENT_MODE_NORMAL', 'PAYMENT_MODE_REDISTRIBUTE', 'UA_ALPHABET', 'UA_ORDER', 'calculate_payment', 'calculate_personal_family_contributions', 'can_close_management_payout', 'fetch_member_safe', 'format_cents', 'format_day', 'format_money_dollars', 'format_points', 'format_points_with_word', 'has_leader_role', 'iso_to_unix', 'local_date_from_iso', 'management_member', 'management_payout_member', 'parse_ids', 'parse_money', 'payment_mode_label', 'payment_preview_embed', 'payout_is_management', 'split_payment', 'test_command_user', 'ukrainian_sort_key', 'utc_now_iso']
+__all__ = ['PAYMENT_MODE_FAMILY_SHARE', 'PAYMENT_MODE_LEGACY_FAMILY', 'PAYMENT_MODE_NORMAL', 'PAYMENT_MODE_REDISTRIBUTE', 'UA_ALPHABET', 'UA_ORDER', 'calculate_payment', 'calculate_personal_family_contributions', 'can_close_management_payout', 'fetch_member_safe', 'format_cents', 'format_day', 'format_money_dollars', 'format_points', 'format_points_with_word', 'has_leader_role', 'iso_to_unix', 'local_date_from_iso', 'management_member', 'management_payout_member', 'parse_ids', 'parse_money', 'payment_mode_label', 'payment_preview_embed', 'payout_is_management', 'rating_total_points', 'split_payment', 'test_command_user', 'ukrainian_sort_key', 'utc_now_iso']

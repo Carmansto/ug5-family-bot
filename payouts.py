@@ -151,6 +151,10 @@ async def send_payout_notification(
     row for row in rows
     if row["source_type"] == "bonus"
   ]
+  lottery_rows = [
+    row for row in rows
+    if row["source_type"] == "lottery"
+  ]
 
   total = sum(int(row["amount_cents"]) for row in rows)
   contract_total = sum(int(row["amount_cents"]) for row in contract_rows)
@@ -203,6 +207,14 @@ async def send_payout_notification(
         lines.append(
           f"\u0420\u0443\u0447\u043d\u0430 \u043f\u0440\u0435\u043c\u0456\u044f{note_text}"
         )
+
+  if lottery_rows:
+    lines.extend([
+      "",
+      f"🎟️ ВИГРАШІ ЛОТЕРЕЇ • {format_cents(sum(int(r['amount_cents']) for r in lottery_rows))}",
+    ])
+    for row in lottery_rows:
+      lines.append(f"Квиток #{int(row['ticket_number']):02d} • {format_cents(row['amount_cents'])}")
 
   lines.extend([
     "",

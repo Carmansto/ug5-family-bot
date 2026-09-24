@@ -213,7 +213,7 @@ def bonus_rating_between(
     if not members:
       continue
 
-    share = Fraction(10, len(members))
+    share = Fraction(rating_total_points(row["payment_mode"], len(members)), len(members))
     for uid in members:
       member_reset = db.get_member_reset(
         guild_id,

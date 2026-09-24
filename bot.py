@@ -13,6 +13,8 @@ from config import (
   FAMILY_STATS_HOUR,
   GUILD_ID,
   PAYOUT_THREADS_CHANNEL_ID,
+  LOTTERY_PUBLIC_CHANNEL_ID,
+  LOTTERY_MANAGEMENT_CHANNEL_ID,
   RATING_CHANNEL_ID,
   RATING_EVENING_HOUR,
   RATING_MORNING_HOUR,
@@ -28,6 +30,7 @@ import stats
 import bonuses
 import birthdays
 import storage
+import lottery
 
 
 async def scheduled_posts_loop(bot_instance: commands.Bot):
@@ -72,6 +75,7 @@ async def scheduled_posts_loop(bot_instance: commands.Bot):
         print(f"[BIRTHDAY] Reminder check completed for {today_key}")
 
       await bonuses.maybe_auto_close_bonus(bot_instance, now)
+      await lottery.maybe_finish_expired(bot_instance, now)
 
       if FAMILY_STATS_CHANNEL_ID and now.hour == FAMILY_STATS_HOUR:
         report_day = now.date() - timedelta(days=1)
@@ -136,6 +140,7 @@ class ContractBot(commands.Bot):
       bonuses.register_commands(self)
       birthdays.register_commands(self)
       storage.register_commands(self)
+      lottery.register_commands(self)
       self._commands_registered = True
 
     if self._scheduled_posts_task is None:
@@ -196,6 +201,8 @@ class ContractBot(commands.Bot):
       f"family_stats_channel={FAMILY_STATS_CHANNEL_ID or 'disabled'} "
       f"bonus_results_channel={BONUS_RESULTS_CHANNEL_ID or 'disabled'} "
       f"payout_threads_channel={PAYOUT_THREADS_CHANNEL_ID or 'disabled'} "
+      f"lottery_public_channel={LOTTERY_PUBLIC_CHANNEL_ID or 'disabled'} "
+      f"lottery_management_channel={LOTTERY_MANAGEMENT_CHANNEL_ID or 'disabled'} "
       f"rating_hours={RATING_MORNING_HOUR}/{RATING_EVENING_HOUR} "
       f"family_stats_hour={FAMILY_STATS_HOUR} "
       f"birthday_input={BIRTHDAY_INPUT_CHANNEL_ID or 'disabled'} "
@@ -214,6 +221,13 @@ class ContractBot(commands.Bot):
       await storage.ensure_storage_panel(self)
     except Exception as exc:
       print(f"[STORAGE] Could not ensure panel: {exc}")
+
+    try:
+      lottery.restore_active_views(self)
+      lottery.restore_management_view(self)
+      await lottery.ensure_lottery_channels(self)
+    except Exception as exc:
+      print(f"[LOTTERY] Could not restore/setup lottery panels: {exc}")
 
     if not self._unpaid_refreshed and GUILD_ID:
       self._unpaid_refreshed = True

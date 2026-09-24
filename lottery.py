@@ -126,15 +126,7 @@ class LotteryCreateStep1(discord.ui.Modal, title="Створення лотер�
                 await interaction.response.send_message("❌ Для cash вкажи суму призу, наприклад `2000000`.", ephemeral=True)
                 return
             prize_desc = ""
-        state = {
-            "name": self.name.value.strip(),
-            "prize_type": kind,
-            "prize_cents": prize_cents,
-            "prize_description": prize_desc,
-            "ticket_price_cents": price,
-            "total_tickets": total,
-        }
-        await interaction.response.send_modal(LotteryCreateStep2(state))
+        await interaction.response.send_modal(LotteryCreateStep2(self.state))
 
 
 class LotteryCreateStep2(discord.ui.Modal, title="Створення лотереї • 2/2"):

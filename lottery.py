@@ -1,3 +1,4 @@
+import asyncio
 import json
 import random
 import re
@@ -8,7 +9,11 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from config import GUILD_ID, LOTTERY_PUBLIC_CHANNEL_ID, LOTTERY_MANAGEMENT_CHANNEL_ID
+from config import (
+    GUILD_ID,
+    LOTTERY_PUBLIC_CHANNEL_ID,
+    LOTTERY_MANAGEMENT_CHANNEL_ID,
+)
 from database import db
 from utils import (
     format_cents,
@@ -24,9 +29,63 @@ from contracts import audit_log
 # HELPERS
 # ============================================================
 
+TEMP_MESSAGE_SECONDS = 10
+
+
+async def delete_after(
+    interaction: discord.Interaction,
+    delay: float = TEMP_MESSAGE_SECONDS,
+):
+    """
+    Видаляє оригінальне ephemeral-повідомлення
+    через задану кількість секунд.
+    """
+    await asyncio.sleep(delay)
+
+    try:
+        await interaction.delete_original_response()
+    except (discord.NotFound, discord.HTTPException):
+        pass
+
+
+def schedule_delete(
+    interaction: discord.Interaction,
+    delay: float = TEMP_MESSAGE_SECONDS,
+):
+    """
+    Запускає фонове видалення ephemeral-повідомлення.
+    """
+    asyncio.create_task(
+        delete_after(
+            interaction,
+            delay,
+        )
+    )
+
+
+async def temporary_error(
+    interaction: discord.Interaction,
+    content: str,
+    delay: float = TEMP_MESSAGE_SECONDS,
+):
+    """
+    Тимчасова помилка, яка автоматично зникає.
+    """
+    await interaction.response.send_message(
+        content,
+        ephemeral=True,
+    )
+
+    schedule_delete(
+        interaction,
+        delay,
+    )
+
+
 def parse_duration(raw: str) -> Optional[int]:
     """
     Формати:
+
     2d 12h
     6h
     90m
@@ -40,7 +99,7 @@ def parse_duration(raw: str) -> Optional[int]:
 
     m = re.fullmatch(
         r"(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?",
-        s
+        s,
     )
 
     if not m or not any(m.groups()):
@@ -50,7 +109,11 @@ def parse_duration(raw: str) -> Optional[int]:
     hours = int(m.group(2) or 0)
     mins = int(m.group(3) or 0)
 
-    total = days * 1440 + hours * 60 + mins
+    total = (
+        days * 1440
+        + hours * 60
+        + mins
+    )
 
     return total if total > 0 else None
 
@@ -91,11 +154,13 @@ def lottery_embed(
     confirmed=0,
     winner=None,
 ):
-    total = int(row["total_tickets"])
+    total = int(
+        row["total_tickets"]
+    )
 
     free = max(
         0,
-        total - reserved - confirmed
+        total - reserved - confirmed,
     )
 
     prize = (
@@ -140,7 +205,9 @@ def lottery_embed(
         value=(
             "Безліміт"
             if not row["ticket_limit_per_user"]
-            else str(row["ticket_limit_per_user"])
+            else str(
+                row["ticket_limit_per_user"]
+            )
         ),
         inline=True,
     )
@@ -217,7 +284,11 @@ def get_counts(lottery_id: int):
 
 def get_lottery(lottery_id: int):
     return db.conn.execute(
-        "SELECT * FROM lotteries WHERE id = ?",
+        """
+        SELECT *
+        FROM lotteries
+        WHERE id = ?
+        """,
         (lottery_id,),
     ).fetchone()
 
@@ -240,7 +311,9 @@ def user_confirmed_count(
         ),
     ).fetchone()
 
-    return int(row["cnt"])
+    return int(
+        row["cnt"]
+    )
 
 
 # ============================================================
@@ -292,9 +365,9 @@ class LotteryCreateStep1(
                 interaction.user
             )
         ):
-            await interaction.response.send_message(
+            await temporary_error(
+                interaction,
                 "❌ Доступ тільки для керівництва.",
-                ephemeral=True,
             )
             return
 
@@ -304,10 +377,13 @@ class LotteryCreateStep1(
             .lower()
         )
 
-        if kind not in {"cash", "item"}:
-            await interaction.response.send_message(
+        if kind not in {
+            "cash",
+            "item",
+        }:
+            await temporary_error(
+                interaction,
                 "❌ У полі призу вкажи `cash` або `item`.",
-                ephemeral=True,
             )
             return
 
@@ -324,21 +400,24 @@ class LotteryCreateStep1(
             )
 
         except Exception:
-            await interaction.response.send_message(
+            await temporary_error(
+                interaction,
                 "❌ Перевір ціну та кількість квитків.",
-                ephemeral=True,
             )
             return
 
         if price <= 0 or total <= 0:
-            await interaction.response.send_message(
+            await temporary_error(
+                interaction,
                 "❌ Ціна і кількість мають бути більшими за 0.",
-                ephemeral=True,
             )
             return
 
         prize_cents = 0
-        prize_desc = self.prize.value.strip()
+
+        prize_desc = (
+            self.prize.value.strip()
+        )
 
         if kind == "cash":
             try:
@@ -350,17 +429,17 @@ class LotteryCreateStep1(
                 )
 
             except Exception:
-                await interaction.response.send_message(
+                await temporary_error(
+                    interaction,
                     "❌ Для cash вкажи суму призу, "
                     "наприклад `2000000`.",
-                    ephemeral=True,
                 )
                 return
 
             if prize_cents <= 0:
-                await interaction.response.send_message(
+                await temporary_error(
+                    interaction,
                     "❌ Сума призу має бути більшою за 0.",
-                    ephemeral=True,
                 )
                 return
 
@@ -389,9 +468,13 @@ class LotteryCreateStep1(
 # BUTTON BETWEEN STEP 1 AND STEP 2
 # ============================================================
 
-class LotteryStep2Button(discord.ui.View):
+class LotteryStep2Button(
+    discord.ui.View
+):
     def __init__(self, state):
-        super().__init__(timeout=300)
+        super().__init__(
+            timeout=300
+        )
 
         self.state = state
 
@@ -401,7 +484,9 @@ class LotteryStep2Button(discord.ui.View):
             style=discord.ButtonStyle.success,
         )
 
-        button.callback = self.continue_callback
+        button.callback = (
+            self.continue_callback
+        )
 
         self.add_item(button)
 
@@ -409,8 +494,16 @@ class LotteryStep2Button(discord.ui.View):
         self,
         interaction: discord.Interaction,
     ):
+        try:
+            if interaction.message:
+                await interaction.message.delete()
+        except discord.DiscordException:
+            pass
+
         await interaction.response.send_modal(
-            LotteryCreateStep2(self.state)
+            LotteryCreateStep2(
+                self.state
+            )
         )
 
 
@@ -459,9 +552,9 @@ class LotteryCreateStep2(
             )
 
         except Exception:
-            await interaction.response.send_message(
+            await temporary_error(
+                interaction,
                 "❌ Перевір ліміт і кількість переможців.",
-                ephemeral=True,
             )
             return
 
@@ -474,34 +567,35 @@ class LotteryCreateStep2(
             or winners <= 0
             or minutes is None
         ):
-            await interaction.response.send_message(
+            await temporary_error(
+                interaction,
                 "❌ Перевір ліміт, переможців і час.\n"
                 "Для часу `0` — без обмеження.",
-                ephemeral=True,
             )
             return
 
         if winners > int(
             self.state["total_tickets"]
         ):
-            await interaction.response.send_message(
+            await temporary_error(
+                interaction,
                 "❌ Переможців не може бути більше, "
                 "ніж квитків.",
-                ephemeral=True,
             )
             return
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(
+            timezone.utc
+        )
 
-        # 0 = без обмеження часу.
-        # У БД ends_at має NOT NULL, тому
-        # використовуємо порожній рядок.
         if minutes == 0:
             ends_at = ""
         else:
             ends_at = (
                 now
-                + timedelta(minutes=minutes)
+                + timedelta(
+                    minutes=minutes
+                )
             ).isoformat()
 
         lottery_id = db.create_lottery(
@@ -525,10 +619,10 @@ class LotteryCreateStep2(
         )
 
         if public_channel is None:
-            await interaction.response.send_message(
+            await temporary_error(
+                interaction,
                 "❌ Не налаштований "
                 "`LOTTERY_PUBLIC_CHANNEL_ID` у Railway.",
-                ephemeral=True,
             )
             return
 
@@ -551,6 +645,11 @@ class LotteryCreateStep2(
             ephemeral=True,
         )
 
+        schedule_delete(
+            interaction,
+            10,
+        )
+
         await audit_log(
             interaction.guild,
             "🎟️ Створено лотерею",
@@ -565,33 +664,54 @@ class LotteryCreateStep2(
 # PUBLIC LOTTERY VIEW
 # ============================================================
 
-class LotteryPublicView(discord.ui.View):
-    def __init__(self, lottery_id: int):
-        super().__init__(timeout=None)
+class LotteryPublicView(
+    discord.ui.View
+):
+    def __init__(
+        self,
+        lottery_id: int,
+    ):
+        super().__init__(
+            timeout=None
+        )
 
         self.lottery_id = lottery_id
 
         self.add_item(
-            LotteryBuyButton(lottery_id)
+            LotteryBuyButton(
+                lottery_id
+            )
         )
 
         self.add_item(
-            LotteryMyTicketsButton(lottery_id)
+            LotteryMyTicketsButton(
+                lottery_id
+            )
         )
 
 
-class LotteryBuyButton(discord.ui.Button):
-    def __init__(self, lottery_id):
+class LotteryBuyButton(
+    discord.ui.Button
+):
+    def __init__(
+        self,
+        lottery_id,
+    ):
         super().__init__(
             label="Купити квитки",
             emoji="🎟️",
             style=discord.ButtonStyle.success,
-            custom_id=f"lottery:buy:{lottery_id}",
+            custom_id=(
+                f"lottery:buy:{lottery_id}"
+            ),
         )
 
         self.lottery_id = lottery_id
 
-    async def callback(self, interaction):
+    async def callback(
+        self,
+        interaction,
+    ):
         row = get_lottery(
             self.lottery_id
         )
@@ -600,14 +720,17 @@ class LotteryBuyButton(discord.ui.Button):
             not row
             or row["status"] != "active"
         ):
-            await interaction.response.send_message(
+            await temporary_error(
+                interaction,
                 "❌ Продаж цієї лотереї вже завершено.",
-                ephemeral=True,
             )
             return
 
         await interaction.response.send_message(
-            "Оберіть номери квитків нижче.",
+            "🎟️ **Вибір квитків**\n"
+            "Натискай на номери, щоб вибрати їх.\n"
+            "Після завершення натисни "
+            "**Підтвердити вибір**.",
             view=TicketPickerView(
                 self.lottery_id,
                 interaction.user.id,
@@ -619,17 +742,25 @@ class LotteryBuyButton(discord.ui.Button):
 class LotteryMyTicketsButton(
     discord.ui.Button
 ):
-    def __init__(self, lottery_id):
+    def __init__(
+        self,
+        lottery_id,
+    ):
         super().__init__(
             label="Мої квитки",
             emoji="🎫",
             style=discord.ButtonStyle.secondary,
-            custom_id=f"lottery:mine:{lottery_id}",
+            custom_id=(
+                f"lottery:mine:{lottery_id}"
+            ),
         )
 
         self.lottery_id = lottery_id
 
-    async def callback(self, interaction):
+    async def callback(
+        self,
+        interaction,
+    ):
         rows = db.conn.execute(
             """
             SELECT number, status
@@ -646,10 +777,10 @@ class LotteryMyTicketsButton(
         ).fetchall()
 
         if not rows:
-            await interaction.response.send_message(
+            await temporary_error(
+                interaction,
                 "🎫 У тебе поки немає квитків "
                 "у цій лотереї.",
-                ephemeral=True,
             )
             return
 
@@ -660,9 +791,14 @@ class LotteryMyTicketsButton(
         ]
 
         await interaction.response.send_message(
-            "🎫 **Твої квитки**\n"
+            "🎫 **Твої квитки**\n\n"
             + "\n".join(lines),
             ephemeral=True,
+        )
+
+        schedule_delete(
+            interaction,
+            10,
         )
 
 
@@ -670,7 +806,9 @@ class LotteryMyTicketsButton(
 # TICKET PICKER
 # ============================================================
 
-class TicketPickerView(discord.ui.View):
+class TicketPickerView(
+    discord.ui.View
+):
     def __init__(
         self,
         lottery_id,
@@ -678,11 +816,14 @@ class TicketPickerView(discord.ui.View):
         page=0,
         selected=None,
     ):
-        super().__init__(timeout=300)
+        super().__init__(
+            timeout=300
+        )
 
         self.lottery_id = lottery_id
         self.user_id = user_id
         self.page = page
+
         self.selected = set(
             selected or []
         )
@@ -699,6 +840,7 @@ class TicketPickerView(discord.ui.View):
         )
 
         start = page * 20 + 1
+
         end = min(
             total,
             start + 19,
@@ -727,20 +869,24 @@ class TicketPickerView(discord.ui.View):
             ):
                 continue
 
-            b = discord.ui.Button(
+            button = discord.ui.Button(
                 label=f"{n:02d}",
                 style=(
                     discord.ButtonStyle.primary
                     if n in self.selected
                     else discord.ButtonStyle.secondary
                 ),
-                custom_id=f"pick:{n}",
+                custom_id=(
+                    f"pick:{lottery_id}:{n}"
+                ),
                 row=(n - start) // 5,
             )
 
-            b.callback = self.make_callback(n)
+            button.callback = (
+                self.make_callback(n)
+            )
 
-            self.add_item(b)
+            self.add_item(button)
 
         max_page = max(
             0,
@@ -755,13 +901,15 @@ class TicketPickerView(discord.ui.View):
             row=4,
         )
 
-        prev.callback = self.page_callback(
-            page - 1
+        prev.callback = (
+            self.page_callback(
+                page - 1
+            )
         )
 
         self.add_item(prev)
 
-        nextb = discord.ui.Button(
+        next_button = discord.ui.Button(
             label=f"{page + 1}/{max_page + 1}",
             emoji="➡️",
             style=discord.ButtonStyle.secondary,
@@ -769,20 +917,27 @@ class TicketPickerView(discord.ui.View):
             row=4,
         )
 
-        nextb.callback = self.page_callback(
-            page + 1
+        next_button.callback = (
+            self.page_callback(
+                page + 1
+            )
         )
 
-        self.add_item(nextb)
+        self.add_item(next_button)
 
         confirm = discord.ui.Button(
-            label=f"Підтвердити вибір ({len(self.selected)})",
+            label=(
+                f"Підтвердити вибір "
+                f"({len(self.selected)})"
+            ),
             emoji="✅",
             style=discord.ButtonStyle.success,
             row=4,
         )
 
-        confirm.callback = self.confirm_callback
+        confirm.callback = (
+            self.confirm_callback
+        )
 
         self.add_item(confirm)
 
@@ -793,7 +948,9 @@ class TicketPickerView(discord.ui.View):
             row=4,
         )
 
-        clear.callback = self.clear_callback
+        clear.callback = (
+            self.clear_callback
+        )
 
         self.add_item(clear)
 
@@ -803,9 +960,25 @@ class TicketPickerView(discord.ui.View):
                 interaction.user.id
                 != self.user_id
             ):
-                await interaction.response.send_message(
+                await temporary_error(
+                    interaction,
                     "❌ Це меню відкрив інший гравець.",
-                    ephemeral=True,
+                )
+                return
+
+            row = get_lottery(
+                self.lottery_id
+            )
+
+            if (
+                not row
+                or row["status"] != "active"
+            ):
+                await interaction.response.edit_message(
+                    content=(
+                        "🔒 **Продаж квитків завершено.**"
+                    ),
+                    view=None,
                 )
                 return
 
@@ -813,10 +986,6 @@ class TicketPickerView(discord.ui.View):
                 self.selected.remove(n)
 
             else:
-                row = get_lottery(
-                    self.lottery_id
-                )
-
                 limit = int(
                     row["ticket_limit_per_user"]
                 )
@@ -833,10 +1002,10 @@ class TicketPickerView(discord.ui.View):
                     + 1
                     > limit
                 ):
-                    await interaction.response.send_message(
+                    await temporary_error(
+                        interaction,
                         f"❌ Ліміт: {limit} "
                         "квитків на людину.",
-                        ephemeral=True,
                     )
                     return
 
@@ -844,8 +1013,8 @@ class TicketPickerView(discord.ui.View):
 
             await interaction.response.edit_message(
                 content=(
-                    f"🎫 Обрано: "
-                    f"**{len(self.selected)}**"
+                    "🎟️ **Вибір квитків**\n"
+                    f"Обрано: **{len(self.selected)}**"
                 ),
                 view=TicketPickerView(
                     self.lottery_id,
@@ -859,10 +1028,20 @@ class TicketPickerView(discord.ui.View):
 
     def page_callback(self, page):
         async def cb(interaction):
+            if (
+                interaction.user.id
+                != self.user_id
+            ):
+                await temporary_error(
+                    interaction,
+                    "❌ Це меню відкрив інший гравець.",
+                )
+                return
+
             await interaction.response.edit_message(
                 content=(
-                    f"🎫 Обрано: "
-                    f"**{len(self.selected)}**"
+                    "🎟️ **Вибір квитків**\n"
+                    f"Обрано: **{len(self.selected)}**"
                 ),
                 view=TicketPickerView(
                     self.lottery_id,
@@ -878,10 +1057,23 @@ class TicketPickerView(discord.ui.View):
         self,
         interaction,
     ):
+        if (
+            interaction.user.id
+            != self.user_id
+        ):
+            await temporary_error(
+                interaction,
+                "❌ Це меню відкрив інший гравець.",
+            )
+            return
+
         self.selected.clear()
 
         await interaction.response.edit_message(
-            content="🎫 Обрано: **0**",
+            content=(
+                "🎟️ **Вибір квитків**\n"
+                "Обрано: **0**"
+            ),
             view=TicketPickerView(
                 self.lottery_id,
                 self.user_id,
@@ -893,10 +1085,36 @@ class TicketPickerView(discord.ui.View):
         self,
         interaction,
     ):
+        if (
+            interaction.user.id
+            != self.user_id
+        ):
+            await temporary_error(
+                interaction,
+                "❌ Це меню відкрив інший гравець.",
+            )
+            return
+
         if not self.selected:
-            await interaction.response.send_message(
+            await temporary_error(
+                interaction,
                 "❌ Обери хоча б один номер.",
-                ephemeral=True,
+            )
+            return
+
+        row = get_lottery(
+            self.lottery_id
+        )
+
+        if (
+            not row
+            or row["status"] != "active"
+        ):
+            await interaction.response.edit_message(
+                content=(
+                    "🔒 **Продаж квитків завершено.**"
+                ),
+                view=None,
             )
             return
 
@@ -913,11 +1131,13 @@ class TicketPickerView(discord.ui.View):
                 content=f"❌ {reason}",
                 view=None,
             )
-            return
 
-        row = get_lottery(
-            self.lottery_id
-        )
+            schedule_delete(
+                interaction,
+                10,
+            )
+
+            return
 
         total = (
             len(self.selected)
@@ -949,34 +1169,54 @@ class TicketPickerView(discord.ui.View):
 class LotteryPaymentView(
     discord.ui.View
 ):
-    def __init__(self, request_id):
-        super().__init__(timeout=None)
+    def __init__(
+        self,
+        request_id,
+    ):
+        super().__init__(
+            timeout=None
+        )
 
         self.request_id = request_id
 
-        b = discord.ui.Button(
+        paid_button = discord.ui.Button(
             label="Кошти внесено",
             emoji="💰",
             style=discord.ButtonStyle.success,
-            custom_id=f"lottery:paid:{request_id}",
+            custom_id=(
+                f"lottery:paid:{request_id}"
+            ),
         )
 
-        b.callback = self.paid
+        paid_button.callback = (
+            self.paid
+        )
 
-        self.add_item(b)
+        self.add_item(
+            paid_button
+        )
 
-        c = discord.ui.Button(
+        cancel_button = discord.ui.Button(
             label="Скасувати",
             emoji="❌",
             style=discord.ButtonStyle.danger,
-            custom_id=f"lottery:cancel:{request_id}",
+            custom_id=(
+                f"lottery:cancel:{request_id}"
+            ),
         )
 
-        c.callback = self.cancel
+        cancel_button.callback = (
+            self.cancel
+        )
 
-        self.add_item(c)
+        self.add_item(
+            cancel_button
+        )
 
-    async def paid(self, interaction):
+    async def paid(
+        self,
+        interaction,
+    ):
         req = db.lottery_request(
             self.request_id
         )
@@ -986,16 +1226,16 @@ class LotteryPaymentView(
             or req["user_id"]
             != interaction.user.id
         ):
-            await interaction.response.send_message(
+            await temporary_error(
+                interaction,
                 "❌ Цей запит недоступний.",
-                ephemeral=True,
             )
             return
 
         if req["status"] != "reserved":
-            await interaction.response.send_message(
+            await temporary_error(
+                interaction,
                 "❌ Запит уже обробляється або завершений.",
-                ephemeral=True,
             )
             return
 
@@ -1005,14 +1245,17 @@ class LotteryPaymentView(
 
         await interaction.response.edit_message(
             content=(
-                "🟡 **Кошти внесено — очікується "
-                "перевірка керівництвом.**\n\n"
-                "Квитки залишаються зарезервованими."
+                "🟡 **Кошти внесено.**\n"
+                "Очікується перевірка керівництвом."
             ),
             view=None,
         )
 
-        # Одразу повідомляємо керівництво
+        schedule_delete(
+            interaction,
+            10,
+        )
+
         try:
             await send_pending_request(
                 interaction,
@@ -1025,7 +1268,10 @@ class LotteryPaymentView(
                 f"pending payment request: {exc}"
             )
 
-    async def cancel(self, interaction):
+    async def cancel(
+        self,
+        interaction,
+    ):
         req = db.lottery_request(
             self.request_id
         )
@@ -1035,9 +1281,9 @@ class LotteryPaymentView(
             or req["user_id"]
             != interaction.user.id
         ):
-            await interaction.response.send_message(
+            await temporary_error(
+                interaction,
                 "❌ Цей запит недоступний.",
-                ephemeral=True,
             )
             return
 
@@ -1045,9 +1291,9 @@ class LotteryPaymentView(
             "reserved",
             "payment_pending",
         }:
-            await interaction.response.send_message(
+            await temporary_error(
+                interaction,
                 "❌ Запит уже завершений.",
-                ephemeral=True,
             )
             return
 
@@ -1059,10 +1305,15 @@ class LotteryPaymentView(
 
         await interaction.response.edit_message(
             content=(
-                "❌ Резерв скасовано. "
+                "❌ **Резерв скасовано.**\n"
                 "Номери знову доступні."
             ),
             view=None,
+        )
+
+        schedule_delete(
+            interaction,
+            10,
         )
 
 
@@ -1073,8 +1324,13 @@ class LotteryPaymentView(
 class LotteryAdminView(
     discord.ui.View
 ):
-    def __init__(self, request_id):
-        super().__init__(timeout=None)
+    def __init__(
+        self,
+        request_id,
+    ):
+        super().__init__(
+            timeout=None
+        )
 
         self.request_id = request_id
 
@@ -1082,7 +1338,9 @@ class LotteryAdminView(
             label="Підтвердити оплату",
             emoji="✅",
             style=discord.ButtonStyle.success,
-            custom_id=f"lottery:confirm:{request_id}",
+            custom_id=(
+                f"lottery:confirm:{request_id}"
+            ),
         )
 
         ok.callback = self.confirm
@@ -1091,7 +1349,9 @@ class LotteryAdminView(
             label="Відхилити оплату",
             emoji="❌",
             style=discord.ButtonStyle.danger,
-            custom_id=f"lottery:reject:{request_id}",
+            custom_id=(
+                f"lottery:reject:{request_id}"
+            ),
         )
 
         no.callback = self.reject
@@ -1099,7 +1359,10 @@ class LotteryAdminView(
         self.add_item(ok)
         self.add_item(no)
 
-    async def confirm(self, interaction):
+    async def confirm(
+        self,
+        interaction,
+    ):
         if (
             not isinstance(
                 interaction.user,
@@ -1109,9 +1372,9 @@ class LotteryAdminView(
                 interaction.user
             )
         ):
-            await interaction.response.send_message(
+            await temporary_error(
+                interaction,
                 "❌ Доступ тільки для керівництва.",
-                ephemeral=True,
             )
             return
 
@@ -1124,9 +1387,9 @@ class LotteryAdminView(
             or req["status"]
             != "payment_pending"
         ):
-            await interaction.response.send_message(
+            await temporary_error(
+                interaction,
                 "❌ Цей запит уже оброблений.",
-                ephemeral=True,
             )
             return
 
@@ -1137,10 +1400,15 @@ class LotteryAdminView(
 
         await interaction.response.edit_message(
             content=(
-                f"✅ Оплату підтверджено. "
+                f"✅ **Оплату підтверджено.**\n"
                 f"Квитки: {req['numbers_json']}"
             ),
             view=None,
+        )
+
+        schedule_delete(
+            interaction,
+            10,
         )
 
         await refresh_lottery_message(
@@ -1148,7 +1416,10 @@ class LotteryAdminView(
             req["lottery_id"],
         )
 
-    async def reject(self, interaction):
+    async def reject(
+        self,
+        interaction,
+    ):
         if (
             not isinstance(
                 interaction.user,
@@ -1158,9 +1429,9 @@ class LotteryAdminView(
                 interaction.user
             )
         ):
-            await interaction.response.send_message(
+            await temporary_error(
+                interaction,
                 "❌ Доступ тільки для керівництва.",
-                ephemeral=True,
             )
             return
 
@@ -1173,9 +1444,9 @@ class LotteryAdminView(
             or req["status"]
             != "payment_pending"
         ):
-            await interaction.response.send_message(
+            await temporary_error(
+                interaction,
                 "❌ Цей запит уже оброблений.",
-                ephemeral=True,
             )
             return
 
@@ -1187,10 +1458,15 @@ class LotteryAdminView(
 
         await interaction.response.edit_message(
             content=(
-                "❌ Оплату відхилено. "
+                "❌ **Оплату відхилено.**\n"
                 "Зарезервовані номери звільнено."
             ),
             view=None,
+        )
+
+        schedule_delete(
+            interaction,
+            10,
         )
 
         await refresh_lottery_message(
@@ -1217,9 +1493,6 @@ async def refresh_lottery_message(
     ):
         return
 
-    # ВАЖЛИВО:
-    # публічна картка знаходиться не в row["channel_id"],
-    # а в LOTTERY_PUBLIC_CHANNEL_ID.
     channel = bot.get_channel(
         LOTTERY_PUBLIC_CHANNEL_ID
     )
@@ -1317,12 +1590,131 @@ async def send_pending_request(
         f"{lottery['name']}\n"
         f"{name}\n"
         f"Квитків: **{len(nums)}**\n"
-        f"Номери: **{', '.join(f'{n:02d}' for n in nums)}**\n"
+        f"Номери: **"
+        f"{', '.join(f'{n:02d}' for n in nums)}"
+        f"**\n"
         f"Сума: **{format_cents(total)}**",
         view=LotteryAdminView(
             request_id
         ),
     )
+
+
+# ============================================================
+# PENDING REQUEST LIST
+# ============================================================
+
+class LotteryPendingView(
+    discord.ui.View
+):
+    def __init__(
+        self,
+        requests,
+    ):
+        super().__init__(
+            timeout=300
+        )
+
+        for req in requests[:25]:
+            button = discord.ui.Button(
+                label=(
+                    f"{req['lottery_name'][:25]} • "
+                    f"{req['user_id']}"
+                ),
+                emoji="🎟️",
+                style=discord.ButtonStyle.secondary,
+            )
+
+            button.callback = (
+                self.make_callback(
+                    req["id"]
+                )
+            )
+
+            self.add_item(
+                button
+            )
+
+    def make_callback(
+        self,
+        request_id,
+    ):
+        async def callback(
+            interaction,
+        ):
+            if (
+                not isinstance(
+                    interaction.user,
+                    discord.Member,
+                )
+                or not management_payout_member(
+                    interaction.user
+                )
+            ):
+                await temporary_error(
+                    interaction,
+                    "❌ Доступ тільки для керівництва.",
+                )
+                return
+
+            req = db.lottery_request(
+                request_id
+            )
+
+            if not req:
+                await interaction.response.edit_message(
+                    content="❌ Заявку не знайдено.",
+                    view=None,
+                )
+
+                schedule_delete(
+                    interaction,
+                    10,
+                )
+
+                return
+
+            if req["status"] != "payment_pending":
+                await interaction.response.edit_message(
+                    content=(
+                        "❌ Ця заявка вже оброблена."
+                    ),
+                    view=None,
+                )
+
+                schedule_delete(
+                    interaction,
+                    10,
+                )
+
+                return
+
+            nums = [
+                int(x)
+                for x in json.loads(
+                    req["numbers_json"]
+                )
+            ]
+
+            total = (
+                len(nums)
+                * req["ticket_price_cents"]
+            )
+
+            await interaction.response.edit_message(
+                content=(
+                    f"🎟️ **{req['lottery_name']}**\n\n"
+                    f"👤 <@{req['user_id']}>\n"
+                    f"🎫 Квитки: "
+                    f"{', '.join(f'{n:02d}' for n in nums)}\n"
+                    f"💰 Сума: **{format_cents(total)}**"
+                ),
+                view=LotteryAdminView(
+                    request_id
+                ),
+            )
+
+        return callback
 
 
 # ============================================================
@@ -1333,42 +1725,65 @@ class LotteryManagementView(
     discord.ui.View
 ):
     def __init__(self):
-        super().__init__(timeout=None)
+        super().__init__(
+            timeout=None
+        )
 
-        b = discord.ui.Button(
+        create_button = discord.ui.Button(
             label="Створити лотерею",
             emoji="🎟️",
             style=discord.ButtonStyle.success,
-            custom_id="lottery:management:create",
+            custom_id=(
+                "lottery:management:create"
+            ),
         )
 
-        b.callback = self.create
+        create_button.callback = (
+            self.create
+        )
 
-        self.add_item(b)
+        self.add_item(
+            create_button
+        )
 
-        p = discord.ui.Button(
+        pending_button = discord.ui.Button(
             label="Очікують оплати",
             emoji="🟡",
             style=discord.ButtonStyle.secondary,
-            custom_id="lottery:management:pending",
+            custom_id=(
+                "lottery:management:pending"
+            ),
         )
 
-        p.callback = self.pending
+        pending_button.callback = (
+            self.pending
+        )
 
-        self.add_item(p)
+        self.add_item(
+            pending_button
+        )
 
-        d = discord.ui.Button(
+        draw_button = discord.ui.Button(
             label="Завершити/розіграти",
             emoji="🎲",
             style=discord.ButtonStyle.primary,
-            custom_id="lottery:management:draw",
+            custom_id=(
+                "lottery:management:draw"
+            ),
         )
 
-        d.callback = self.draw_list
+        draw_button.callback = (
+            self.draw_list
+        )
 
-        self.add_item(d)
+        self.add_item(
+            draw_button
+        )
 
-    async def create(self, interaction):
+    async def create(
+        self,
+        interaction,
+    ):
         if (
             not isinstance(
                 interaction.user,
@@ -1378,9 +1793,9 @@ class LotteryManagementView(
                 interaction.user
             )
         ):
-            await interaction.response.send_message(
+            await temporary_error(
+                interaction,
                 "❌ Доступ тільки для керівництва.",
-                ephemeral=True,
             )
             return
 
@@ -1388,7 +1803,10 @@ class LotteryManagementView(
             LotteryCreateStep1()
         )
 
-    async def pending(self, interaction):
+    async def pending(
+        self,
+        interaction,
+    ):
         if (
             not isinstance(
                 interaction.user,
@@ -1398,9 +1816,9 @@ class LotteryManagementView(
                 interaction.user
             )
         ):
-            await interaction.response.send_message(
+            await temporary_error(
+                interaction,
                 "❌ Доступ тільки для керівництва.",
-                ephemeral=True,
             )
             return
 
@@ -1413,14 +1831,17 @@ class LotteryManagementView(
                 "🟢 Немає оплат, які очікують перевірки.",
                 ephemeral=True,
             )
+
+            schedule_delete(
+                interaction,
+                10,
+            )
+
             return
 
-        await interaction.response.send_message(
-            "🟡 Запити на підтвердження:",
-            ephemeral=True,
-        )
+        lines = []
 
-        for req in rows[:10]:
+        for req in rows[:25]:
             nums = [
                 int(x)
                 for x in json.loads(
@@ -1428,20 +1849,27 @@ class LotteryManagementView(
                 )
             ]
 
-            await interaction.followup.send(
-                f"🎟️ **{req['lottery_name']}** • "
-                f"<@{req['user_id']}>\n"
-                f"Номери: "
-                f"{', '.join(f'{n:02d}' for n in nums)}\n"
-                f"Сума: "
-                f"{format_cents(len(nums) * req['ticket_price_cents'])}",
-                view=LotteryAdminView(
-                    req["id"]
-                ),
-                ephemeral=True,
+            lines.append(
+                f"🎟️ **{req['lottery_name']}** — "
+                f"<@{req['user_id']}> — "
+                f"{len(nums)} кв."
             )
 
-    async def draw_list(self, interaction):
+        await interaction.response.send_message(
+            "🟡 **Очікують перевірки оплати**\n\n"
+            + "\n".join(lines)
+            + "\n\n"
+            "Натисни на заявку, щоб переглянути її.",
+            view=LotteryPendingView(
+                rows[:25]
+            ),
+            ephemeral=True,
+        )
+
+    async def draw_list(
+        self,
+        interaction,
+    ):
         if (
             not isinstance(
                 interaction.user,
@@ -1451,9 +1879,9 @@ class LotteryManagementView(
                 interaction.user
             )
         ):
-            await interaction.response.send_message(
+            await temporary_error(
+                interaction,
                 "❌ Доступ тільки для керівництва.",
-                ephemeral=True,
             )
             return
 
@@ -1473,11 +1901,19 @@ class LotteryManagementView(
                 "🟢 Немає активних лотерей.",
                 ephemeral=True,
             )
+
+            schedule_delete(
+                interaction,
+                10,
+            )
+
             return
 
         await interaction.response.send_message(
-            "🎲 Обери лотерею для завершення:",
-            view=LotteryDrawListView(rows),
+            "🎲 **Обери лотерею для завершення:**",
+            view=LotteryDrawListView(
+                rows
+            ),
             ephemeral=True,
         )
 
@@ -1489,23 +1925,37 @@ class LotteryManagementView(
 class LotteryDrawListView(
     discord.ui.View
 ):
-    def __init__(self, rows):
-        super().__init__(timeout=300)
+    def __init__(
+        self,
+        rows,
+    ):
+        super().__init__(
+            timeout=300
+        )
 
         for row in rows[:25]:
-            b = discord.ui.Button(
+            button = discord.ui.Button(
                 label=row["name"][:70],
                 style=discord.ButtonStyle.primary,
             )
 
-            b.callback = self.make(
-                row["id"]
+            button.callback = (
+                self.make(
+                    row["id"]
+                )
             )
 
-            self.add_item(b)
+            self.add_item(
+                button
+            )
 
-    def make(self, lottery_id):
-        async def cb(interaction):
+    def make(
+        self,
+        lottery_id,
+    ):
+        async def cb(
+            interaction,
+        ):
             if (
                 not isinstance(
                     interaction.user,
@@ -1515,9 +1965,9 @@ class LotteryDrawListView(
                     interaction.user
                 )
             ):
-                await interaction.response.send_message(
+                await temporary_error(
+                    interaction,
                     "❌ Доступ тільки для керівництва.",
-                    ephemeral=True,
                 )
                 return
 
@@ -1527,9 +1977,9 @@ class LotteryDrawListView(
             )
 
             if not result[0]:
-                await interaction.response.send_message(
+                await temporary_error(
+                    interaction,
                     f"❌ {result[1]}",
-                    ephemeral=True,
                 )
                 return
 
@@ -1544,8 +1994,9 @@ class LotteryDrawListView(
                 for n in nums
             )
 
-            # Спочатку визначаємо переможців
             winner_lines = []
+
+            winner_rows = []
 
             for n in nums:
                 ticket = db.conn.execute(
@@ -1562,18 +2013,26 @@ class LotteryDrawListView(
                 ).fetchone()
 
                 if ticket:
+                    winner_rows.append(
+                        (
+                            n,
+                            ticket["user_id"],
+                        )
+                    )
+
                     winner_lines.append(
                         f"🎫 **#{n:02d}** — "
                         f"<@{ticket['user_id']}>"
                     )
 
             winner_text = (
-                "\n".join(winner_lines)
+                "\n".join(
+                    winner_lines
+                )
                 if winner_lines
                 else "Переможців не знайдено."
             )
 
-            # Відповідь керівництву
             await interaction.response.edit_message(
                 content=(
                     "🏆 **Розіграш проведено**\n\n"
@@ -1583,40 +2042,25 @@ class LotteryDrawListView(
                 view=None,
             )
 
-            # Оновлюємо публічну картку
+            schedule_delete(
+                interaction,
+                10,
+            )
+
             await refresh_lottery_message(
                 interaction.client,
                 lottery_id,
             )
 
-            # Створюємо виплати для cash-призів
             if row["prize_type"] == "cash":
-                for n in nums:
-                    ticket = db.conn.execute(
-                        """
-                        SELECT user_id
-                        FROM lottery_tickets
-                        WHERE lottery_id=?
-                        AND number=?
-                        """,
-                        (
-                            lottery_id,
-                            n,
-                        ),
-                    ).fetchone()
-
-                    if ticket:
-                        db.create_lottery_payout(
-                            interaction.guild_id,
-                            ticket["user_id"],
-                            lottery_id,
-                            n,
-                            row["prize_cents"],
-                        )
-
-            # ==================================================
-            # ПУБЛІЧНИЙ РЕЗУЛЬТАТ
-            # ==================================================
+                for n, user_id in winner_rows:
+                    db.create_lottery_payout(
+                        interaction.guild_id,
+                        user_id,
+                        lottery_id,
+                        n,
+                        row["prize_cents"],
+                    )
 
             public_channel = (
                 interaction.client.get_channel(
@@ -1638,7 +2082,7 @@ class LotteryDrawListView(
 
                 try:
                     await public_channel.send(
-                        f"🏆 **РЕЗУЛЬТАТИ ЛОТЕРЕЇ**\n\n"
+                        "🏆 **РЕЗУЛЬТАТИ ЛОТЕРЕЇ**\n\n"
                         f"🎟️ **{row['name']}**\n"
                         f"🎁 Приз: **{prize_text}**\n\n"
                         f"{winner_text}"
@@ -1665,7 +2109,9 @@ class LotteryDrawListView(
 # SLASH COMMAND
 # ============================================================
 
-def register_commands(bot: commands.Bot):
+def register_commands(
+    bot: commands.Bot
+):
     @bot.tree.command(
         name="lottery",
         description="Керування лотереями Agosto",
@@ -1682,9 +2128,9 @@ def register_commands(bot: commands.Bot):
                 interaction.user
             )
         ):
-            await interaction.response.send_message(
+            await temporary_error(
+                interaction,
                 "❌ Команда доступна тільки керівництву.",
-                ephemeral=True,
             )
             return
 
@@ -1693,10 +2139,10 @@ def register_commands(bot: commands.Bot):
             and interaction.channel_id
             != LOTTERY_MANAGEMENT_CHANNEL_ID
         ):
-            await interaction.response.send_message(
+            await temporary_error(
+                interaction,
                 f"🎟️ Керування лотереями знаходиться "
                 f"в <#{LOTTERY_MANAGEMENT_CHANNEL_ID}>.",
-                ephemeral=True,
             )
             return
 
@@ -1711,7 +2157,9 @@ def register_commands(bot: commands.Bot):
 # MANAGEMENT PANEL
 # ============================================================
 
-async def ensure_lottery_channels(bot):
+async def ensure_lottery_channels(
+    bot,
+):
     """
     Ensure the management panel exists
     in the dedicated management channel.
@@ -1777,7 +2225,9 @@ async def ensure_lottery_channels(bot):
 # RESTORE VIEWS
 # ============================================================
 
-def restore_management_view(bot):
+def restore_management_view(
+    bot,
+):
     try:
         bot.add_view(
             LotteryManagementView()
@@ -1786,7 +2236,9 @@ def restore_management_view(bot):
         pass
 
 
-def restore_active_views(bot):
+def restore_active_views(
+    bot,
+):
     for row in db.active_lotteries(
         GUILD_ID
     ):
@@ -1863,8 +2315,6 @@ async def maybe_finish_expired(
             row["id"],
         )
 
-        # Повідомлення саме у публічному
-        # каналі лотереї.
         channel = bot.get_channel(
             LOTTERY_PUBLIC_CHANNEL_ID
         )

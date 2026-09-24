@@ -21,28 +21,43 @@ from utils import *
 RATING_RULE_V2_SETTING = "rating_rule_v2_at"
 
 
-def rating_points_for_row(guild_id: int, row) -> int:
-  """Use legacy rating until /rating-v2 is activated; then use V2 for newer contracts."""
+def rating_rule_v2_active_for_row(guild_id: int, row) -> bool:
+  """Whether the new per-participant multiplier rule applies to this contract."""
   activated_at = db.get_setting(guild_id, RATING_RULE_V2_SETTING)
   if not activated_at:
-    return 10
+    return False
 
-  created_at = row["created_at"]
   try:
-    created_dt = datetime.fromisoformat(created_at)
+    created_dt = datetime.fromisoformat(row["created_at"])
     activated_dt = datetime.fromisoformat(activated_at)
     if created_dt.tzinfo is None:
       created_dt = created_dt.replace(tzinfo=timezone.utc)
     if activated_dt.tzinfo is None:
       activated_dt = activated_dt.replace(tzinfo=timezone.utc)
-    if created_dt >= activated_dt:
-      return rating_total_points_v2(row["payment_mode"], len(parse_ids(row["participant_ids"])))
+    return created_dt >= activated_dt
   except Exception:
-    pass
-
-  return 10
+    return False
 
 
+def rating_points_for_row(guild_id: int, row) -> dict[int, Fraction]:
+  """Return exact rating points for each participant in one contract."""
+  members = parse_ids(row["participant_ids"])
+  if not members:
+    return {}
+
+  # Before /rating-v2: legacy rule — 10 total points split equally.
+  if not rating_rule_v2_active_for_row(guild_id, row):
+    share = Fraction(10, len(members))
+    return {uid: share for uid in members}
+
+  # New rule: split the 10-point base equally first. Only participants who
+  # personally sent their share to the family receive the multiplier.
+  family_ids = parse_ids(row["excluded_payment_ids"] or "[]")
+  return rating_points_by_member(
+    row["payment_mode"],
+    members,
+    family_ids,
+  )
 
 def _later_reset_at(*values: Optional[str]) -> Optional[str]:
   candidates = []
@@ -132,7 +147,7 @@ def rating_data_for_guild(guild_id: int):
     if not members:
       continue
 
-    share = Fraction(rating_points_for_row(guild_id, row), len(members))
+    row_points = rating_points_for_row(guild_id, row)
 
     for uid in members:
       if uid not in reset_cache:
@@ -147,7 +162,7 @@ def rating_data_for_guild(guild_id: int):
       if cutoff and row["created_at"] < cutoff:
         continue
 
-      points[uid] += share
+      points[uid] += row_points.get(uid, Fraction(0, 1))
       participations[uid] += 1
 
   users = sorted(
@@ -169,9 +184,9 @@ def rating_data_for_guild_all_time(guild_id: int):
     if not members:
       continue
 
-    share = Fraction(rating_points_for_row(guild_id, row), len(members))
+    row_points = rating_points_for_row(guild_id, row)
     for uid in members:
-      points[uid] += share
+      points[uid] += row_points.get(uid, Fraction(0, 1))
       participations[uid] += 1
 
   users = sorted(
@@ -1517,10 +1532,10 @@ def build_period_stats_embed(
     if not members:
       continue
 
-    share = Fraction(rating_points_for_row(guild_id, row), len(members))
+    row_points = rating_points_for_row(guild_id, row)
 
     for uid in members:
-      rating_points[uid] += share
+      rating_points[uid] += row_points.get(uid, Fraction(0, 1))
       participations[uid] += 1
 
   rating_users = sorted(
@@ -2465,9 +2480,10 @@ def register_commands(bot: commands.Bot):
 
     await interaction.response.send_message(
       "✅ Нове правило рейтингу увімкнено з цього моменту.\n\n"
-      "• звичайний контракт — 10 балів\n"
-      "• 🏠 На фаму, 1–3 виконавці — 15 балів\n"
-      "• 🏠 На фаму, 4+ виконавці — 20 балів\n\n"
+      "• базово кожен контракт = 10 балів\n"
+      "• 10 балів діляться порівну між усіма виконавцями\n"
+      "• 🏠 кожен, хто віддав свою частку на фаму, отримує x1.5, якщо таких 1–3\n"
+      "• 🏠 якщо на фаму віддали 4+ учасники — для них x2.0\n\n"
       f"Старі контракти до <t:{iso_to_unix(activated_at)}:F> не перераховуються.",
       ephemeral=False,
     )

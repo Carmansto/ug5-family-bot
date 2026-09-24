@@ -93,28 +93,77 @@ def ukrainian_sort_key(text: str):
 
 
 def rating_total_points(payment_mode: str | None, performer_count: int) -> int:
-  """Return the legacy total rating points for one completed contract.
+  """Base rating value for one completed contract.
 
-  Normal contract: 10 total points.
-  The new "На фаму" multiplier rule is enabled separately by the
-  /rating-v2 command and is applied only to contracts created after
-  the activation timestamp.
+  One contract always starts from 10 base points. The new rule does NOT
+  turn the whole contract into 15/20 points. Instead, every participant
+  first receives their equal share of these 10 points, and the share of
+  participants who personally sent their part to the family bank is
+  multiplied by x1.5 (1-3 family participants) or x2.0 (4+).
   """
   if performer_count <= 0:
     return 0
-
   return 10
+
+
+def rating_family_multiplier(family_participant_count: int) -> Fraction:
+  """Multiplier for a participant who personally sent their share to family."""
+  if family_participant_count >= 4:
+    return Fraction(2, 1)
+  if family_participant_count >= 1:
+    return Fraction(3, 2)
+  return Fraction(1, 1)
+
+
+def rating_points_by_member(
+  payment_mode: str | None,
+  participant_ids: list[int],
+  family_participant_ids: Optional[list[int]] = None,
+) -> dict[int, Fraction]:
+  """Return the exact rating points for every participant in one contract.
+
+  Rule:
+    * Base = 10 points per contract.
+    * Split the 10 base points equally between all performers.
+    * Only a participant who personally sends their share to the family gets
+      the family multiplier.
+    * 1-3 family participants => x1.5 for each of them.
+    * 4+ family participants => x2.0 for each of them.
+
+  For the legacy ``family`` mode everybody is treated as a family participant.
+  For ``family_share`` the IDs in ``family_participant_ids`` are treated as
+  the people who personally sent their share to the family.
+  Other payment modes do not receive the multiplier.
+  """
+  members = list(dict.fromkeys(int(uid) for uid in participant_ids))
+  if not members:
+    return {}
+
+  base_share = Fraction(10, len(members))
+  mode = payment_mode or PAYMENT_MODE_NORMAL
+
+  if mode == PAYMENT_MODE_LEGACY_FAMILY:
+    family_ids = set(members)
+  elif mode == PAYMENT_MODE_FAMILY_SHARE:
+    family_ids = {
+      int(uid)
+      for uid in (family_participant_ids or [])
+      if int(uid) in members
+    }
+  else:
+    family_ids = set()
+
+  multiplier = rating_family_multiplier(len(family_ids))
+
+  return {
+    uid: base_share * multiplier if uid in family_ids else base_share
+    for uid in members
+  }
 
 
 def rating_total_points_v2(payment_mode: str | None, performer_count: int) -> int:
-  """Return total rating points under the new Agosto rule."""
-  if performer_count <= 0:
-    return 0
-
-  if (payment_mode or PAYMENT_MODE_NORMAL) == PAYMENT_MODE_LEGACY_FAMILY:
-    return 20 if performer_count >= 4 else 15
-
-  return 10
+  """Compatibility helper: the contract still starts from 10 base points."""
+  return rating_total_points(payment_mode, performer_count)
 
 
 def format_points(value: Fraction) -> str:
@@ -447,4 +496,4 @@ async def payout_is_management(
   return bool(member and management_payout_member(member))
 
 
-__all__ = ['PAYMENT_MODE_FAMILY_SHARE', 'PAYMENT_MODE_LEGACY_FAMILY', 'PAYMENT_MODE_NORMAL', 'PAYMENT_MODE_REDISTRIBUTE', 'UA_ALPHABET', 'UA_ORDER', 'calculate_payment', 'calculate_personal_family_contributions', 'can_close_management_payout', 'fetch_member_safe', 'format_cents', 'format_day', 'format_money_dollars', 'format_points', 'format_points_with_word', 'has_leader_role', 'iso_to_unix', 'local_date_from_iso', 'management_member', 'management_payout_member', 'parse_ids', 'parse_money', 'payment_mode_label', 'payment_preview_embed', 'payout_is_management', 'rating_total_points', 'split_payment', 'test_command_user', 'ukrainian_sort_key', 'utc_now_iso']
+__all__ = ['PAYMENT_MODE_FAMILY_SHARE', 'PAYMENT_MODE_LEGACY_FAMILY', 'PAYMENT_MODE_NORMAL', 'PAYMENT_MODE_REDISTRIBUTE', 'UA_ALPHABET', 'UA_ORDER', 'calculate_payment', 'calculate_personal_family_contributions', 'can_close_management_payout', 'fetch_member_safe', 'format_cents', 'format_day', 'format_money_dollars', 'format_points', 'format_points_with_word', 'has_leader_role', 'iso_to_unix', 'local_date_from_iso', 'management_member', 'management_payout_member', 'parse_ids', 'parse_money', 'payment_mode_label', 'payment_preview_embed', 'payout_is_management', 'rating_family_multiplier', 'rating_points_by_member', 'rating_total_points', 'rating_total_points_v2', 'split_payment', 'test_command_user', 'ukrainian_sort_key', 'utc_now_iso']

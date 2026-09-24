@@ -26,11 +26,15 @@ from contracts import audit_log
 
 
 # ============================================================
-# HELPERS
+# CONSTANTS
 # ============================================================
 
 TEMP_MESSAGE_SECONDS = 10
 
+
+# ============================================================
+# HELPERS — TEMPORARY MESSAGES
+# ============================================================
 
 async def delete_after(
     interaction: discord.Interaction,
@@ -40,11 +44,18 @@ async def delete_after(
     Видаляє оригінальне ephemeral-повідомлення
     через задану кількість секунд.
     """
-    await asyncio.sleep(delay)
-
     try:
+        await asyncio.sleep(delay)
+
         await interaction.delete_original_response()
-    except (discord.NotFound, discord.HTTPException):
+
+    except asyncio.CancelledError:
+        pass
+
+    except (
+        discord.NotFound,
+        discord.HTTPException,
+    ):
         pass
 
 
@@ -55,12 +66,36 @@ def schedule_delete(
     """
     Запускає фонове видалення ephemeral-повідомлення.
     """
-    asyncio.create_task(
+    return asyncio.create_task(
         delete_after(
             interaction,
             delay,
         )
     )
+
+
+def schedule_message_delete(
+    message: discord.Message,
+    delay: float = TEMP_MESSAGE_SECONDS,
+):
+    """
+    Видаляє звичайне повідомлення через заданий час.
+    """
+    async def _delete():
+        try:
+            await asyncio.sleep(delay)
+            await message.delete()
+
+        except asyncio.CancelledError:
+            pass
+
+        except (
+            discord.NotFound,
+            discord.HTTPException,
+        ):
+            pass
+
+    return asyncio.create_task(_delete())
 
 
 async def temporary_error(
@@ -69,7 +104,8 @@ async def temporary_error(
     delay: float = TEMP_MESSAGE_SECONDS,
 ):
     """
-    Тимчасова помилка, яка автоматично зникає.
+    Тимчасова ephemeral-помилка.
+    Автоматично зникає через 10 секунд.
     """
     await interaction.response.send_message(
         content,
@@ -82,6 +118,158 @@ async def temporary_error(
     )
 
 
+async def temporary_message(
+    interaction: discord.Interaction,
+    content: str,
+    *,
+    view=None,
+    embed=None,
+    delay: float = TEMP_MESSAGE_SECONDS,
+):
+    """
+    Тимчасове ephemeral-повідомлення.
+    """
+    await interaction.response.send_message(
+        content,
+        view=view,
+        embed=embed,
+        ephemeral=True,
+    )
+
+    if isinstance(
+        view,
+        AutoDeleteEphemeralView,
+    ):
+        view.start_auto_delete(
+            interaction,
+            delay,
+        )
+    else:
+        schedule_delete(
+            interaction,
+            delay,
+        )
+
+
+async def temporary_followup(
+    interaction: discord.Interaction,
+    content: str,
+    *,
+    view=None,
+    embed=None,
+    delay: float = TEMP_MESSAGE_SECONDS,
+):
+    """
+    Тимчасовий ephemeral followup.
+    """
+    message = await interaction.followup.send(
+        content,
+        view=view,
+        embed=embed,
+        ephemeral=True,
+        wait=True,
+    )
+
+    schedule_message_delete(
+        message,
+        delay,
+    )
+
+    return message
+
+
+# ============================================================
+# AUTO DELETE VIEW
+# ============================================================
+
+class AutoDeleteEphemeralView(
+    discord.ui.View
+):
+    """
+    View для ephemeral-повідомлень.
+
+    Повідомлення автоматично видаляється через 10 секунд.
+    При новій дії таймер запускається заново.
+    """
+
+    def __init__(
+        self,
+        timeout=300,
+    ):
+        super().__init__(
+            timeout=timeout
+        )
+
+        self._delete_task = None
+
+    def cancel_auto_delete(self):
+        if (
+            self._delete_task
+            and not self._delete_task.done()
+        ):
+            self._delete_task.cancel()
+
+        self._delete_task = None
+
+    def start_auto_delete(
+        self,
+        interaction: discord.Interaction,
+        delay: float = TEMP_MESSAGE_SECONDS,
+    ):
+        self.cancel_auto_delete()
+
+        self._delete_task = asyncio.create_task(
+            self._delete_original_later(
+                interaction,
+                delay,
+            )
+        )
+
+    async def _delete_original_later(
+        self,
+        interaction: discord.Interaction,
+        delay: float,
+    ):
+        current_task = asyncio.current_task()
+
+        try:
+            await asyncio.sleep(delay)
+
+            await interaction.delete_original_response()
+
+        except asyncio.CancelledError:
+            pass
+
+        except (
+            discord.NotFound,
+            discord.HTTPException,
+        ):
+            pass
+
+        finally:
+            if self._delete_task is current_task:
+                self._delete_task = None
+
+    async def delete_now(
+        self,
+        interaction: discord.Interaction,
+    ):
+        self.cancel_auto_delete()
+
+        try:
+            await interaction.delete_original_response()
+
+        except (
+            discord.NotFound,
+            discord.HTTPException,
+        ):
+            pass
+
+
+# ============================================================
+# BASIC HELPERS
+# ============================================================
+
 def parse_duration(raw: str) -> Optional[int]:
     """
     Формати:
@@ -92,7 +280,11 @@ def parse_duration(raw: str) -> Optional[int]:
     1d
     0 = без обмеження часу
     """
-    s = raw.strip().lower().replace(" ", "")
+
+    s = raw.strip().lower().replace(
+        " ",
+        "",
+    )
 
     if s == "0":
         return 0
@@ -102,12 +294,22 @@ def parse_duration(raw: str) -> Optional[int]:
         s,
     )
 
-    if not m or not any(m.groups()):
+    if not m or not any(
+        m.groups()
+    ):
         return None
 
-    days = int(m.group(1) or 0)
-    hours = int(m.group(2) or 0)
-    mins = int(m.group(3) or 0)
+    days = int(
+        m.group(1) or 0
+    )
+
+    hours = int(
+        m.group(2) or 0
+    )
+
+    mins = int(
+        m.group(3) or 0
+    )
 
     total = (
         days * 1440
@@ -115,16 +317,25 @@ def parse_duration(raw: str) -> Optional[int]:
         + mins
     )
 
-    return total if total > 0 else None
+    return (
+        total
+        if total > 0
+        else None
+    )
 
 
-def fmt_dt(iso: str) -> str:
+def fmt_dt(
+    iso: str,
+) -> str:
     if not iso:
         return "Без обмеження"
 
     try:
         dt = datetime.fromisoformat(
-            iso.replace("Z", "+00:00")
+            iso.replace(
+                "Z",
+                "+00:00",
+            )
         )
 
         return dt.astimezone().strftime(
@@ -135,7 +346,9 @@ def fmt_dt(iso: str) -> str:
         return iso
 
 
-def lottery_status_text(row) -> str:
+def lottery_status_text(
+    row,
+) -> str:
     if row["status"] == "active":
         return "🟢 Прийом квитків відкритий"
 
@@ -214,25 +427,33 @@ def lottery_embed(
 
     e.add_field(
         name="🎲 Переможців",
-        value=str(row["winner_count"]),
+        value=str(
+            row["winner_count"]
+        ),
         inline=True,
     )
 
     e.add_field(
         name="🟢 Підтверджено",
-        value=str(confirmed),
+        value=str(
+            confirmed
+        ),
         inline=True,
     )
 
     e.add_field(
         name="🟡 Зарезервовано",
-        value=str(reserved),
+        value=str(
+            reserved
+        ),
         inline=True,
     )
 
     e.add_field(
         name="⚪ Вільно",
-        value=str(free),
+        value=str(
+            free
+        ),
         inline=True,
     )
 
@@ -241,7 +462,9 @@ def lottery_embed(
         value=(
             "Без обмеження"
             if not row["ends_at"]
-            else fmt_dt(row["ends_at"])
+            else fmt_dt(
+                row["ends_at"]
+            )
         ),
         inline=False,
     )
@@ -260,7 +483,9 @@ def lottery_embed(
     return e
 
 
-def get_counts(lottery_id: int):
+def get_counts(
+    lottery_id: int,
+):
     rows = db.conn.execute(
         """
         SELECT status, COUNT(*) AS cnt
@@ -272,17 +497,27 @@ def get_counts(lottery_id: int):
     ).fetchall()
 
     counts = {
-        r["status"]: int(r["cnt"])
+        r["status"]: int(
+            r["cnt"]
+        )
         for r in rows
     }
 
     return (
-        counts.get("reserved", 0),
-        counts.get("confirmed", 0),
+        counts.get(
+            "reserved",
+            0,
+        ),
+        counts.get(
+            "confirmed",
+            0,
+        ),
     )
 
 
-def get_lottery(lottery_id: int):
+def get_lottery(
+    lottery_id: int,
+):
     return db.conn.execute(
         """
         SELECT *
@@ -314,6 +549,25 @@ def user_confirmed_count(
     return int(
         row["cnt"]
     )
+
+
+def get_occupied_numbers(
+    lottery_id: int,
+):
+    rows = db.conn.execute(
+        """
+        SELECT number
+        FROM lottery_tickets
+        WHERE lottery_id = ?
+        AND status IN ('reserved','confirmed')
+        """,
+        (lottery_id,),
+    ).fetchall()
+
+    return {
+        int(row["number"])
+        for row in rows
+    }
 
 
 # ============================================================
@@ -454,13 +708,17 @@ class LotteryCreateStep1(
             "total_tickets": total,
         }
 
-        await interaction.response.send_message(
+        view = LotteryStep2Button(
+            state
+        )
+
+        await temporary_message(
+            interaction,
             "✅ **Крок 1 з 2 завершено.**\n\n"
             "Основні дані лотереї збережено.\n"
             "Натисни кнопку нижче, щоб перейти "
             "до налаштування лімітів і розіграшу.",
-            view=LotteryStep2Button(state),
-            ephemeral=True,
+            view=view,
         )
 
 
@@ -469,9 +727,12 @@ class LotteryCreateStep1(
 # ============================================================
 
 class LotteryStep2Button(
-    discord.ui.View
+    AutoDeleteEphemeralView
 ):
-    def __init__(self, state):
+    def __init__(
+        self,
+        state,
+    ):
         super().__init__(
             timeout=300
         )
@@ -488,23 +749,32 @@ class LotteryStep2Button(
             self.continue_callback
         )
 
-        self.add_item(button)
+        self.add_item(
+            button
+        )
 
     async def continue_callback(
         self,
         interaction: discord.Interaction,
     ):
-        try:
-            if interaction.message:
-                await interaction.message.delete()
-        except discord.DiscordException:
-            pass
+        self.cancel_auto_delete()
 
         await interaction.response.send_modal(
             LotteryCreateStep2(
                 self.state
             )
         )
+
+        # Після натискання "Продовжити"
+        # старе тимчасове повідомлення зникає.
+        try:
+            await interaction.delete_original_response()
+
+        except (
+            discord.NotFound,
+            discord.HTTPException,
+        ):
+            pass
 
 
 # ============================================================
@@ -533,7 +803,10 @@ class LotteryCreateStep2(
         max_length=30,
     )
 
-    def __init__(self, state):
+    def __init__(
+        self,
+        state,
+    ):
         super().__init__()
 
         self.state = state
@@ -590,6 +863,7 @@ class LotteryCreateStep2(
 
         if minutes == 0:
             ends_at = ""
+
         else:
             ends_at = (
                 now
@@ -627,7 +901,11 @@ class LotteryCreateStep2(
             return
 
         msg = await public_channel.send(
-            embed=lottery_embed(row),
+            embed=lottery_embed(
+                row,
+                0,
+                0,
+            ),
             view=LotteryPublicView(
                 lottery_id
             ),
@@ -638,16 +916,11 @@ class LotteryCreateStep2(
             msg.id,
         )
 
-        await interaction.response.send_message(
+        await temporary_message(
+            interaction,
             f"✅ Лотерею **{row['name']}** створено "
             f"та опубліковано в "
             f"<#{LOTTERY_PUBLIC_CHANNEL_ID}>.",
-            ephemeral=True,
-        )
-
-        schedule_delete(
-            interaction,
-            10,
         )
 
         await audit_log(
@@ -726,16 +999,18 @@ class LotteryBuyButton(
             )
             return
 
-        await interaction.response.send_message(
+        view = TicketPickerView(
+            self.lottery_id,
+            interaction.user.id,
+        )
+
+        await temporary_message(
+            interaction,
             "🎟️ **Вибір квитків**\n"
             "Натискай на номери, щоб вибрати їх.\n"
             "Після завершення натисни "
             "**Підтвердити вибір**.",
-            view=TicketPickerView(
-                self.lottery_id,
-                interaction.user.id,
-            ),
-            ephemeral=True,
+            view=view,
         )
 
 
@@ -790,15 +1065,10 @@ class LotteryMyTicketsButton(
             for r in rows
         ]
 
-        await interaction.response.send_message(
+        await temporary_message(
+            interaction,
             "🎫 **Твої квитки**\n\n"
             + "\n".join(lines),
-            ephemeral=True,
-        )
-
-        schedule_delete(
-            interaction,
-            10,
         )
 
 
@@ -807,7 +1077,7 @@ class LotteryMyTicketsButton(
 # ============================================================
 
 class TicketPickerView(
-    discord.ui.View
+    AutoDeleteEphemeralView
 ):
     def __init__(
         self,
@@ -828,8 +1098,22 @@ class TicketPickerView(
             selected or []
         )
 
+        self.rebuild()
+
+    def rebuild(self):
+        """
+        Повністю перебудовує кнопки поточної сторінки.
+
+        Важливо:
+        використовується ТОЙ САМИЙ View,
+        тому таймер авто-видалення можна
+        коректно перезапускати після кожного кліку.
+        """
+
+        self.clear_items()
+
         row = get_lottery(
-            lottery_id
+            self.lottery_id
         )
 
         if not row:
@@ -839,25 +1123,19 @@ class TicketPickerView(
             row["total_tickets"]
         )
 
-        start = page * 20 + 1
+        start = (
+            self.page * 20
+            + 1
+        )
 
         end = min(
             total,
             start + 19,
         )
 
-        occupied = {
-            int(r["number"])
-            for r in db.conn.execute(
-                """
-                SELECT number
-                FROM lottery_tickets
-                WHERE lottery_id = ?
-                AND status IN ('reserved','confirmed')
-                """,
-                (lottery_id,),
-            ).fetchall()
-        }
+        occupied = get_occupied_numbers(
+            self.lottery_id
+        )
 
         for n in range(
             start,
@@ -877,7 +1155,7 @@ class TicketPickerView(
                     else discord.ButtonStyle.secondary
                 ),
                 custom_id=(
-                    f"pick:{lottery_id}:{n}"
+                    f"pick:{self.lottery_id}:{n}"
                 ),
                 row=(n - start) // 5,
             )
@@ -886,7 +1164,9 @@ class TicketPickerView(
                 self.make_callback(n)
             )
 
-            self.add_item(button)
+            self.add_item(
+                button
+            )
 
         max_page = max(
             0,
@@ -897,33 +1177,37 @@ class TicketPickerView(
             label="Сторінка",
             emoji="⬅️",
             style=discord.ButtonStyle.secondary,
-            disabled=page == 0,
+            disabled=self.page == 0,
             row=4,
         )
 
         prev.callback = (
             self.page_callback(
-                page - 1
+                self.page - 1
             )
         )
 
-        self.add_item(prev)
+        self.add_item(
+            prev
+        )
 
         next_button = discord.ui.Button(
-            label=f"{page + 1}/{max_page + 1}",
+            label=f"{self.page + 1}/{max_page + 1}",
             emoji="➡️",
             style=discord.ButtonStyle.secondary,
-            disabled=page >= max_page,
+            disabled=self.page >= max_page,
             row=4,
         )
 
         next_button.callback = (
             self.page_callback(
-                page + 1
+                self.page + 1
             )
         )
 
-        self.add_item(next_button)
+        self.add_item(
+            next_button
+        )
 
         confirm = discord.ui.Button(
             label=(
@@ -939,7 +1223,9 @@ class TicketPickerView(
             self.confirm_callback
         )
 
-        self.add_item(confirm)
+        self.add_item(
+            confirm
+        )
 
         clear = discord.ui.Button(
             label="Очистити",
@@ -952,10 +1238,41 @@ class TicketPickerView(
             self.clear_callback
         )
 
-        self.add_item(clear)
+        self.add_item(
+            clear
+        )
 
-    def make_callback(self, n):
-        async def cb(interaction):
+    async def refresh_view(
+        self,
+        interaction,
+        text=None,
+    ):
+        self.rebuild()
+
+        if text is None:
+            text = (
+                "🎟️ **Вибір квитків**\n"
+                f"Обрано: **{len(self.selected)}**"
+            )
+
+        await interaction.response.edit_message(
+            content=text,
+            view=self,
+        )
+
+        # Кожна дія оновлює 10-секундний таймер.
+        self.start_auto_delete(
+            interaction,
+            TEMP_MESSAGE_SECONDS,
+        )
+
+    def make_callback(
+        self,
+        n,
+    ):
+        async def cb(
+            interaction,
+        ):
             if (
                 interaction.user.id
                 != self.user_id
@@ -974,11 +1291,36 @@ class TicketPickerView(
                 not row
                 or row["status"] != "active"
             ):
+                self.cancel_auto_delete()
+
                 await interaction.response.edit_message(
                     content=(
                         "🔒 **Продаж квитків завершено.**"
                     ),
                     view=None,
+                )
+
+                schedule_delete(
+                    interaction,
+                    TEMP_MESSAGE_SECONDS,
+                )
+
+                return
+
+            # Якщо квиток уже зайняв інший користувач,
+            # не дозволяємо його вибрати.
+            occupied = get_occupied_numbers(
+                self.lottery_id
+            )
+
+            if (
+                n in occupied
+                and n not in self.selected
+            ):
+                await temporary_error(
+                    interaction,
+                    f"❌ Квиток **#{n:02d}** "
+                    "вже зарезервований або підтверджений.",
                 )
                 return
 
@@ -1011,23 +1353,19 @@ class TicketPickerView(
 
                 self.selected.add(n)
 
-            await interaction.response.edit_message(
-                content=(
-                    "🎟️ **Вибір квитків**\n"
-                    f"Обрано: **{len(self.selected)}**"
-                ),
-                view=TicketPickerView(
-                    self.lottery_id,
-                    self.user_id,
-                    self.page,
-                    self.selected,
-                ),
+            await self.refresh_view(
+                interaction
             )
 
         return cb
 
-    def page_callback(self, page):
-        async def cb(interaction):
+    def page_callback(
+        self,
+        page,
+    ):
+        async def cb(
+            interaction,
+        ):
             if (
                 interaction.user.id
                 != self.user_id
@@ -1038,17 +1376,10 @@ class TicketPickerView(
                 )
                 return
 
-            await interaction.response.edit_message(
-                content=(
-                    "🎟️ **Вибір квитків**\n"
-                    f"Обрано: **{len(self.selected)}**"
-                ),
-                view=TicketPickerView(
-                    self.lottery_id,
-                    self.user_id,
-                    page,
-                    self.selected,
-                ),
+            self.page = page
+
+            await self.refresh_view(
+                interaction
             )
 
         return cb
@@ -1069,15 +1400,11 @@ class TicketPickerView(
 
         self.selected.clear()
 
-        await interaction.response.edit_message(
-            content=(
+        await self.refresh_view(
+            interaction,
+            (
                 "🎟️ **Вибір квитків**\n"
                 "Обрано: **0**"
-            ),
-            view=TicketPickerView(
-                self.lottery_id,
-                self.user_id,
-                self.page,
             ),
         )
 
@@ -1110,23 +1437,37 @@ class TicketPickerView(
             not row
             or row["status"] != "active"
         ):
+            self.cancel_auto_delete()
+
             await interaction.response.edit_message(
                 content=(
                     "🔒 **Продаж квитків завершено.**"
                 ),
                 view=None,
             )
+
+            schedule_delete(
+                interaction,
+                TEMP_MESSAGE_SECONDS,
+            )
+
             return
+
+        selected_numbers = sorted(
+            self.selected
+        )
 
         ok, request_id, reason = (
             db.reserve_lottery_tickets(
                 self.lottery_id,
                 self.user_id,
-                sorted(self.selected),
+                selected_numbers,
             )
         )
 
         if not ok:
+            self.cancel_auto_delete()
+
             await interaction.response.edit_message(
                 content=f"❌ {reason}",
                 view=None,
@@ -1134,31 +1475,61 @@ class TicketPickerView(
 
             schedule_delete(
                 interaction,
-                10,
+                TEMP_MESSAGE_SECONDS,
+            )
+
+            # Навіть при помилці оновлюємо публічний
+            # стан, бо причиною міг бути вже зайнятий квиток.
+            await refresh_lottery_message(
+                interaction.client,
+                self.lottery_id,
             )
 
             return
 
+        # ====================================================
+        # ГОЛОВНЕ ВИПРАВЛЕННЯ:
+        # після резервування одразу оновлюємо
+        # "🟡 Зарезервовано" у публічній лотереї.
+        # ====================================================
+
+        await refresh_lottery_message(
+            interaction.client,
+            self.lottery_id,
+        )
+
         total = (
-            len(self.selected)
+            len(selected_numbers)
             * int(
                 row["ticket_price_cents"]
             )
         )
 
+        self.cancel_auto_delete()
+
+        payment_view = LotteryPaymentView(
+            request_id
+        )
+
         await interaction.response.edit_message(
             content=(
                 f"🎫 **Резерв створено**\n\n"
-                f"Квитків: **{len(self.selected)}**\n"
+                f"Квитків: **{len(selected_numbers)}**\n"
+                f"Номери: **"
+                f"{', '.join(f'{n:02d}' for n in selected_numbers)}"
+                f"**\n"
                 f"Сума: **{format_cents(total)}**\n\n"
                 "Після внесення коштів натисни "
                 "кнопку нижче. Квитки залишаються "
                 "зарезервованими, поки керівництво "
                 "не підтвердить або не відхилить оплату."
             ),
-            view=LotteryPaymentView(
-                request_id
-            ),
+            view=payment_view,
+        )
+
+        payment_view.start_auto_delete(
+            interaction,
+            TEMP_MESSAGE_SECONDS,
         )
 
 
@@ -1167,7 +1538,7 @@ class TicketPickerView(
 # ============================================================
 
 class LotteryPaymentView(
-    discord.ui.View
+    AutoDeleteEphemeralView
 ):
     def __init__(
         self,
@@ -1243,6 +1614,8 @@ class LotteryPaymentView(
             self.request_id
         )
 
+        self.cancel_auto_delete()
+
         await interaction.response.edit_message(
             content=(
                 "🟡 **Кошти внесено.**\n"
@@ -1253,7 +1626,7 @@ class LotteryPaymentView(
 
         schedule_delete(
             interaction,
-            10,
+            TEMP_MESSAGE_SECONDS,
         )
 
         try:
@@ -1303,6 +1676,8 @@ class LotteryPaymentView(
             "Скасовано гравцем",
         )
 
+        self.cancel_auto_delete()
+
         await interaction.response.edit_message(
             content=(
                 "❌ **Резерв скасовано.**\n"
@@ -1313,7 +1688,13 @@ class LotteryPaymentView(
 
         schedule_delete(
             interaction,
-            10,
+            TEMP_MESSAGE_SECONDS,
+        )
+
+        # Повертаємо квитки у "вільні".
+        await refresh_lottery_message(
+            interaction.client,
+            req["lottery_id"],
         )
 
 
@@ -1408,9 +1789,10 @@ class LotteryAdminView(
 
         schedule_delete(
             interaction,
-            10,
+            TEMP_MESSAGE_SECONDS,
         )
 
+        # reserved -> confirmed.
         await refresh_lottery_message(
             interaction.client,
             req["lottery_id"],
@@ -1466,9 +1848,10 @@ class LotteryAdminView(
 
         schedule_delete(
             interaction,
-            10,
+            TEMP_MESSAGE_SECONDS,
         )
 
+        # reserved -> free.
         await refresh_lottery_message(
             interaction.client,
             req["lottery_id"],
@@ -1483,6 +1866,26 @@ async def refresh_lottery_message(
     bot,
     lottery_id,
 ):
+    """
+    Повністю оновлює публічне повідомлення лотереї.
+
+    Тут рахується фактична кількість:
+        reserved
+        confirmed
+
+    Тому після резерву:
+        🟡 Зарезервовано
+    збільшується одразу.
+
+    Після підтвердження:
+        🟡 Зарезервовано зменшується
+        🟢 Підтверджено збільшується
+
+    Після відхилення/скасування:
+        🟡 Зарезервовано зменшується
+        ⚪ Вільно збільшується
+    """
+
     row = get_lottery(
         lottery_id
     )
@@ -1524,8 +1927,11 @@ async def refresh_lottery_message(
             ),
         )
 
-    except discord.DiscordException:
-        pass
+    except discord.DiscordException as exc:
+        print(
+            "[LOTTERY] Could not refresh "
+            f"lottery #{lottery_id}: {exc}"
+        )
 
 
 # ============================================================
@@ -1669,7 +2075,7 @@ class LotteryPendingView(
 
                 schedule_delete(
                     interaction,
-                    10,
+                    TEMP_MESSAGE_SECONDS,
                 )
 
                 return
@@ -1684,7 +2090,7 @@ class LotteryPendingView(
 
                 schedule_delete(
                     interaction,
-                    10,
+                    TEMP_MESSAGE_SECONDS,
                 )
 
                 return
@@ -1722,7 +2128,7 @@ class LotteryPendingView(
 # ============================================================
 
 class LotteryManagementView(
-    discord.ui.View
+    AutoDeleteEphemeralView
 ):
     def __init__(self):
         super().__init__(
@@ -1799,9 +2205,21 @@ class LotteryManagementView(
             )
             return
 
+        # Панель тимчасова.
+        self.cancel_auto_delete()
+
         await interaction.response.send_modal(
             LotteryCreateStep1()
         )
+
+        try:
+            await interaction.delete_original_response()
+
+        except (
+            discord.NotFound,
+            discord.HTTPException,
+        ):
+            pass
 
     async def pending(
         self,
@@ -1827,16 +2245,10 @@ class LotteryManagementView(
         )
 
         if not rows:
-            await interaction.response.send_message(
-                "🟢 Немає оплат, які очікують перевірки.",
-                ephemeral=True,
-            )
-
-            schedule_delete(
+            await temporary_message(
                 interaction,
-                10,
+                "🟢 Немає оплат, які очікують перевірки.",
             )
-
             return
 
         lines = []
@@ -1864,6 +2276,11 @@ class LotteryManagementView(
                 rows[:25]
             ),
             ephemeral=True,
+        )
+
+        schedule_delete(
+            interaction,
+            TEMP_MESSAGE_SECONDS,
         )
 
     async def draw_list(
@@ -1897,24 +2314,25 @@ class LotteryManagementView(
         ).fetchall()
 
         if not rows:
-            await interaction.response.send_message(
-                "🟢 Немає активних лотерей.",
-                ephemeral=True,
-            )
-
-            schedule_delete(
+            await temporary_message(
                 interaction,
-                10,
+                "🟢 Немає активних лотерей.",
             )
-
             return
+
+        view = LotteryDrawListView(
+            rows
+        )
 
         await interaction.response.send_message(
             "🎲 **Обери лотерею для завершення:**",
-            view=LotteryDrawListView(
-                rows
-            ),
+            view=view,
             ephemeral=True,
+        )
+
+        view.start_auto_delete(
+            interaction,
+            TEMP_MESSAGE_SECONDS,
         )
 
 
@@ -1923,7 +2341,7 @@ class LotteryManagementView(
 # ============================================================
 
 class LotteryDrawListView(
-    discord.ui.View
+    AutoDeleteEphemeralView
 ):
     def __init__(
         self,
@@ -1995,7 +2413,6 @@ class LotteryDrawListView(
             )
 
             winner_lines = []
-
             winner_rows = []
 
             for n in nums:
@@ -2033,6 +2450,8 @@ class LotteryDrawListView(
                 else "Переможців не знайдено."
             )
 
+            self.cancel_auto_delete()
+
             await interaction.response.edit_message(
                 content=(
                     "🏆 **Розіграш проведено**\n\n"
@@ -2044,7 +2463,7 @@ class LotteryDrawListView(
 
             schedule_delete(
                 interaction,
-                10,
+                TEMP_MESSAGE_SECONDS,
             )
 
             await refresh_lottery_message(
@@ -2146,10 +2565,17 @@ def register_commands(
             )
             return
 
+        view = LotteryManagementView()
+
         await interaction.response.send_message(
             "🎟️ **Лотереї Agosto**",
-            view=LotteryManagementView(),
+            view=view,
             ephemeral=True,
+        )
+
+        view.start_auto_delete(
+            interaction,
+            TEMP_MESSAGE_SECONDS,
         )
 
 
@@ -2161,8 +2587,11 @@ async def ensure_lottery_channels(
     bot,
 ):
     """
-    Ensure the management panel exists
-    in the dedicated management channel.
+    Забезпечує наявність постійної панелі
+    керування в management-каналі.
+
+    Це НЕ тимчасове повідомлення.
+    Воно не видаляється через 10 секунд.
     """
 
     if not LOTTERY_MANAGEMENT_CHANNEL_ID:
@@ -2232,6 +2661,7 @@ def restore_management_view(
         bot.add_view(
             LotteryManagementView()
         )
+
     except Exception:
         pass
 

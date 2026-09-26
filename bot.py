@@ -31,7 +31,7 @@ import bonuses
 import birthdays
 import storage
 import lottery
-
+import wars
 
 async def scheduled_posts_loop(bot_instance: commands.Bot):
   await bot_instance.wait_until_ready()
@@ -132,7 +132,10 @@ class ContractBot(commands.Bot):
     self.add_view(contracts.UnpaidCompletedView(self))
     self.add_view(birthdays.BirthdayPanelView())
     self.add_view(storage.StoragePanelView())
+    
+    await wars.restore_active_views(self)
 
+    
     if not self._commands_registered:
       contracts.register_commands(self)
       payouts.register_commands(self)
@@ -141,8 +144,9 @@ class ContractBot(commands.Bot):
       birthdays.register_commands(self)
       storage.register_commands(self)
       lottery.register_commands(self)
+      wars.register_commands(self)
       self._commands_registered = True
-
+     
     if self._scheduled_posts_task is None:
       self._scheduled_posts_task = asyncio.create_task(scheduled_posts_loop(self))
 

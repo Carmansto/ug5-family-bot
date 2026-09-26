@@ -1060,7 +1060,125 @@ async def send_payouts_list(
     )
 
 
+def reversible_lottery_prizes(guild_id: int, member_id: Optional[int] = None):
+  query = (
+    "SELECT p.*, l.name AS lottery_name FROM lottery_payouts p "
+    "JOIN lotteries l ON l.id=p.lottery_id "
+    "WHERE p.guild_id=? AND p.status IN ('pending','paid')"
+  )
+  params = [guild_id]
+  if member_id is not None:
+    query += " AND p.user_id=?"
+    params.append(member_id)
+  return db.conn.execute(query + " ORDER BY p.id DESC", params).fetchall()
+
+
+class CancelLotteryPrizeSelect(discord.ui.Select):
+  def __init__(self, rows):
+    super().__init__(placeholder="Оберіть нарахування лотереї", options=[
+      discord.SelectOption(
+        label=f"{row['lottery_name']} · квиток #{row['ticket_number']}"[:100],
+        description=f"{'Виплачено' if row['status']=='paid' else 'Очікує'} · Учасник {row['user_id']} · {format_cents(row['amount_cents'])}"[:100],
+        value=str(row['id']),
+      ) for row in rows
+    ])
+
+  async def callback(self, interaction: discord.Interaction):
+    if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
+      return await interaction.response.send_message("Доступно тільки керівництву.", ephemeral=True)
+    payout_id = int(self.values[0])
+    row = db.conn.execute(
+      "SELECT p.*, l.name AS lottery_name FROM lottery_payouts p JOIN lotteries l ON l.id=p.lottery_id "
+      "WHERE p.id=? AND p.guild_id=? AND p.status IN ('pending','paid')", (payout_id, interaction.guild_id),
+    ).fetchone()
+    if not row:
+      return await interaction.response.send_message("Ця виплата вже закрита або скасована.", ephemeral=True)
+    await interaction.response.send_message(
+      f"Скасувати **тільки цей лотерейний виграш**?\n"
+      f"Учасник: <@{row['user_id']}>\nЛотерея: **{row['lottery_name']}**\n"
+      f"Квиток: **#{row['ticket_number']}** · Сума: **{format_cents(row['amount_cents'])}**\n"
+      + ("⚠️ Позначено виплаченим: сторнування виправить облік, але не поверне реальні гроші."
+         if row["status"] == "paid" else "Сума зникне з черги виплат."),
+      view=CancelLotteryPrizeConfirm(payout_id), ephemeral=True,
+    )
+
+
+class CancelLotteryPrizeView(discord.ui.View):
+  def __init__(self, guild_id: int, member_id: Optional[int] = None, page: int = 0):
+    super().__init__(timeout=300)
+    self.guild_id, self.member_id = guild_id, member_id
+    rows = reversible_lottery_prizes(guild_id, member_id)
+    self.page = min(max(page, 0), max(0, (len(rows) - 1) // 25))
+    part = rows[self.page * 25:(self.page + 1) * 25]
+    if part:
+      self.add_item(CancelLotteryPrizeSelect(part))
+    self.previous.disabled = self.page == 0
+    self.next.disabled = (self.page + 1) * 25 >= len(rows)
+
+  @discord.ui.button(label="Назад", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+  async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
+    await interaction.response.edit_message(view=CancelLotteryPrizeView(self.guild_id, self.member_id, self.page - 1))
+
+  @discord.ui.button(label="Далі", emoji="▶️", style=discord.ButtonStyle.secondary, row=1)
+  async def next(self, interaction: discord.Interaction, button: discord.ui.Button):
+    await interaction.response.edit_message(view=CancelLotteryPrizeView(self.guild_id, self.member_id, self.page + 1))
+
+
+class CancelLotteryPrizeConfirm(discord.ui.View):
+  def __init__(self, payout_id: int):
+    super().__init__(timeout=120)
+    self.payout_id = payout_id
+
+  @discord.ui.button(label="Так, скасувати", emoji="🗑️", style=discord.ButtonStyle.danger)
+  async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+    if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
+      return await interaction.response.send_message("Доступно тільки керівництву.", ephemeral=True)
+    row = db.cancel_lottery_payout(interaction.guild_id, self.payout_id, interaction.user.id)
+    if not row:
+      return await interaction.response.edit_message(content="Виплата вже закрита або скасована.", view=None)
+    await interaction.response.edit_message(
+      content=f"✅ Виграш <@{row['user_id']}> на **{format_cents(row['amount_cents'])}** "
+              + ("сторновано в обліку." if row["status"] == "paid" else "скасовано до виплати."), view=None,
+    )
+    await audit_log(
+      interaction.guild, "🗑️ Скасовано лотерейний виграш",
+      f"Учасник: <@{row['user_id']}> · Лотерея #{row['lottery_id']} · Квиток #{row['ticket_number']}\n"
+      f"Сума: **{format_cents(row['amount_cents'])}** · Було: **{row['status']}** · Скасував/ла: <@{interaction.user.id}>",
+      discord.Color.orange(),
+    )
+    if row["status"] == "paid":
+      member = await fetch_member_safe(interaction.guild, row["user_id"])
+      if member:
+        thread = await resolve_payout_thread(interaction.guild, member)
+        if thread:
+          try:
+            await thread.send(
+              f"↩️ Лотерейну виплату за квиток **#{row['ticket_number']}** "
+              f"на **{format_cents(row['amount_cents'])}** сторновано в обліку. "
+              "Це не означає повернення фактично переданих грошей."
+            )
+          except discord.DiscordException:
+            pass
+
+  @discord.ui.button(label="Ні", style=discord.ButtonStyle.secondary)
+  async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+    await interaction.response.edit_message(content="Скасовано без змін.", view=None)
+
+
 def register_commands(bot: commands.Bot):
+  @bot.tree.command(name="cancel-payout", description="Скасувати або сторнувати лотерейний виграш учасника")
+  @app_commands.describe(member="Учасник, чиї нарахування показати (необов'язково)")
+  async def cancel_payout(interaction: discord.Interaction, member: Optional[discord.Member] = None):
+    if not isinstance(interaction.user, discord.Member) or not management_member(interaction.user):
+      return await interaction.response.send_message("Доступно тільки керівництву.", ephemeral=True)
+    rows = reversible_lottery_prizes(interaction.guild_id, member.id if member else None)
+    if not rows:
+      return await interaction.response.send_message("Лотерейних виграшів для скасування немає.", ephemeral=True)
+    await interaction.response.send_message(
+      "Оберіть виграш. Виплачений запис можна сторнувати лише в обліку; реальну виплату бот не повертає.",
+      view=CancelLotteryPrizeView(interaction.guild_id, member.id if member else None), ephemeral=True,
+    )
+
   @bot.tree.command(
     name="payouts",
     description="Показати накопичені суми до виплати учасникам",

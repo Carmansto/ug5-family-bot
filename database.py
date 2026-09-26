@@ -225,6 +225,9 @@ class Database:
       amount_cents INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, paid_at TEXT, paid_by INTEGER
     )
     """)
+    for column, definition in (("cancelled_at", "TEXT"), ("cancelled_by", "INTEGER")):
+      if column not in {row["name"] for row in self.conn.execute("PRAGMA table_info(lottery_payouts)")}:
+        self.conn.execute(f"ALTER TABLE lottery_payouts ADD COLUMN {column} {definition}")
 
     self.conn.execute("""
     CREATE TABLE IF NOT EXISTS bot_settings (
@@ -1518,6 +1521,27 @@ class Database:
       [user_id],
       paid_by,
     )
+
+  def cancel_lottery_payout(self, guild_id: int, payout_id: int, cancelled_by: int):
+    """Cancel a pending prize or reverse a marked-paid prize in the bot ledger."""
+    try:
+      self.conn.execute("BEGIN IMMEDIATE")
+      row = self.conn.execute(
+        "SELECT * FROM lottery_payouts WHERE guild_id=? AND id=? AND status IN ('pending','paid')",
+        (guild_id, payout_id),
+      ).fetchone()
+      if row:
+        new_status = "cancelled" if row["status"] == "pending" else "reversed"
+        self.conn.execute(
+          "UPDATE lottery_payouts SET status=?, cancelled_at=?, cancelled_by=? "
+          "WHERE guild_id=? AND id=? AND status=?",
+          (new_status, utc_now_iso(), cancelled_by, guild_id, payout_id, row["status"]),
+        )
+      self.conn.commit()
+      return row
+    except Exception:
+      self.conn.rollback()
+      raise
 
 
   def birthdays_for_guild(self, guild_id: int):

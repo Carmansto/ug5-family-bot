@@ -505,8 +505,8 @@ class Database:
 
   def backfill_family_contributions(self):
     """
-    \u0421\u0442\u0430\u0440\u0456 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0456 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438 \u0432\u0436\u0435 \u043c\u0456\u0441\u0442\u044f\u0442\u044c payment_mode / excluded ids,
-    \u0442\u043e\u043c\u0443 \u043e\u0441\u043e\u0431\u0438\u0441\u0442\u0438\u0439 \u0432\u043d\u0435\u0441\u043e\u043a \u0443 \u0411\u0430\u043d\u043a \u0441\u0456\u043c'\u0457 \u043c\u043e\u0436\u043d\u0430 \u0432\u0456\u0434\u043d\u043e\u0432\u0438\u0442\u0438 \u0437\u0430\u0434\u043d\u0456\u043c \u0447\u0438\u0441\u043b\u043e\u043c.
+    Старі оплачені контракти вже мають payment_mode / excluded ids,
+    тому особистий внесок у Банк сім'ї можна відновити задним числом.
     """
     rows = self.conn.execute("""
     SELECT *
@@ -737,9 +737,9 @@ class Database:
 
   def annul_paid(self, message_id: int, annulled_by: int) -> bool:
     """
-    \u0410\u043d\u0443\u043b\u044e\u0454 \u0432\u0436\u0435 \u043e\u043f\u043b\u0430\u0447\u0435\u043d\u0438\u0439 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442 \u0431\u0435\u0437 \u0444\u0456\u0437\u0438\u0447\u043d\u043e\u0433\u043e \u0432\u0438\u0434\u0430\u043b\u0435\u043d\u043d\u044f.
-    \u0421\u0442\u0430\u0440\u0456 payout-\u0438 \u0437\u0430\u043b\u0438\u0448\u0430\u044e\u0442\u044c\u0441\u044f \u0432 \u0411\u0414 \u044f\u043a \u0456\u0441\u0442\u043e\u0440\u0438\u0447\u043d\u0438\u0439 \u0441\u043b\u0456\u0434,
-    \u0430\u043b\u0435 \u0447\u0435\u0440\u0435\u0437 status='annulled' \u0431\u0456\u043b\u044c\u0448\u0435 \u043d\u0435 \u043f\u043e\u0442\u0440\u0430\u043f\u043b\u044f\u044e\u0442\u044c \u0443 \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0443.
+    Анулює вже оплачений контракт без фізичного видалення.
+    Старі payout-и залишаються в БД як історичний слід,
+    але через status='annulled' більше не потрапляють у статистику.
     """
     cur = self.conn.execute("""
     UPDATE contracts
@@ -1676,12 +1676,12 @@ class Database:
     created_by: int,
   ) -> int:
     clean_name = " ".join(name.strip().split())
-    clean_unit = unit.strip() or "\u0448\u0442."
+    clean_unit = unit.strip() or "шт."
 
     if not clean_name:
-      raise ValueError("\u041d\u0430\u0437\u0432\u0430 \u043f\u0440\u0435\u0434\u043c\u0435\u0442\u0430 \u043f\u043e\u0440\u043e\u0436\u043d\u044f.")
+      raise ValueError("Назва предмета порожня.")
     if quantity < 0:
-      raise ValueError("\u041f\u043e\u0447\u0430\u0442\u043a\u043e\u0432\u0430 \u043a\u0456\u043b\u044c\u043a\u0456\u0441\u0442\u044c \u043d\u0435 \u043c\u043e\u0436\u0435 \u0431\u0443\u0442\u0438 \u0432\u0456\u0434'\u0454\u043c\u043d\u043e\u044e.")
+      raise ValueError("Початкова кількість не може бути від'ємною.")
 
     existing = next(
       (
@@ -1702,7 +1702,7 @@ class Database:
 
       if existing:
         if existing["active"]:
-          raise ValueError("\u0422\u0430\u043a\u0438\u0439 \u043f\u0440\u0435\u0434\u043c\u0435\u0442 \u0443\u0436\u0435 \u0454 \u043d\u0430 \u0441\u043a\u043b\u0430\u0434\u0456.")
+          raise ValueError("Такий предмет уже є на складі.")
 
         self.conn.execute("""
         UPDATE storage_items
@@ -1752,7 +1752,7 @@ class Database:
           created_by,
           quantity,
           quantity,
-          "\u041f\u043e\u0447\u0430\u0442\u043a\u043e\u0432\u0438\u0439 \u0437\u0430\u043b\u0438\u0448\u043e\u043a",
+          "Початковий залишок",
           now,
         ))
 
@@ -1770,7 +1770,7 @@ class Database:
   ):
     clean_name = " ".join(new_name.strip().split())
     if not clean_name:
-      raise ValueError("\u041d\u0430\u0437\u0432\u0430 \u043f\u0440\u0435\u0434\u043c\u0435\u0442\u0430 \u043f\u043e\u0440\u043e\u0436\u043d\u044f.")
+      raise ValueError("Назва предмета порожня.")
 
     duplicate = next(
       (
@@ -1786,7 +1786,7 @@ class Database:
     )
 
     if duplicate:
-      raise ValueError("\u041f\u0440\u0435\u0434\u043c\u0435\u0442 \u0437 \u0442\u0430\u043a\u043e\u044e \u043d\u0430\u0437\u0432\u043e\u044e \u0432\u0436\u0435 \u0456\u0441\u043d\u0443\u0454.")
+      raise ValueError("Предмет з такою назвою вже існує.")
 
     cur = self.conn.execute("""
     UPDATE storage_items
@@ -1800,7 +1800,7 @@ class Database:
     ))
 
     if cur.rowcount == 0:
-      raise ValueError("\u041f\u0440\u0435\u0434\u043c\u0435\u0442 \u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u043e.")
+      raise ValueError("Предмет не знайдено.")
 
     self.conn.commit()
 
@@ -1820,7 +1820,7 @@ class Database:
     ))
 
     if cur.rowcount == 0:
-      raise ValueError("\u041f\u0440\u0435\u0434\u043c\u0435\u0442 \u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u043e.")
+      raise ValueError("Предмет не знайдено.")
 
     self.conn.commit()
 
@@ -1834,9 +1834,9 @@ class Database:
     note: Optional[str] = None,
   ):
     if movement_type not in ("ADD", "TAKE"):
-      raise ValueError("\u041d\u0435\u0432\u0456\u0434\u043e\u043c\u0438\u0439 \u0442\u0438\u043f \u043e\u043f\u0435\u0440\u0430\u0446\u0456\u0457.")
+      raise ValueError("Невідомий тип операції.")
     if quantity <= 0:
-      raise ValueError("\u041a\u0456\u043b\u044c\u043a\u0456\u0441\u0442\u044c \u043c\u0430\u0454 \u0431\u0443\u0442\u0438 \u0431\u0456\u043b\u044c\u0448\u043e\u044e \u0437\u0430 0.")
+      raise ValueError("Кількість має бути більшою за 0.")
 
     try:
       self.conn.execute("BEGIN IMMEDIATE")
@@ -1848,14 +1848,14 @@ class Database:
       """, (guild_id, item_id)).fetchone()
 
       if not row:
-        raise ValueError("\u041f\u0440\u0435\u0434\u043c\u0435\u0442 \u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u043e.")
+        raise ValueError("Предмет не знайдено.")
 
       before = int(row["quantity"])
 
       if movement_type == "TAKE":
         if quantity > before:
           raise ValueError(
-            f"\u041d\u0430 \u0441\u043a\u043b\u0430\u0434\u0456 \u043b\u0438\u0448\u0435 {before} {row['unit']}."
+            f"На складі лише {before} {row['unit']}."
           )
         after = before - quantity
       else:
@@ -1970,14 +1970,36 @@ class Database:
     now=utc_now_iso()
     try:
       self.conn.execute('BEGIN IMMEDIATE'); ph=','.join('?' for _ in numbers)
-      existing=self.conn.execute(f"SELECT number FROM lottery_tickets WHERE lottery_id=? AND number IN ({ph})",(lottery_id,*numbers)).fetchall()
+      # Перевіряємо тільки АКТИВНІ квитки (reserved/confirmed).
+      # Раніше тут не було фільтра по статусу, тому вже
+      # звільнені (released) номери після скасування помилково
+      # вважалися зайнятими при повторному виборі.
+      existing=self.conn.execute(f"SELECT number FROM lottery_tickets WHERE lottery_id=? AND number IN ({ph}) AND status IN ('reserved','confirmed')",(lottery_id,*numbers)).fetchall()
       if existing: self.conn.rollback(); return False,None,'Один або кілька вибраних номерів уже зайняті.'
       current=self.conn.execute("SELECT COUNT(*) c FROM lottery_tickets WHERE lottery_id=? AND status IN ('reserved','confirmed')",(lottery_id,)).fetchone()['c']
       if current+len(numbers)>row['total_tickets']: self.conn.rollback(); return False,None,'Вільних квитків недостатньо.'
       user_count=self.conn.execute("SELECT COUNT(*) c FROM lottery_tickets WHERE lottery_id=? AND user_id=? AND status IN ('reserved','confirmed')",(lottery_id,user_id)).fetchone()['c']
       if row['ticket_limit_per_user'] and user_count+len(numbers)>row['ticket_limit_per_user']: self.conn.rollback(); return False,None,f"Твій ліміт — {row['ticket_limit_per_user']} квитків."
       cur=self.conn.execute("INSERT INTO lottery_requests (lottery_id,user_id,numbers_json,status,created_at) VALUES (?,?,?,?,?)",(lottery_id,user_id,json.dumps(numbers),'reserved',now)); rid=cur.lastrowid
-      for n in numbers: self.conn.execute("INSERT INTO lottery_tickets (lottery_id,number,user_id,status,reserved_at) VALUES (?,?,?,?,?)",(lottery_id,n,user_id,'reserved',now))
+      for n in numbers:
+        # Номер міг раніше вже існувати в lottery_tickets
+        # (released/rejected) — через UNIQUE(lottery_id, number)
+        # звичайний INSERT впав би з IntegrityError, тому
+        # перевикористовуємо той самий рядок через upsert.
+        self.conn.execute(
+          """
+          INSERT INTO lottery_tickets (lottery_id, number, user_id, status, reserved_at)
+          VALUES (?, ?, ?, 'reserved', ?)
+          ON CONFLICT(lottery_id, number)
+          DO UPDATE SET
+            user_id = excluded.user_id,
+            status = 'reserved',
+            reserved_at = excluded.reserved_at,
+            confirmed_at = NULL,
+            verified_by = NULL
+          """,
+          (lottery_id, n, user_id, now),
+        )
       self.conn.commit(); return True,rid,''
     except Exception: self.conn.rollback(); raise
   def mark_lottery_payment_pending(self, request_id): self.conn.execute("UPDATE lottery_requests SET status='payment_pending' WHERE id=? AND status='reserved'",(request_id,)); self.conn.commit()

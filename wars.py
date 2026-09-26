@@ -1,11 +1,9 @@
-import json
 import os
 import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
 
 import discord
-from discord import app_commands
 
 from config import GUILD_ID
 from database import db
@@ -23,6 +21,19 @@ COMMANDER_ROLE_IDS = {
     for x in os.getenv("COMMANDER_ROLE_IDS", "").split(",")
     if x.strip().isdigit()
 }
+
+MARKERS = {
+    "industrial": ("🏭", "Промислова зона"),
+    "military": ("🛡️", "Військовий об'єкт"),
+    "agriculture": ("🌾", "Сільське господарство"),
+    "other": ("📍", "Інший об'єкт"),
+    "commercial": ("🏬", "Комерційний об'єкт"),
+    "energy": ("⚡", "Енергетичний об'єкт"),
+}
+
+
+def complex_marker(row):
+    return MARKERS.get(row["marker_type"], ("🏢", "Комплекс"))
 
 DEFAULTS = {
     "wars_money_per_hour": "0",
@@ -146,6 +157,13 @@ def ensure_schema() -> None:
         CREATE INDEX IF NOT EXISTS idx_wars_resources_owner ON war_resource_ledger(guild_id, owner_name, ended_at);
         """
     )
+    for table, column, definition in (
+        ("war_complexes", "marker_type", "TEXT NOT NULL DEFAULT 'complex'"),
+        ("wars", "message_id", "INTEGER"),
+        ("wars", "channel_id", "INTEGER"),
+    ):
+        if column not in {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
     # Seed settings without overwriting existing values.
     for key, value in DEFAULTS.items():
         if db.get_setting(GUILD_ID, key) is None:
@@ -255,10 +273,11 @@ def change_owner(complex_id: int, new_owner: str, at: Optional[str] = None) -> O
     at = at or now_iso()
     settled = settle_ownership(complex_id, at)
     db.conn.execute(
-        "UPDATE war_complexes SET owner_name=?, ownership_started_at=? WHERE id=? AND guild_id=?",
-        (new_owner, at, complex_id, GUILD_ID),
+        "UPDATE war_complexes SET owner_name=?, active=?, ownership_started_at=? WHERE id=? AND guild_id=?",
+        (new_owner, int(new_owner == "Agosto"), at, complex_id, GUILD_ID),
     )
-    begin_ownership(complex_id, new_owner, at)
+    if new_owner == "Agosto":
+        begin_ownership(complex_id, new_owner, at)
     return settled
 
 
@@ -308,7 +327,7 @@ def add_member_to_war(war_id: int, user_id: int) -> None:
 def war_embed(war_id: int) -> discord.Embed:
     row = db.conn.execute(
         """
-        SELECT w.*, c.name AS complex_name, c.owner_name
+        SELECT w.*, c.name AS complex_name, c.owner_name, c.marker_type
         FROM wars w JOIN war_complexes c ON c.id=w.complex_id
         WHERE w.id=? AND w.guild_id=?
         """,
@@ -326,11 +345,11 @@ def war_embed(war_id: int) -> discord.Embed:
     if not lines:
         lines = ["Поки ніхто не записався."]
     embed = discord.Embed(
-        title=f"{kind} • війна за комплекс #{row['complex_id']}",
+        title=f"{kind} • війна #{war_id} · {complex_marker(row)[0]} {row['complex_name']}",
         description=(
-            f"🏢 **{row['complex_name']}**\n"
-            f"👑 Власник: **{row['owner_name']}**\n"
-            f"🎯 Противник: **{row['opponent']}**\n"
+            f"📍 Об'єкт: **#{row['complex_id']} {row['complex_name']}**\n"
+            f"🎯 Суперник: **{row['opponent']}**\n"
+            f"👑 Контроль: **{row['owner_name']}**\n"
             f"📌 Статус: **{status}**\n"
             f"👥 Учасників: **{len(parts)}" + (f"/{row['participant_limit']}**" if row["participant_limit"] else "**")
         ),
@@ -343,32 +362,91 @@ def war_embed(war_id: int) -> discord.Embed:
     return embed
 
 
-class RecruitView(discord.ui.View):
-    def __init__(self, war_id: int):
+class WarCardView(discord.ui.View):
+    def __init__(self, war_id: int, status: str, mode: str):
         super().__init__(timeout=None)
         self.war_id = war_id
-        join = discord.ui.Button(
-            label="Беру участь", emoji="🪖", style=discord.ButtonStyle.success,
-            custom_id=f"wars:join:{war_id}", row=0,
-        )
-        join.callback = self.join_callback
-        self.add_item(join)
-        profile = discord.ui.Button(
-            label="Профіль", emoji="👤", style=discord.ButtonStyle.secondary,
-            custom_id=f"wars:profile:{war_id}", row=0,
-        )
-        profile.callback = self.profile_callback
-        self.add_item(profile)
+        if status == "recruiting" and mode == "recruitment":
+            self.add_action("Беру участь", "🪖", discord.ButtonStyle.success, "join", self.join_callback)
+        if status == "recruiting":
+            self.add_action("Додати учасника", "👥", discord.ButtonStyle.secondary, "member", self.member_callback)
+            self.add_action("Почати", "▶️", discord.ButtonStyle.primary, "start", self.start_callback)
+        if status == "active":
+            self.add_action("Завершити війну", "🏁", discord.ButtonStyle.success, "finish", self.finish_callback)
+        self.add_action("Профіль", "👤", discord.ButtonStyle.secondary, "profile", self.profile_callback)
+        self.add_action("Скасувати", "🗑️", discord.ButtonStyle.danger, "cancel", self.cancel_callback, row=1)
+
+    def add_action(self, label, emoji, style, action, callback, row=0):
+        button = discord.ui.Button(label=label, emoji=emoji, style=style,
+                                   custom_id=f"wars:{action}:{self.war_id}", row=row)
+        button.callback = callback
+        self.add_item(button)
 
     async def join_callback(self, interaction: discord.Interaction):
+        war = get_active_war(self.war_id)
+        if not war or war["status"] != "recruiting" or war["registration_mode"] != "recruitment":
+            return await interaction.response.send_message("Набір уже закритий.", ephemeral=True)
         try:
             add_member_to_war(self.war_id, interaction.user.id)
         except ValueError as exc:
             return await interaction.response.send_message(str(exc), ephemeral=True)
         await interaction.response.edit_message(embed=war_embed(self.war_id), view=self)
 
+    async def member_callback(self, interaction: discord.Interaction):
+        if not is_commander(interaction.user):
+            return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
+        await interaction.response.send_message("Оберіть учасника:", view=WarMemberView(self.war_id), ephemeral=True)
+
+    async def start_callback(self, interaction: discord.Interaction):
+        if not is_commander(interaction.user):
+            return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
+        with db.conn:
+            changed = db.conn.execute(
+                "UPDATE wars SET status='active', started_at=? WHERE id=? AND guild_id=? AND status='recruiting'",
+                (now_iso(), self.war_id, GUILD_ID),
+            ).rowcount
+        if not changed:
+            return await interaction.response.send_message("Війна вже почалася або завершена.", ephemeral=True)
+        war = get_active_war(self.war_id)
+        await interaction.response.edit_message(embed=war_embed(self.war_id), view=WarCardView(self.war_id, war["status"], war["registration_mode"]))
+
+    async def finish_callback(self, interaction: discord.Interaction):
+        if not is_commander(interaction.user):
+            return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
+        war = get_active_war(self.war_id)
+        if not war or war["status"] != "active":
+            return await interaction.response.send_message("Можна завершити тільки розпочату війну.", ephemeral=True)
+        await interaction.response.send_message("Оберіть результат війни:", view=WarOutcomeView(self.war_id), ephemeral=True)
+
+    async def cancel_callback(self, interaction: discord.Interaction):
+        if not is_commander(interaction.user):
+            return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
+        with db.conn:
+            changed = db.conn.execute(
+                "UPDATE wars SET status='cancelled', ended_at=? WHERE id=? AND guild_id=? AND status IN ('recruiting','active')",
+                (now_iso(), self.war_id, GUILD_ID),
+            ).rowcount
+        if not changed:
+            return await interaction.response.send_message("Ця війна вже завершена.", ephemeral=True)
+        await interaction.response.edit_message(embed=war_embed(self.war_id), view=None)
+
     async def profile_callback(self, interaction: discord.Interaction):
         await interaction.response.send_message(embed=build_profile(interaction.user.id), ephemeral=True)
+
+
+async def refresh_war_message(bot, war_id: int) -> None:
+    war = db.conn.execute("SELECT * FROM wars WHERE id=? AND guild_id=?", (war_id, GUILD_ID)).fetchone()
+    if not war or not war["channel_id"] or not war["message_id"]:
+        return
+    channel = bot.get_channel(war["channel_id"])
+    try:
+        if channel is None:
+            channel = await bot.fetch_channel(war["channel_id"])
+        message = await channel.fetch_message(war["message_id"])
+        view = WarCardView(war_id, war["status"], war["registration_mode"]) if war["status"] in ("recruiting", "active") else None
+        await message.edit(embed=war_embed(war_id), view=view)
+    except discord.HTTPException as exc:
+        print(f"[WARS] Cannot update war card #{war_id}: {exc}")
 
 
 def resource_totals(owner_name: str = "Agosto", period: bool = False) -> dict:
@@ -426,9 +504,9 @@ def build_stats_embed() -> discord.Embed:
         name="💰 Дохід з комплексів",
         value=(
             f"**За поточний період**\n"
-            f"💵 {fmt_money(cur['money'])} грошей · 🏆 {cur['rating']} рейтингу · ⭐ {cur['authority']} авторитету\n\n"
+            f"$ {fmt_money(cur['money'])} · 🏆 {cur['rating']} рейтингу · 👑 {cur['authority']} авторитету\n\n"
             f"**За весь час**\n"
-            f"💵 {fmt_money(total['money'])} грошей · 🏆 {total['rating']} рейтингу · ⭐ {total['authority']} авторитету"
+            f"$ {fmt_money(total['money'])} · 🏆 {total['rating']} рейтингу · 👑 {total['authority']} авторитету"
         ),
         inline=False,
     )
@@ -442,19 +520,24 @@ class MainWarView(discord.ui.View):
     @discord.ui.button(label="Активні війни", emoji="⚔️", style=discord.ButtonStyle.primary, custom_id="wars:active")
     async def active(self, interaction: discord.Interaction, button: discord.ui.Button):
         rows = db.conn.execute(
-            "SELECT id FROM wars WHERE guild_id=? AND status IN ('recruiting','active') ORDER BY id DESC LIMIT 10",
+            "SELECT id,channel_id,message_id,status FROM wars WHERE guild_id=? AND status IN ('recruiting','active') ORDER BY id DESC LIMIT 10",
             (GUILD_ID,),
         ).fetchall()
         if not rows:
             return await interaction.response.send_message("Активних воєн за комплекси зараз немає.", ephemeral=True)
         await interaction.response.send_message(
-            "\n\n".join(f"**#{r['id']}**" for r in rows),
+            "\n".join(
+                f"**Війна #{r['id']}** · {'Набір' if r['status']=='recruiting' else 'Триває'} · "
+                + (f"[Відкрити](https://discord.com/channels/{GUILD_ID}/{r['channel_id']}/{r['message_id']})"
+                   if r['message_id'] and r['channel_id'] else "Картка недоступна")
+                for r in rows
+            ),
             ephemeral=True,
         )
 
     @discord.ui.button(label="Комплекси", emoji="🏢", style=discord.ButtonStyle.secondary, custom_id="wars:complexes")
     async def complexes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(embed=build_complexes_embed(), ephemeral=True)
+        await interaction.response.send_message(embed=build_complexes_embed(), view=HoldingsView(), ephemeral=True)
 
     @discord.ui.button(label="Бойовий рейтинг", emoji="🏆", style=discord.ButtonStyle.secondary, custom_id="wars:rating")
     async def rating(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -465,26 +548,44 @@ class MainWarView(discord.ui.View):
         await interaction.response.send_message(embed=build_profile(interaction.user.id), ephemeral=True)
 
 
-def build_complexes_embed() -> discord.Embed:
-    rows = current_complexes()
-    embed = discord.Embed(title="🏢 Комплекси", color=discord.Color.gold())
+def build_complexes_embed(page: int = 0) -> discord.Embed:
+    rows = current_complexes("Agosto")
+    pages = max(1, (len(rows) + 14) // 15)
+    page = min(max(page, 0), pages - 1)
+    embed = discord.Embed(title="🏢 Наші комплекси", color=discord.Color.gold())
     if not rows:
-        embed.description = "Комплексів ще немає."
+        embed.description = "Підконтрольних комплексів ще немає. Виграйте напад, щоб отримати перший."
         return embed
     lines = []
-    for row in rows:
-        lines.append(f"**#{row['id']} {row['name']}** — 👑 {row['owner_name']}")
+    for row in rows[page * 15:(page + 1) * 15]:
+        rate = db.conn.execute(
+            "SELECT money_per_hour,rating_per_hour,authority_per_hour FROM war_ownership_periods "
+            "WHERE complex_id=? AND guild_id=? AND closed=0 ORDER BY id DESC LIMIT 1",
+            (row["id"], GUILD_ID),
+        ).fetchone()
+        earnings = (f" · $ {fmt_money(rate['money_per_hour'])} · 🏆 {rate['rating_per_hour']} · 👑 {rate['authority_per_hour']} / год"
+                    if rate else "")
+        lines.append(f"**#{row['id']:03d}** {complex_marker(row)[0]} **{row['name']}**{earnings}")
     embed.description = "\n".join(lines)
-    embed.add_field(
-        name="💰 Нагорода",
-        value=(
-            f"💵 {fmt_money(int(setting(GUILD_ID,'wars_money_per_hour')))} / год\n"
-            f"🏆 {int(setting(GUILD_ID,'wars_rating_per_hour'))} / год\n"
-            f"⭐ {int(setting(GUILD_ID,'wars_authority_per_hour'))} / год"
-        ),
-        inline=False,
-    )
+    embed.set_footer(text=f"Сторінка {page + 1}/{pages} · Ставки фіксуються при отриманні")
     return embed
+
+
+class HoldingsView(discord.ui.View):
+    def __init__(self, page: int = 0):
+        super().__init__(timeout=300)
+        count = len(current_complexes("Agosto"))
+        self.page = min(max(page, 0), max(0, (count - 1) // 15))
+        self.previous.disabled = self.page == 0
+        self.next.disabled = (self.page + 1) * 15 >= count
+
+    @discord.ui.button(label="Назад", emoji="◀️", style=discord.ButtonStyle.secondary)
+    async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(embed=build_complexes_embed(self.page - 1), view=HoldingsView(self.page - 1))
+
+    @discord.ui.button(label="Далі", emoji="▶️", style=discord.ButtonStyle.secondary)
+    async def next(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(embed=build_complexes_embed(self.page + 1), view=HoldingsView(self.page + 1))
 
 
 def rating_rows(period: bool = True, user_id: Optional[int] = None):
@@ -570,9 +671,9 @@ async def send_to_channel(bot, channel_id: int, **kwargs):
 
 
 class RewardModal(discord.ui.Modal, title="💰 Нагорода за комплекс"):
-    money = discord.ui.TextInput(label="Гроші / комплекс / год", required=True, default="0")
+    money = discord.ui.TextInput(label="$ / комплекс / год", required=True, default="0")
     rating = discord.ui.TextInput(label="Рейтинг / комплекс / год", required=True, default="0")
-    authority = discord.ui.TextInput(label="Авторитет / комплекс / год", required=True, default="0")
+    authority = discord.ui.TextInput(label="Авторитет 👑 / комплекс / год", required=True, default="0")
     async def on_submit(self, interaction: discord.Interaction):
         if not is_management(interaction.user):
             return await interaction.response.send_message("Недостатньо прав.", ephemeral=True)
@@ -607,28 +708,6 @@ class PointsModal(discord.ui.Modal, title="🎖️ Бали рейтингу"):
         await interaction.response.edit_message(content="✅ Бали рейтингу збережено.", view=SettingsView())
 
 
-class ComplexCreateModal(discord.ui.Modal, title="🏢 Створити комплекс"):
-    name = discord.ui.TextInput(label="Назва комплексу", required=True, max_length=80)
-    owner = discord.ui.TextInput(label="Початковий власник", required=True, max_length=80)
-    async def on_submit(self, interaction: discord.Interaction):
-        if not is_management(interaction.user):
-            return await interaction.response.send_message("Недостатньо прав.", ephemeral=True)
-        name = self.name.value.strip()
-        owner = self.owner.value.strip()
-        try:
-            started = now_iso()
-            with db.conn:
-                cur = db.conn.execute(
-                    "INSERT INTO war_complexes(guild_id,name,owner_name,ownership_started_at,created_at) VALUES(?,?,?,?,?)",
-                    (GUILD_ID, name, owner, started, started),
-                )
-                complex_id = cur.lastrowid
-                begin_ownership(complex_id, owner, started)
-        except sqlite3.IntegrityError:
-            return await interaction.response.send_message("Комплекс із такою назвою вже існує.", ephemeral=True)
-        await interaction.response.edit_message(content=f"✅ Комплекс **#{complex_id} {name}** створено. Власник: **{owner}**.", view=SettingsView())
-
-
 class SettingsView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=300)
@@ -645,12 +724,6 @@ class SettingsView(discord.ui.View):
             return await interaction.response.send_message("Недостатньо прав.", ephemeral=True)
         await interaction.response.send_modal(PointsModal())
 
-    @discord.ui.button(label="Комплекси", emoji="🏢", style=discord.ButtonStyle.secondary, row=1)
-    async def complexes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_management(interaction.user):
-            return await interaction.response.send_message("Недостатньо прав.", ephemeral=True)
-        await interaction.response.edit_message(content="🏢 Керування комплексами", view=ComplexesManagementView())
-
     @discord.ui.button(label="Скинути поточний рейтинг", emoji="🔄", style=discord.ButtonStyle.danger, row=1)
     async def reset(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_management(interaction.user):
@@ -659,115 +732,119 @@ class SettingsView(discord.ui.View):
         await interaction.response.edit_message(content="✅ Поточний бойовий рейтинговий період скинуто. Загальна статистика не змінена.", view=SettingsView())
 
 
-class ComplexesManagementView(discord.ui.View):
+class WarTypeSelect(discord.ui.Select):
+    def __init__(self):
+        super().__init__(placeholder="Оберіть тип об'єкта для нападу", options=[
+            discord.SelectOption(label=label, value=key, emoji=emoji)
+            for key, (emoji, label) in MARKERS.items()
+        ])
+
+    async def callback(self, interaction: discord.Interaction):
+        if not is_commander(interaction.user):
+            return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
+        await interaction.response.send_modal(CreateWarModal("attack", marker_type=self.values[0]))
+
+
+class AttackTypeView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=300)
-
-    @discord.ui.button(label="Створити", emoji="➕", style=discord.ButtonStyle.success)
-    async def create(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(ComplexCreateModal())
-
-    @discord.ui.button(label="Список", emoji="📋", style=discord.ButtonStyle.secondary)
-    async def list_(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(embed=build_complexes_embed(), content=None, view=ComplexesManagementView())
-
-    @discord.ui.button(label="Назад", emoji="↩️", style=discord.ButtonStyle.secondary)
-    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(content="⚙️ Налаштування системи", embed=None, view=SettingsView())
+        self.add_item(WarTypeSelect())
 
 
-class CreateWarModal(discord.ui.Modal, title="⚔️ Створити війну за комплекс"):
-    complex_id = discord.ui.TextInput(label="ID комплексу", required=True)
-    attack_type = discord.ui.TextInput(label="Тип: атака або захист", placeholder="атака / захист", required=True)
-    opponent = discord.ui.TextInput(label="Противник", required=True, max_length=80)
-    limit = discord.ui.TextInput(label="Ліміт учасників (0 = без ліміту)", default="0", required=True)
-    mode = discord.ui.TextInput(label="Склад: вручну або набір", placeholder="вручну / набір", required=True)
+class DefenseSelect(discord.ui.Select):
+    def __init__(self, rows):
+        super().__init__(placeholder="Оберіть наш комплекс", options=[
+            discord.SelectOption(label=f"#{r['id']:03d} {r['name']}"[:100], value=str(r["id"]), emoji=complex_marker(r)[0])
+            for r in rows
+        ])
+
+    async def callback(self, interaction: discord.Interaction):
+        if not is_commander(interaction.user):
+            return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
+        await interaction.response.send_modal(CreateWarModal("defense", complex_id=int(self.values[0])))
+
+
+class DefenseView(discord.ui.View):
+    def __init__(self, page=0):
+        super().__init__(timeout=300)
+        rows = current_complexes("Agosto")
+        self.page = min(max(page, 0), max(0, (len(rows) - 1) // 25))
+        portion = rows[self.page * 25:(self.page + 1) * 25]
+        if portion:
+            self.add_item(DefenseSelect(portion))
+        self.previous.disabled = self.page == 0
+        self.next.disabled = (self.page + 1) * 25 >= len(rows)
+
+    @discord.ui.button(label="Назад", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+    async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Оберіть наш комплекс для захисту:", view=DefenseView(self.page - 1))
+
+    @discord.ui.button(label="Далі", emoji="▶️", style=discord.ButtonStyle.secondary, row=1)
+    async def next(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Оберіть наш комплекс для захисту:", view=DefenseView(self.page + 1))
+
+
+class CreateWarModal(discord.ui.Modal, title="⚔️ Почати війну"):
+    opponent = discord.ui.TextInput(label="Сім'я суперника", placeholder="Назва сім'ї", required=True, max_length=80)
+
+    def __init__(self, attack_type: str, marker_type: str = "", complex_id: int = 0):
+        super().__init__()
+        self.attack_type = attack_type
+        self.marker_type = marker_type
+        self.complex_id = complex_id
+
     async def on_submit(self, interaction: discord.Interaction):
         if not is_commander(interaction.user):
             return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
-        try:
-            cid = int(self.complex_id.value)
-            limit = max(0, int(self.limit.value))
-        except ValueError:
-            return await interaction.response.send_message("ID комплексу та ліміт мають бути числами.", ephemeral=True)
-        complex_row = get_complex(cid)
-        if not complex_row:
-            return await interaction.response.send_message("Комплекс не знайдено.", ephemeral=True)
-        typ = self.attack_type.value.strip().lower()
-        if typ in ("атака", "атакувати", "attack"):
-            typ = "attack"
-        elif typ in ("захист", "захищати", "defense", "defence"):
-            typ = "defense"
-        else:
-            return await interaction.response.send_message("Тип має бути `атака` або `захист`.", ephemeral=True)
-        mode = self.mode.value.strip().lower()
-        if mode in ("набір", "рекрутинг", "recruitment"):
-            mode = "recruitment"
-        elif mode in ("вручну", "manual"):
-            mode = "manual"
-        else:
-            return await interaction.response.send_message("Склад має бути `вручну` або `набір`.", ephemeral=True)
-        # Prevent two simultaneous wars for the same complex.
-        exists = db.conn.execute(
-            "SELECT 1 FROM wars WHERE guild_id=? AND complex_id=? AND status IN ('recruiting','active') LIMIT 1",
-            (GUILD_ID, cid),
-        ).fetchone()
-        if exists:
-            return await interaction.response.send_message("Для цього комплексу вже є активна війна.", ephemeral=True)
-        cur = db.conn.execute(
-            """
-            INSERT INTO wars(guild_id,complex_id,attack_type,opponent,creator_id,status,registration_mode,participant_limit,created_at)
-            VALUES(?,?,?,?,?,?,?,?,?)
-            """,
-            (GUILD_ID, cid, typ, self.opponent.value.strip(), interaction.user.id, "recruiting", mode, limit, now_iso()),
-        )
-        war_id = cur.lastrowid
-        db.conn.commit()
-        if mode == "manual":
-            msg = await send_to_channel(interaction.client, WARS_CHANNEL_ID, embed=war_embed(war_id))
-            await interaction.response.send_message(
-                f"✅ Війну **#{war_id}** створено. Додавай склад через `/wars-add-member`." +
-                (" Панель опубліковано." if msg else " Канал війни не налаштований."),
-                ephemeral=True,
+        if not WARS_CHANNEL_ID:
+            return await interaction.response.send_message("Спочатку налаштуйте WARS_CHANNEL_ID.", ephemeral=True)
+        opponent = self.opponent.value.strip()
+        if opponent.casefold() == "agosto":
+            return await interaction.response.send_message("Вкажіть сім'ю суперника.", ephemeral=True)
+        if self.attack_type == "attack" and self.marker_type not in MARKERS:
+            return await interaction.response.send_message("Невідомий тип комплексу.", ephemeral=True)
+        if self.attack_type == "defense":
+            row = get_complex(self.complex_id)
+            if not row or row["owner_name"] != "Agosto":
+                return await interaction.response.send_message("Цей комплекс більше нам не належить.", ephemeral=True)
+            exists = db.conn.execute(
+                "SELECT 1 FROM wars WHERE guild_id=? AND complex_id=? AND status IN ('recruiting','active')",
+                (GUILD_ID, self.complex_id),
+            ).fetchone()
+            if exists:
+                return await interaction.response.send_message("За цей комплекс уже триває війна.", ephemeral=True)
+        started = now_iso()
+        with db.conn:
+            if self.attack_type == "attack":
+                label = MARKERS[self.marker_type][1]
+                cur = db.conn.execute(
+                    "INSERT INTO war_complexes(guild_id,name,owner_name,active,ownership_started_at,created_at,marker_type) VALUES(?,?,?,?,?,?,?)",
+                    (GUILD_ID, f"Об'єкт {started}", opponent, 0, started, started, self.marker_type),
+                )
+                cid = cur.lastrowid
+                db.conn.execute("UPDATE war_complexes SET name=? WHERE id=?", (f"{label} #{cid}", cid))
+            else:
+                cid = self.complex_id
+            cur = db.conn.execute(
+                "INSERT INTO wars(guild_id,complex_id,attack_type,opponent,creator_id,status,registration_mode,participant_limit,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                (GUILD_ID, cid, self.attack_type, opponent, interaction.user.id, "recruiting", "recruitment", 0, started),
             )
-        else:
-            msg = await send_to_channel(interaction.client, WARS_CHANNEL_ID, embed=war_embed(war_id), view=RecruitView(war_id))
-            await interaction.response.send_message(f"✅ Війну **#{war_id}** створено." + (" Панель опубліковано." if msg else " Канал війни не налаштований."), ephemeral=True)
-
-
-class ManageWarView(discord.ui.View):
-    def __init__(self, war_id: int):
-        super().__init__(timeout=300)
-        self.war_id = war_id
-
-    @discord.ui.button(label="Почати війну", emoji="▶️", style=discord.ButtonStyle.primary)
-    async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_commander(interaction.user):
-            return await interaction.response.send_message("Недостатньо прав.", ephemeral=True)
-        war = get_active_war(self.war_id)
-        if not war:
-            return await interaction.response.send_message("Війну не знайдено.", ephemeral=True)
-        db.conn.execute("UPDATE wars SET status='active', started_at=? WHERE id=? AND guild_id=?", (now_iso(), self.war_id, GUILD_ID))
-        db.conn.commit()
-        await interaction.response.edit_message(embed=war_embed(self.war_id), view=self)
-
-    @discord.ui.button(label="Скасувати", emoji="🗑️", style=discord.ButtonStyle.danger)
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_commander(interaction.user):
-            return await interaction.response.send_message("Недостатньо прав.", ephemeral=True)
-        war = get_active_war(self.war_id)
-        if not war:
-            return await interaction.response.send_message("Війну не знайдено.", ephemeral=True)
-        db.conn.execute("UPDATE wars SET status='cancelled', ended_at=? WHERE id=? AND guild_id=?", (now_iso(), self.war_id, GUILD_ID))
-        db.conn.commit()
-        await interaction.response.edit_message(embed=war_embed(self.war_id), view=None)
-
+            war_id = cur.lastrowid
+        msg = await send_to_channel(interaction.client, WARS_CHANNEL_ID,
+                                    embed=war_embed(war_id), view=WarCardView(war_id, "recruiting", "recruitment"))
+        if not msg:
+            with db.conn:
+                db.conn.execute("UPDATE wars SET status='cancelled',ended_at=? WHERE id=?", (now_iso(), war_id))
+            return await interaction.response.send_message("Не вдалося опублікувати війну. Перевірте доступ бота до каналу.", ephemeral=True)
+        with db.conn:
+            db.conn.execute("UPDATE wars SET message_id=?, channel_id=? WHERE id=?", (msg.id, msg.channel.id, war_id))
+        await interaction.response.send_message(f"✅ Війну створено. [Відкрити запис]({msg.jump_url})", ephemeral=True)
 
 
 def complete_war_record(war_id: int, result: str, mvp_user_id: Optional[str], comment: Optional[str]) -> None:
     war = get_active_war(war_id)
-    if not war:
-        raise ValueError("Активну війну не знайдено.")
+    if not war or war["status"] != "active":
+        raise ValueError("Можна завершити тільки розпочату війну.")
     result = result.strip().lower()
     if result in ("перемога", "win", "победа"):
         result = "win"
@@ -798,42 +875,26 @@ def complete_war_record(war_id: int, result: str, mvp_user_id: Optional[str], co
             "UPDATE wars SET status='finished', ended_at=?, result=?, mvp_user_id=?, commander_comment=? WHERE id=? AND guild_id=?",
             (ended, result, mvp, comment.strip() if comment else None, war_id, GUILD_ID),
         )
-        if (war["attack_type"] == "attack" and result == "win") or (war["attack_type"] == "defense" and result == "loss"):
-            change_owner(war["complex_id"], war["opponent"] if war["attack_type"] == "defense" else "Agosto", ended)
-        else:
-            complex_row = get_complex(war["complex_id"])
-            if complex_row:
-                settle_ownership(war["complex_id"], ended)
-                begin_ownership(war["complex_id"], complex_row["owner_name"], ended)
+        if war["attack_type"] == "attack" and result == "win":
+            change_owner(war["complex_id"], "Agosto", ended)
+        elif war["attack_type"] == "defense" and result == "loss":
+            change_owner(war["complex_id"], war["opponent"], ended)
+        # A lost attack never joins our holdings. A successful defense keeps
+        # the same ownership period and its resource accrual intact.
 
 
-class WarManageModal(discord.ui.Modal, title="🎛️ Керувати війною"):
-    war_id = discord.ui.TextInput(label="ID війни", required=True)
+class WarMemberSelect(discord.ui.UserSelect):
+    def __init__(self, war_id: int):
+        super().__init__(placeholder="Оберіть учасника")
+        self.war_id = war_id
 
-    async def on_submit(self, interaction: discord.Interaction):
-        if not is_commander(interaction.user):
-            return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
-        try:
-            war_id = int(self.war_id.value)
-        except ValueError:
-            return await interaction.response.send_message("ID війни має бути числом.", ephemeral=True)
-        if not get_active_war(war_id):
-            return await interaction.response.send_message("Активну війну не знайдено.", ephemeral=True)
-        await interaction.response.send_message(embed=war_embed(war_id), view=ManageWarView(war_id), ephemeral=True)
-
-
-class AddMemberModal(discord.ui.Modal, title="👥 Додати учасника"):
-    war_id = discord.ui.TextInput(label="ID війни", required=True)
-    user_id = discord.ui.TextInput(label="Discord ID учасника", required=True)
-
-    async def on_submit(self, interaction: discord.Interaction):
+    async def callback(self, interaction: discord.Interaction):
         if not is_commander(interaction.user):
             return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
         await interaction.response.defer(ephemeral=True)
+        user_id = self.values[0].id
         try:
-            war_id, user_id = int(self.war_id.value), int(self.user_id.value)
-            if user_id <= 0:
-                raise ValueError("Учасника з таким ID немає на сервері.")
+            war_id = self.war_id
             if interaction.guild.get_member(user_id) is None:
                 try:
                     await interaction.guild.fetch_member(user_id)
@@ -844,12 +905,22 @@ class AddMemberModal(discord.ui.Modal, title="👥 Додати учасника
             add_member_to_war(war_id, user_id)
         except ValueError as exc:
             return await interaction.followup.send(str(exc), ephemeral=True)
+        await refresh_war_message(interaction.client, war_id)
         await interaction.followup.send(f"✅ <@{user_id}> доданий/а до війни **#{war_id}**.", ephemeral=True)
 
 
+class WarMemberView(discord.ui.View):
+    def __init__(self, war_id: int):
+        super().__init__(timeout=300)
+        self.add_item(WarMemberSelect(war_id))
+
+
 class CompleteWarModal(discord.ui.Modal, title="🏁 Завершити війну"):
-    war_id = discord.ui.TextInput(label="ID війни", required=True)
-    result = discord.ui.TextInput(label="Результат: win або loss", required=True)
+    def __init__(self, war_id: int, result: str):
+        super().__init__()
+        self.war_id = war_id
+        self.result = result
+
     mvp_user_id = discord.ui.TextInput(label="Discord ID MVP (необов'язково)", required=False)
     comment = discord.ui.TextInput(label="Коментар (необов'язково)", required=False, style=discord.TextStyle.paragraph)
 
@@ -857,25 +928,65 @@ class CompleteWarModal(discord.ui.Modal, title="🏁 Завершити війн
         if not is_commander(interaction.user):
             return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
         try:
-            war_id = int(self.war_id.value)
-            complete_war_record(war_id, self.result.value, self.mvp_user_id.value, self.comment.value)
+            war_id = self.war_id
+            complete_war_record(war_id, self.result, self.mvp_user_id.value, self.comment.value)
         except ValueError as exc:
             return await interaction.response.send_message(str(exc), ephemeral=True)
         embed = war_embed(war_id)
-        await interaction.response.send_message(f"✅ Війну **#{war_id}** завершено.", embed=embed, ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        await refresh_war_message(interaction.client, war_id)
+        await interaction.followup.send(f"✅ Війну **#{war_id}** завершено.", embed=embed, ephemeral=True)
         if WARS_REPORTS_CHANNEL_ID:
             await send_to_channel(interaction.client, WARS_REPORTS_CHANNEL_ID, embed=embed)
+
+
+class WarOutcomeView(discord.ui.View):
+    def __init__(self, war_id: int):
+        super().__init__(timeout=300)
+        self.war_id = war_id
+
+    @discord.ui.button(label="Перемога", emoji="🏆", style=discord.ButtonStyle.success)
+    async def win(self, interaction: discord.Interaction, button: discord.ui.Button):
+        war = get_active_war(self.war_id)
+        if not is_commander(interaction.user) or not war or war["status"] != "active":
+            return await interaction.response.send_message("Війна вже завершена або недостатньо прав.", ephemeral=True)
+        await interaction.response.send_modal(CompleteWarModal(self.war_id, "win"))
+
+    @discord.ui.button(label="Поразка", emoji="💀", style=discord.ButtonStyle.danger)
+    async def loss(self, interaction: discord.Interaction, button: discord.ui.Button):
+        war = get_active_war(self.war_id)
+        if not is_commander(interaction.user) or not war or war["status"] != "active":
+            return await interaction.response.send_message("Війна вже завершена або недостатньо прав.", ephemeral=True)
+        await interaction.response.send_modal(CompleteWarModal(self.war_id, "loss"))
 
 
 class CommanderView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Створити війну", emoji="➕", style=discord.ButtonStyle.success, custom_id="wars:commander:create")
+    @discord.ui.button(label="Почати війну", emoji="⚔️", style=discord.ButtonStyle.success, custom_id="wars:commander:create")
     async def create(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_commander(interaction.user):
             return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
-        await interaction.response.send_modal(CreateWarModal())
+        await interaction.response.send_message("Оберіть дію:", view=WarCreationView(), ephemeral=True)
+
+    @discord.ui.button(label="Поточні війни", emoji="📌", style=discord.ButtonStyle.primary, custom_id="wars:commander:manage")
+    async def manage(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_commander(interaction.user):
+            return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
+        rows = db.conn.execute(
+            "SELECT w.*,c.name complex_name FROM wars w JOIN war_complexes c ON c.id=w.complex_id "
+            "WHERE w.guild_id=? AND w.status IN ('recruiting','active') ORDER BY w.id DESC LIMIT 25", (GUILD_ID,)
+        ).fetchall()
+        embed = discord.Embed(title="⚔️ Поточні війни", color=discord.Color.dark_red())
+        embed.description = "\n".join(
+            f"**#{r['id']}** · {r['complex_name']} · {'Набір' if r['status']=='recruiting' else 'Триває'} · "
+            + (f"[Відкрити](https://discord.com/channels/{GUILD_ID}/{r['channel_id']}/{r['message_id']})"
+               if r['message_id'] and r['channel_id'] else "Картка недоступна")
+            for r in rows
+        ) or "Поточних воєн немає."
+        embed.set_footer(text="Керування — під повідомленням кожної війни")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @discord.ui.button(label="Історія", emoji="📜", style=discord.ButtonStyle.secondary, row=1, custom_id="wars:commander:history")
     async def history(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -889,23 +1000,24 @@ class CommanderView(discord.ui.View):
             return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
         await interaction.response.send_message(embed=build_stats_embed(), ephemeral=True)
 
-    @discord.ui.button(label="Керувати війною", emoji="🎛️", style=discord.ButtonStyle.secondary, row=1, custom_id="wars:commander:manage")
-    async def manage(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_commander(interaction.user):
-            return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
-        await interaction.response.send_modal(WarManageModal())
 
-    @discord.ui.button(label="Додати учасника", emoji="👥", style=discord.ButtonStyle.secondary, row=2, custom_id="wars:commander:add")
-    async def add_member(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_commander(interaction.user):
-            return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
-        await interaction.response.send_modal(AddMemberModal())
+class WarCreationView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=300)
 
-    @discord.ui.button(label="Завершити війну", emoji="🏁", style=discord.ButtonStyle.primary, row=2, custom_id="wars:commander:complete")
-    async def complete(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="Напад", emoji="⚔️", style=discord.ButtonStyle.danger)
+    async def attack(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_commander(interaction.user):
             return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
-        await interaction.response.send_modal(CompleteWarModal())
+        await interaction.response.edit_message(content="Оберіть тип комплексу:", view=AttackTypeView())
+
+    @discord.ui.button(label="Захист", emoji="🛡️", style=discord.ButtonStyle.primary)
+    async def defense(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_commander(interaction.user):
+            return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
+        if not current_complexes("Agosto"):
+            return await interaction.response.send_message("Підконтрольних комплексів ще немає.", ephemeral=True)
+        await interaction.response.edit_message(content="Оберіть наш комплекс для захисту:", view=DefenseView())
 
 
 class ModeratorView(discord.ui.View):
@@ -917,12 +1029,6 @@ class ModeratorView(discord.ui.View):
         if not is_management(interaction.user):
             return await interaction.response.send_message("Тільки керівництво.", ephemeral=True)
         await interaction.response.send_message("⚙️ Налаштування системи", view=SettingsView(), ephemeral=True)
-
-    @discord.ui.button(label="Комплекси", emoji="🏢", style=discord.ButtonStyle.secondary, custom_id="wars:moderator:complexes")
-    async def complexes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_management(interaction.user):
-            return await interaction.response.send_message("Тільки керівництво.", ephemeral=True)
-        await interaction.response.send_message("🏢 Керування комплексами", view=ComplexesManagementView(), ephemeral=True)
 
     @discord.ui.button(label="Статистика", emoji="📊", style=discord.ButtonStyle.secondary, custom_id="wars:moderator:stats")
     async def statistics(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -941,11 +1047,27 @@ async def publish_panels(bot) -> int:
         ), view=MainWarView())
         published += message is not None
     if WARS_MANAGEMENT_CHANNEL_ID:
-        message = await send_to_channel(bot, WARS_MANAGEMENT_CHANNEL_ID, embed=discord.Embed(
-            title="🎖️ Панель командирів",
-            description="Створення, склад, початок і завершення воєн.",
+        recruiting = db.conn.execute(
+            "SELECT COUNT(*) FROM wars WHERE guild_id=? AND status='recruiting'", (GUILD_ID,)
+        ).fetchone()[0]
+        active = db.conn.execute(
+            "SELECT COUNT(*) FROM wars WHERE guild_id=? AND status='active'", (GUILD_ID,)
+        ).fetchone()[0]
+        embed = discord.Embed(
+            title="⚔️ Штаб · війни за комплекси",
+            description="Оберіть дію нижче. Кожна війна має окрему картку з усіма кнопками керування.",
             color=discord.Color.gold(),
-        ), view=CommanderView())
+        )
+        embed.add_field(name="📍 Стан", value=f"Набір: **{recruiting}**\nТривають: **{active}**", inline=True)
+        embed.add_field(name="🏢 Території", value=f"Наших комплексів: **{len(current_complexes('Agosto'))}**", inline=True)
+        embed.add_field(
+            name="Як це працює",
+            value="**Напад:** тип об’єкта → сім’я суперника → перемога додає комплекс.\n"
+                  "**Захист:** обрати наш комплекс → програш прибирає його з переліку.",
+            inline=False,
+        )
+        embed.set_footer(text="Початок, склад і завершення війни — під її повідомленням")
+        message = await send_to_channel(bot, WARS_MANAGEMENT_CHANNEL_ID, embed=embed, view=CommanderView())
         published += message is not None
     moderation_channel = WARS_MODERATION_CHANNEL_ID or WARS_MANAGEMENT_CHANNEL_ID
     if moderation_channel:
@@ -959,31 +1081,19 @@ async def publish_panels(bot) -> int:
 
 
 async def restore_active_views(bot) -> None:
-    """Restore persistent recruitment buttons after a Railway restart."""
+    """Restore persistent war cards after a Railway restart."""
     rows = db.conn.execute(
-        "SELECT id FROM wars WHERE guild_id=? AND status='recruiting' ORDER BY id",
+        "SELECT id,status,registration_mode FROM wars WHERE guild_id=? AND status IN ('recruiting','active') ORDER BY id",
         (GUILD_ID,),
     ).fetchall()
     for row in rows:
-        bot.add_view(RecruitView(int(row["id"])))
+        bot.add_view(WarCardView(int(row["id"]), row["status"], row["registration_mode"]))
     bot.add_view(MainWarView())
     bot.add_view(CommanderView())
     bot.add_view(ModeratorView())
 
 
 def register_commands(bot) -> None:
-    @bot.tree.command(name="wars", description="Панель війн за комплекси")
-    async def wars_command(interaction: discord.Interaction):
-        await interaction.response.send_message(
-            embed=discord.Embed(
-                title="⚔️ Війни за комплекси",
-                description="Керування бойовою системою Agosto.",
-                color=discord.Color.dark_red(),
-            ),
-            view=MainWarView(),
-            ephemeral=True,
-        )
-
     @bot.tree.command(name="wars-setup", description="Опублікувати панелі війн за комплекси")
     async def wars_setup(interaction: discord.Interaction):
         if not is_management(interaction.user):
@@ -995,72 +1105,3 @@ def register_commands(bot) -> None:
             "Не вдалося опублікувати панелі. Перевір ID каналів і дозвіл бота писати в них.",
             ephemeral=True,
         )
-
-    @bot.tree.command(name="wars-settings", description="Налаштування системи війн")
-    async def wars_settings(interaction: discord.Interaction):
-        if not is_management(interaction.user):
-            return await interaction.response.send_message("Тільки керівництво.", ephemeral=True)
-        await interaction.response.send_message("⚙️ Налаштування системи", view=SettingsView(), ephemeral=True)
-
-    @bot.tree.command(name="wars-create", description="Створити війну за комплекс")
-    async def wars_create(interaction: discord.Interaction):
-        if not is_commander(interaction.user):
-            return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
-        await interaction.response.send_modal(CreateWarModal())
-
-    @bot.tree.command(name="wars-profile", description="Мій бойовий профіль")
-    async def wars_profile(interaction: discord.Interaction):
-        await interaction.response.send_message(embed=build_profile(interaction.user.id), ephemeral=True)
-
-    @bot.tree.command(name="wars-rating", description="Бойовий рейтинг")
-    async def wars_rating(interaction: discord.Interaction):
-        await interaction.response.send_message(embed=build_rating_embed(), ephemeral=True)
-
-    @bot.tree.command(name="wars-complexes", description="Список комплексів")
-    async def wars_complexes(interaction: discord.Interaction):
-        await interaction.response.send_message(embed=build_complexes_embed(), ephemeral=True)
-
-    @bot.tree.command(name="wars-add-member", description="Додати учасника до війни вручну")
-    @app_commands.describe(war_id="ID війни", member="Учасник")
-    async def wars_add_member(interaction: discord.Interaction, war_id: int, member: discord.Member):
-        if not is_commander(interaction.user):
-            return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
-        try:
-            add_member_to_war(war_id, member.id)
-        except ValueError as exc:
-            return await interaction.response.send_message(str(exc), ephemeral=True)
-        await interaction.response.send_message(f"✅ {member.mention} доданий/а до війни **#{war_id}**.", ephemeral=True)
-
-    @bot.tree.command(name="wars-history", description="Історія воєн за комплекси")
-    async def wars_history(interaction: discord.Interaction):
-        if not is_commander(interaction.user):
-            return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
-        await interaction.response.send_message(embed=build_history_embed(), ephemeral=True)
-
-    @bot.tree.command(name="wars-stats", description="Статистика воєн за комплекси")
-    async def wars_stats(interaction: discord.Interaction):
-        if not is_commander(interaction.user):
-            return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
-        await interaction.response.send_message(embed=build_stats_embed(), ephemeral=True)
-
-    @bot.tree.command(name="wars-manage", description="Керувати конкретною війною")
-    @app_commands.describe(war_id="ID війни")
-    async def wars_manage(interaction: discord.Interaction, war_id: int):
-        if not is_commander(interaction.user):
-            return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
-        if not get_active_war(war_id):
-            return await interaction.response.send_message("Активну війну не знайдено.", ephemeral=True)
-        await interaction.response.send_message(embed=war_embed(war_id), view=ManageWarView(war_id), ephemeral=True)
-
-    @bot.tree.command(name="wars-complete", description="Завершити війну за комплекс")
-    @app_commands.describe(war_id="ID війни", result="win/loss", mvp_user_id="Discord ID MVP", comment="Необов'язковий коментар")
-    async def wars_complete(interaction: discord.Interaction, war_id: int, result: str, mvp_user_id: Optional[str] = None, comment: Optional[str] = None):
-        if not is_commander(interaction.user):
-            return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
-        try:
-            complete_war_record(war_id, result, mvp_user_id, comment)
-        except ValueError as exc:
-            return await interaction.response.send_message(str(exc), ephemeral=True)
-        await interaction.response.send_message(f"✅ Війну **#{war_id}** завершено. {war_embed(war_id).description}", ephemeral=True)
-        if WARS_REPORTS_CHANNEL_ID:
-            await send_to_channel(interaction.client, WARS_REPORTS_CHANNEL_ID, embed=war_embed(war_id))

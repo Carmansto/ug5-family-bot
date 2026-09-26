@@ -2453,42 +2453,6 @@ class ResetMemberMenuView(discord.ui.View):
 
 def register_commands(bot: commands.Bot):
   @bot.tree.command(
-    name="rating-v2",
-    description="Увімкнути нове правило рейтингу На фаму x1.5/x2 з цього моменту",
-  )
-  async def rating_v2(interaction: discord.Interaction):
-    if (
-      not isinstance(interaction.user, discord.Member)
-      or not management_member(interaction.user)
-    ):
-      await interaction.response.send_message(
-        "❌ Команда доступна тільки керівництву.",
-        ephemeral=True,
-      )
-      return
-
-    current = db.get_setting(interaction.guild_id, RATING_RULE_V2_SETTING)
-    if current:
-      await interaction.response.send_message(
-        f"ℹ️ Нове правило рейтингу вже увімкнене з <t:{iso_to_unix(current)}:F>. Повторно перемикати його не потрібно.",
-        ephemeral=True,
-      )
-      return
-
-    activated_at = utc_now_iso()
-    db.set_setting(interaction.guild_id, RATING_RULE_V2_SETTING, activated_at)
-
-    await interaction.response.send_message(
-      "✅ Нове правило рейтингу увімкнено з цього моменту.\n\n"
-      "• базово кожен контракт = 10 балів\n"
-      "• 10 балів діляться порівну між усіма виконавцями\n"
-      "• 🏠 кожен, хто віддав свою частку на фаму, отримує x1.5, якщо таких 1–3\n"
-      "• 🏠 якщо на фаму віддали 4+ учасники — для них x2.0\n\n"
-      f"Старі контракти до <t:{iso_to_unix(activated_at)}:F> не перераховуються.",
-      ephemeral=False,
-    )
-
-  @bot.tree.command(
     name="reset-member",
     description="\u041e\u0431\u043d\u0443\u043b\u0438\u0442\u0438 \u0440\u0435\u0439\u0442\u0438\u043d\u0433 \u0430\u0431\u043e \u0437\u0430\u0440\u043e\u0431\u0456\u0442\u043e\u043a \u043e\u043a\u0440\u0435\u043c\u043e\u0433\u043e \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0430",
   )
@@ -2555,78 +2519,6 @@ def register_commands(bot: commands.Bot):
         "\u041e\u0431\u0435\u0440\u0456\u0442\u044c \u0440\u043e\u043b\u0456 \u043d\u0438\u0436\u0447\u0435. \u0423\u0441\u0456 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0438, \u044f\u043a\u0456 \u043c\u0430\u044e\u0442\u044c \u0445\u043e\u0447\u0430 \u0431 \u043e\u0434\u043d\u0443 \u0437 \u043d\u0438\u0445, \u043f\u043e\u0442\u0440\u0430\u043f\u043b\u044f\u0442\u044c \u0432 \u043e\u0434\u0438\u043d \u0441\u043f\u0456\u043b\u044c\u043d\u0438\u0439 \u0440\u0435\u0439\u0442\u0438\u043d\u0433."
       ),
       view=LeaderboardSettingsView(interaction.guild_id),
-      ephemeral=True,
-    )
-
-
-  @bot.tree.command(
-    name="test-rating",
-    description="\u0422\u0435\u0441\u0442\u043e\u0432\u043e \u0432\u0456\u0434\u043f\u0440\u0430\u0432\u0438\u0442\u0438 \u043f\u043e\u0442\u043e\u0447\u043d\u0438\u0439 \u0440\u0435\u0439\u0442\u0438\u043d\u0433 \u0443 \u043a\u0430\u043d\u0430\u043b \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443",
-  )
-  async def test_rating(interaction: discord.Interaction):
-    if not test_command_user(interaction.user):
-      await interaction.response.send_message(
-        "\u274c \u0426\u044f \u0442\u0435\u0441\u0442\u043e\u0432\u0430 \u043a\u043e\u043c\u0430\u043d\u0434\u0430 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u0432\u043b\u0430\u0441\u043d\u0438\u043a\u0443 \u0442\u0435\u0441\u0442\u0456\u0432.",
-        ephemeral=True,
-      )
-      return
-
-    if not RATING_CHANNEL_ID:
-      await interaction.response.send_message(
-        "\u274c \u041d\u0435 \u0437\u0430\u0434\u0430\u043d\u043e `RATING_CHANNEL_ID` \u0443 Railway.",
-        ephemeral=True,
-      )
-      return
-
-    await interaction.response.defer(ephemeral=True)
-
-    now = datetime.now(LOCAL_TZ)
-    await send_auto_rating(
-      bot,
-      f"{now.strftime('%d.%m.%Y')} \u2022 \u0442\u0435\u0441\u0442",
-    )
-
-    await interaction.followup.send(
-      "\u2705 \u0422\u0435\u0441\u0442\u043e\u0432\u0438\u0439 \u0440\u0435\u0439\u0442\u0438\u043d\u0433 \u0432\u0456\u0434\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e \u0432 \u043a\u0430\u043d\u0430\u043b \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443.\n"
-      "\u0410\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u043d\u0438\u0439 \u043f\u043e\u0441\u0442 \u043e 09:00 / 21:00 \u0446\u0438\u043c \u043d\u0435 \u043f\u043e\u0437\u043d\u0430\u0447\u0430\u0454\u0442\u044c\u0441\u044f \u044f\u043a \u0432\u0438\u043a\u043e\u043d\u0430\u043d\u0438\u0439.",
-      ephemeral=True,
-    )
-
-
-  @bot.tree.command(
-    name="test-family-stats",
-    description="\u0422\u0435\u0441\u0442\u043e\u0432\u043e \u0432\u0456\u0434\u043f\u0440\u0430\u0432\u0438\u0442\u0438 \u0449\u043e\u0434\u0435\u043d\u043d\u0443 \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0443 \u0441\u0456\u043c'\u0457",
-  )
-  async def test_family_stats(interaction: discord.Interaction):
-    if not test_command_user(interaction.user):
-      await interaction.response.send_message(
-        "\u274c \u0426\u044f \u0442\u0435\u0441\u0442\u043e\u0432\u0430 \u043a\u043e\u043c\u0430\u043d\u0434\u0430 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u0432\u043b\u0430\u0441\u043d\u0438\u043a\u0443 \u0442\u0435\u0441\u0442\u0456\u0432.",
-        ephemeral=True,
-      )
-      return
-
-    if not FAMILY_STATS_CHANNEL_ID:
-      await interaction.response.send_message(
-        "\u274c \u041d\u0435 \u0437\u0430\u0434\u0430\u043d\u043e `FAMILY_STATS_CHANNEL_ID` \u0443 Railway.",
-        ephemeral=True,
-      )
-      return
-
-    await interaction.response.defer(ephemeral=True)
-
-    target_day = datetime.now(LOCAL_TZ).date()
-
-    await send_auto_family_stats(
-      bot,
-      target_day,
-    )
-
-    await interaction.followup.send(
-      (
-        "\u2705 \u0422\u0435\u0441\u0442\u043e\u0432\u0443 \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0443 \u0441\u0456\u043c'\u0457 \u0432\u0456\u0434\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e.\n"
-        f"\u041f\u0435\u0440\u0456\u043e\u0434: **{target_day.strftime('%d.%m.%Y')}**.\n"
-        "\u0410\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u043d\u0438\u0439 \u0437\u0432\u0456\u0442 \u043e 00:00 \u0446\u0438\u043c \u043d\u0435 \u043f\u043e\u0437\u043d\u0430\u0447\u0430\u0454\u0442\u044c\u0441\u044f \u044f\u043a \u0432\u0438\u043a\u043e\u043d\u0430\u043d\u0438\u0439."
-      ),
       ephemeral=True,
     )
 

@@ -12,11 +12,8 @@ from discord.ext import commands
 from config import (
     GUILD_ID,
     LOTTERY_PUBLIC_CHANNEL_ID,
+    LOTTERY_MANAGEMENT_CHANNEL_ID,
 )
-# LOTTERY_MANAGEMENT_CHANNEL_ID більше не потрібен —
-# керування тепер живе в приватній гілці всередині
-# публічного каналу лотерей (див. get_or_create_management_thread).
-# Можна прибрати цю змінну з config.py.
 from database import db
 from utils import (
     format_cents,
@@ -33,15 +30,6 @@ from contracts import audit_log
 # ============================================================
 
 TEMP_MESSAGE_SECONDS = 10
-
-# Ключ у db.get_setting/set_setting, під яким
-# зберігається ID приватної гілки керування.
-MANAGEMENT_THREAD_SETTING_KEY = "lottery_management_thread_id"
-
-MANAGEMENT_THREAD_NAME = "🎟️ Управління лотереями"
-
-# 10080 хв = 7 днів — максимум для приватної гілки.
-MANAGEMENT_THREAD_AUTO_ARCHIVE = 10080
 
 
 # ============================================================
@@ -580,138 +568,6 @@ def get_occupied_numbers(
         int(row["number"])
         for row in rows
     }
-
-
-# ============================================================
-# MANAGEMENT THREAD (замість окремого каналу)
-# ============================================================
-
-def get_management_members(
-    guild: discord.Guild,
-):
-    """
-    Учасники гільдії, які проходять
-    management_payout_member.
-
-    Потребує увімкненого Members Intent
-    і закешованого guild.members — без цього
-    список буде порожнім або неповним.
-    """
-
-    return [
-        member
-        for member in guild.members
-        if management_payout_member(
-            member
-        )
-    ]
-
-
-async def sync_management_thread_members(
-    thread: discord.Thread,
-):
-    """
-    Додає в приватну гілку всіх, хто зараз
-    проходить перевірку керівництва.
-    Вже доданих учасників Discord просто
-    ігнорує (HTTPException не кидає).
-    """
-
-    for member in get_management_members(
-        thread.guild
-    ):
-        try:
-            await thread.add_user(
-                member
-            )
-
-        except discord.HTTPException:
-            pass
-
-
-async def get_or_create_management_thread(
-    bot,
-):
-    """
-    Повертає приватну гілку керування лотереями,
-    створюючи її за потреби всередині
-    публічного каналу лотерей, і синхронізує
-    список учасників гілки з роллю керівництва.
-    """
-
-    public_channel = bot.get_channel(
-        LOTTERY_PUBLIC_CHANNEL_ID
-    )
-
-    if public_channel is None:
-        print(
-            "[LOTTERY] Public lottery channel not found — "
-            "cannot get/create management thread."
-        )
-        return None
-
-    guild = public_channel.guild
-
-    existing_id = db.get_setting(
-        GUILD_ID,
-        MANAGEMENT_THREAD_SETTING_KEY,
-    )
-
-    thread = None
-
-    if existing_id:
-        thread = bot.get_channel(
-            int(existing_id)
-        )
-
-        if thread is None:
-            try:
-                thread = await guild.fetch_channel(
-                    int(existing_id)
-                )
-
-            except discord.DiscordException:
-                thread = None
-
-        if (
-            isinstance(
-                thread,
-                discord.Thread,
-            )
-            and thread.archived
-        ):
-            try:
-                await thread.edit(
-                    archived=False
-                )
-
-            except discord.DiscordException:
-                pass
-
-    if not isinstance(
-        thread,
-        discord.Thread,
-    ):
-        thread = await public_channel.create_thread(
-            name=MANAGEMENT_THREAD_NAME,
-            type=discord.ChannelType.private_thread,
-            invitable=False,
-            auto_archive_duration=(
-                MANAGEMENT_THREAD_AUTO_ARCHIVE
-            ),
-        )
-
-        db.set_setting(
-            GUILD_ID,
-            MANAGEMENT_THREAD_SETTING_KEY,
-            str(thread.id),
-        )
-
-    await sync_management_thread_members(
-        thread
-    )
-
-    return thread
 
 
 # ============================================================
@@ -1663,7 +1519,7 @@ class TicketPickerView(
                 f"{', '.join(f'{n:02d}' for n in selected_numbers)}"
                 f"**\n"
                 f"Сума: **{format_cents(total)}**\n\n"
-                "Після внесення коштів в банк сім'ї натисни "
+                "Після внесення коштів натисни "
                 "кнопку нижче. Квитки залишаються "
                 "зарезервованими, поки керівництво "
                 "не підтвердить або не відхилить оплату."
@@ -2101,8 +1957,8 @@ async def send_pending_request(
     if not lottery:
         return
 
-    channel = await get_or_create_management_thread(
-        interaction.client
+    channel = interaction.client.get_channel(
+        LOTTERY_MANAGEMENT_CHANNEL_ID
     )
 
     if not channel:
@@ -2698,18 +2554,15 @@ def register_commands(
             )
             return
 
-        thread = await get_or_create_management_thread(
-            interaction.client
-        )
-
         if (
-            thread
-            and interaction.channel_id != thread.id
+            LOTTERY_MANAGEMENT_CHANNEL_ID
+            and interaction.channel_id
+            != LOTTERY_MANAGEMENT_CHANNEL_ID
         ):
             await temporary_error(
                 interaction,
                 f"🎟️ Керування лотереями знаходиться "
-                f"в гілці {thread.mention}.",
+                f"в <#{LOTTERY_MANAGEMENT_CHANNEL_ID}>.",
             )
             return
 
@@ -2735,27 +2588,23 @@ async def ensure_lottery_channels(
     bot,
 ):
     """
-    Забезпечує наявність приватної гілки керування
-    всередині публічного каналу лотерей і публікує
-    або оновлює в ній постійну панель.
-
-    Гілка створюється (і члени керівництва
-    синхронізуються) через
-    get_or_create_management_thread.
+    Забезпечує наявність постійної панелі
+    керування в management-каналі.
 
     Це НЕ тимчасове повідомлення.
     Воно не видаляється через 10 секунд.
     """
 
-    thread = await get_or_create_management_thread(
-        bot
+    if not LOTTERY_MANAGEMENT_CHANNEL_ID:
+        return
+
+    channel = bot.get_channel(
+        LOTTERY_MANAGEMENT_CHANNEL_ID
     )
 
-    if thread is None:
+    if channel is None:
         print(
-            "[LOTTERY] Management thread not "
-            "available — check LOTTERY_PUBLIC_CHANNEL_ID "
-            "and bot permissions (Create Private Threads)."
+            "[LOTTERY] Management channel not found"
         )
         return
 
@@ -2770,7 +2619,7 @@ async def ensure_lottery_channels(
 
     if existing_id:
         try:
-            msg = await thread.fetch_message(
+            msg = await channel.fetch_message(
                 int(existing_id)
             )
 
@@ -2786,7 +2635,7 @@ async def ensure_lottery_channels(
         except discord.DiscordException:
             pass
 
-    msg = await thread.send(
+    msg = await channel.send(
         content=(
             "🎟️ **Лотереї Agosto — керування**\n"
             "Створення лотерей, перевірка оплат "

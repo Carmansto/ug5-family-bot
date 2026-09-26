@@ -1,3 +1,4 @@
+import asyncio
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -44,7 +45,7 @@ def complex_name(row):
 
 
 def capture_date(row) -> str:
-    return parse_dt(row["ownership_started_at"]).astimezone(LOCAL_TZ).strftime("%d.%m.%Y")
+    return parse_dt(row["ownership_started_at"]).astimezone(LOCAL_TZ).strftime("%d.%m.%Y о %H:%M")
 
 DEFAULTS = {
     "wars_money_per_hour": "0",
@@ -373,6 +374,17 @@ def war_embed(war_id: int) -> discord.Embed:
     if row["result"]:
         result = "🏆 Перемога" if row["result"] == "win" else "💀 Поразка"
         embed.add_field(name="Результат", value=result, inline=True)
+    if row["mvp_user_id"]:
+        embed.add_field(name="⭐ MVP", value=f"<@{row['mvp_user_id']}>", inline=True)
+    if row["started_at"] or row["ended_at"]:
+        times = []
+        if row["started_at"]:
+            times.append(f"Початок: <t:{unix(row['started_at'])}:f>")
+        if row["ended_at"]:
+            times.append(f"Завершення: <t:{unix(row['ended_at'])}:f>")
+        embed.add_field(name="🕒 Час", value="\n".join(times), inline=False)
+    if row["commander_comment"]:
+        embed.add_field(name="💬 Коментар командира", value=row["commander_comment"][:1024], inline=False)
     return embed
 
 
@@ -387,7 +399,6 @@ class WarCardView(discord.ui.View):
             self.add_action("Почати", "▶️", discord.ButtonStyle.primary, "start", self.start_callback)
         if status == "active":
             self.add_action("Завершити війну", "🏁", discord.ButtonStyle.success, "finish", self.finish_callback)
-        self.add_action("Профіль", "👤", discord.ButtonStyle.secondary, "profile", self.profile_callback)
         self.add_action("Скасувати", "🗑️", discord.ButtonStyle.danger, "cancel", self.cancel_callback, row=1)
 
     def add_action(self, label, emoji, style, action, callback, row=0):
@@ -430,7 +441,11 @@ class WarCardView(discord.ui.View):
         war = get_active_war(self.war_id)
         if not war or war["status"] != "active":
             return await interaction.response.send_message("Можна завершити тільки розпочату війну.", ephemeral=True)
-        await interaction.response.send_message("Оберіть результат війни:", view=WarOutcomeView(self.war_id), ephemeral=True)
+        if len(participant_ids(self.war_id)) > 24:
+            return await interaction.response.send_message(
+                "Оберіть MVP зі складу (або «Без MVP»):", view=WarMVPView(self.war_id, interaction.guild), ephemeral=True,
+            )
+        await interaction.response.send_modal(CompleteWarModal(self.war_id, interaction.guild))
 
     async def cancel_callback(self, interaction: discord.Interaction):
         if not is_commander(interaction.user):
@@ -443,10 +458,6 @@ class WarCardView(discord.ui.View):
         if not changed:
             return await interaction.response.send_message("Ця війна вже завершена.", ephemeral=True)
         await interaction.response.edit_message(embed=war_embed(self.war_id), view=None)
-
-    async def profile_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message(embed=build_profile(interaction.user.id), ephemeral=True)
-
 
 async def refresh_war_message(bot, war_id: int) -> None:
     war = db.conn.execute("SELECT * FROM wars WHERE id=? AND guild_id=?", (war_id, GUILD_ID)).fetchone()
@@ -461,6 +472,17 @@ async def refresh_war_message(bot, war_id: int) -> None:
         await message.edit(embed=war_embed(war_id), view=view)
     except discord.HTTPException as exc:
         print(f"[WARS] Cannot update war card #{war_id}: {exc}")
+
+
+async def refresh_existing_war_cards(bot) -> None:
+    """Remove stale controls from already posted war cards after an update."""
+    await bot.wait_until_ready()
+    rows = db.conn.execute(
+        "SELECT id FROM wars WHERE guild_id=? AND status IN ('recruiting','active') "
+        "AND message_id IS NOT NULL ORDER BY id", (GUILD_ID,),
+    ).fetchall()
+    for row in rows:
+        await refresh_war_message(bot, int(row["id"]))
 
 
 def resource_totals(owner_name: str = "Agosto", period: bool = False) -> dict:
@@ -824,7 +846,7 @@ class DefenseSelect(discord.ui.Select):
     def __init__(self, rows):
         super().__init__(placeholder="Оберіть наш комплекс", options=[
             discord.SelectOption(
-                label=f"#{r['id']:03d} {complex_name(r)[:72]} · {capture_date(r)}",
+                label=f"#{r['id']:03d} {complex_name(r)[:90]}",
                 value=str(r["id"]), emoji=complex_marker(r)[0],
                 description=f"Захоплено: {capture_date(r)}",
             )
@@ -1015,35 +1037,65 @@ class WarMemberView(discord.ui.View):
         self.add_item(WarMemberSelect(war_id))
 
 
-class CompleteWarModal(discord.ui.Modal, title="🏁 Завершити війну"):
-    def __init__(self, war_id: int, result: str, mvp_user_id: Optional[int]):
-        super().__init__()
+class CompleteWarModal(discord.ui.Modal):
+    def __init__(self, war_id: int, guild, preselected: bool = False, mvp_user_id: Optional[int] = None):
+        title = f"🏁 Завершити війну #{war_id}"
+        if preselected:
+            title += " · MVP обрано" if mvp_user_id else " · без MVP"
+        super().__init__(title=title[:45])
         self.war_id = war_id
-        self.result = result
+        self.preselected = preselected
         self.mvp_user_id = mvp_user_id
-
-    comment = discord.ui.TextInput(label="Коментар (необов'язково)", required=False, style=discord.TextStyle.paragraph)
+        self.result_choice = discord.ui.Label(
+            text="Результат війни",
+            component=discord.ui.Select(
+                placeholder="Оберіть результат",
+                options=[discord.SelectOption(label="Перемога", value="win", emoji="🏆"),
+                         discord.SelectOption(label="Поразка", value="loss", emoji="💀")],
+            ),
+        )
+        self.add_item(self.result_choice)
+        if not preselected:
+            options = [discord.SelectOption(label="Без MVP", value="none", emoji="➖")]
+            for uid in participant_ids(war_id):
+                member = guild.get_member(uid) if guild else None
+                label = member.display_name if member else f"Учасник {uid}"
+                options.append(discord.SelectOption(label=label[:100], value=str(uid), emoji="⭐"))
+            self.mvp_choice = discord.ui.Label(
+                text="MVP зі складу",
+                component=discord.ui.Select(placeholder="Оберіть учасника або «Без MVP»", options=options),
+            )
+            self.add_item(self.mvp_choice)
+        self.comment_choice = discord.ui.Label(
+            text="Коментар (необов'язково)",
+            component=discord.ui.TextInput(style=discord.TextStyle.paragraph, required=False, max_length=600),
+        )
+        self.add_item(self.comment_choice)
 
     async def on_submit(self, interaction: discord.Interaction):
         if not is_commander(interaction.user):
             return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
+        result = self.result_choice.component.values[0]
+        if self.preselected:
+            mvp = self.mvp_user_id
+        else:
+            chosen = self.mvp_choice.component.values[0]
+            mvp = None if chosen == "none" else int(chosen)
         try:
-            war_id = self.war_id
-            complete_war_record(war_id, self.result, self.mvp_user_id, self.comment.value)
+            complete_war_record(self.war_id, result, mvp, self.comment_choice.component.value)
         except ValueError as exc:
             return await interaction.response.send_message(str(exc), ephemeral=True)
-        embed = war_embed(war_id)
+        embed = war_embed(self.war_id)
         await interaction.response.defer(ephemeral=True)
-        await refresh_war_message(interaction.client, war_id)
-        await interaction.followup.send(f"✅ Війну **#{war_id}** завершено.", embed=embed, ephemeral=True)
+        await refresh_war_message(interaction.client, self.war_id)
+        await interaction.followup.send(f"✅ Війну **#{self.war_id}** завершено.", embed=embed, ephemeral=True)
         if WARS_REPORTS_CHANNEL_ID:
             await send_to_channel(interaction.client, WARS_REPORTS_CHANNEL_ID, embed=embed)
 
 
 class WarMVPSelect(discord.ui.Select):
-    def __init__(self, war_id: int, result: str, guild, page: int):
+    def __init__(self, war_id: int, guild, page: int):
         self.war_id = war_id
-        self.result = result
         ids = participant_ids(war_id)[page * 24:(page + 1) * 24]
         options = [discord.SelectOption(label="Без MVP", value="none", emoji="➖")]
         for uid in ids:
@@ -1055,20 +1107,20 @@ class WarMVPSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         if not is_commander(interaction.user):
             return await interaction.response.send_message("Тільки командир або керівництво.", ephemeral=True)
-        value = self.values[0]
-        mvp = None if value == "none" else int(value)
+        chosen = self.values[0]
+        mvp = None if chosen == "none" else int(chosen)
         if mvp is not None and mvp not in participant_ids(self.war_id):
             return await interaction.response.send_message("Учасника вже немає в цій війні.", ephemeral=True)
-        await interaction.response.send_modal(CompleteWarModal(self.war_id, self.result, mvp))
+        await interaction.response.send_modal(CompleteWarModal(self.war_id, interaction.guild, preselected=True, mvp_user_id=mvp))
 
 
 class WarMVPView(discord.ui.View):
-    def __init__(self, war_id: int, result: str, guild, page: int = 0):
+    def __init__(self, war_id: int, guild, page: int = 0):
         super().__init__(timeout=300)
-        self.war_id, self.result, self.guild = war_id, result, guild
+        self.war_id = war_id
         ids = participant_ids(war_id)
         self.page = min(max(page, 0), max(0, (len(ids) - 1) // 24))
-        self.add_item(WarMVPSelect(war_id, result, guild, self.page))
+        self.add_item(WarMVPSelect(war_id, guild, self.page))
         self.previous.disabled = self.page == 0
         self.next.disabled = (self.page + 1) * 24 >= len(ids)
 
@@ -1076,33 +1128,13 @@ class WarMVPView(discord.ui.View):
     async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_commander(interaction.user):
             return await interaction.response.send_message("Недостатньо прав.", ephemeral=True)
-        await interaction.response.edit_message(view=WarMVPView(self.war_id, self.result, interaction.guild, self.page - 1))
+        await interaction.response.edit_message(view=WarMVPView(self.war_id, interaction.guild, self.page - 1))
 
     @discord.ui.button(label="Далі", emoji="▶️", style=discord.ButtonStyle.secondary, row=1)
     async def next(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_commander(interaction.user):
             return await interaction.response.send_message("Недостатньо прав.", ephemeral=True)
-        await interaction.response.edit_message(view=WarMVPView(self.war_id, self.result, interaction.guild, self.page + 1))
-
-
-class WarOutcomeView(discord.ui.View):
-    def __init__(self, war_id: int):
-        super().__init__(timeout=300)
-        self.war_id = war_id
-
-    @discord.ui.button(label="Перемога", emoji="🏆", style=discord.ButtonStyle.success)
-    async def win(self, interaction: discord.Interaction, button: discord.ui.Button):
-        war = get_active_war(self.war_id)
-        if not is_commander(interaction.user) or not war or war["status"] != "active":
-            return await interaction.response.send_message("Війна вже завершена або недостатньо прав.", ephemeral=True)
-        await interaction.response.send_message("Оберіть MVP зі складу:", view=WarMVPView(self.war_id, "win", interaction.guild), ephemeral=True)
-
-    @discord.ui.button(label="Поразка", emoji="💀", style=discord.ButtonStyle.danger)
-    async def loss(self, interaction: discord.Interaction, button: discord.ui.Button):
-        war = get_active_war(self.war_id)
-        if not is_commander(interaction.user) or not war or war["status"] != "active":
-            return await interaction.response.send_message("Війна вже завершена або недостатньо прав.", ephemeral=True)
-        await interaction.response.send_message("Оберіть MVP зі складу:", view=WarMVPView(self.war_id, "loss", interaction.guild), ephemeral=True)
+        await interaction.response.edit_message(view=WarMVPView(self.war_id, interaction.guild, self.page + 1))
 
 
 class CommanderView(discord.ui.View):
@@ -1236,6 +1268,7 @@ async def restore_active_views(bot) -> None:
     bot.add_view(MainWarView())
     bot.add_view(CommanderView())
     bot.add_view(ModeratorView())
+    asyncio.create_task(refresh_existing_war_cards(bot))
 
 
 def register_commands(bot) -> None:

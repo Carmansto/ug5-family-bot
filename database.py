@@ -2040,6 +2040,60 @@ class Database:
     self.conn.execute("UPDATE lottery_requests SET status='rejected',verified_at=?,verified_by=?,note=? WHERE id=? AND status IN ('reserved','payment_pending')",(now,verified_by,note,request_id))
     self.conn.execute(f"UPDATE lottery_tickets SET status='released' WHERE lottery_id=? AND user_id=? AND number IN ({ph}) AND status='reserved'",(req['lottery_id'],req['user_id'],*nums)); self.conn.commit(); return True
   def pending_lottery_requests(self,guild_id): return self.conn.execute("SELECT r.*,l.name lottery_name,l.ticket_price_cents FROM lottery_requests r JOIN lotteries l ON l.id=r.lottery_id WHERE l.guild_id=? AND r.status='payment_pending' ORDER BY r.created_at",(guild_id,)).fetchall()
+  def reserved_lottery_requests(self, guild_id):
+    return self.conn.execute("""
+    SELECT r.*, l.name AS lottery_name
+    FROM lottery_requests r
+    JOIN lotteries l ON l.id = r.lottery_id
+    WHERE l.guild_id = ? AND r.status IN ('reserved', 'payment_pending')
+    ORDER BY r.created_at DESC, r.id DESC
+    """, (guild_id,)).fetchall()
+
+  def cancel_lottery_reservation(self, request_id, guild_id, cancelled_by):
+    """Release only the tickets still held by this active request."""
+    try:
+      self.conn.execute("BEGIN IMMEDIATE")
+      req = self.conn.execute("""
+      SELECT r.* FROM lottery_requests r
+      JOIN lotteries l ON l.id = r.lottery_id
+      WHERE r.id = ? AND l.guild_id = ?
+      AND r.status IN ('reserved', 'payment_pending')
+      """, (request_id, guild_id)).fetchone()
+      if not req:
+        self.conn.rollback()
+        return False
+
+      numbers = json.loads(req['numbers_json'])
+      if not numbers:
+        self.conn.rollback()
+        return False
+      placeholders = ','.join('?' for _ in numbers)
+      held = self.conn.execute(f"""
+      SELECT COUNT(*) AS cnt FROM lottery_tickets
+      WHERE lottery_id = ? AND user_id = ? AND status = 'reserved'
+      AND number IN ({placeholders})
+      """, (req['lottery_id'], req['user_id'], *numbers)).fetchone()['cnt']
+      if held != len(numbers):
+        self.conn.rollback()
+        return False
+
+      now = utc_now_iso()
+      self.conn.execute("""
+      UPDATE lottery_requests SET status = 'rejected', verified_at = ?,
+      verified_by = ?, note = 'Скасовано керівництвом'
+      WHERE id = ?
+      """, (now, cancelled_by, request_id))
+      self.conn.execute(f"""
+      UPDATE lottery_tickets SET status = 'released'
+      WHERE lottery_id = ? AND user_id = ? AND status = 'reserved'
+      AND number IN ({placeholders})
+      """, (req['lottery_id'], req['user_id'], *numbers))
+      self.conn.commit()
+      return True
+    except Exception:
+      self.conn.rollback()
+      raise
+
   def active_lotteries(self,guild_id): return self.conn.execute("SELECT * FROM lotteries WHERE guild_id=? AND status='active' ORDER BY id DESC",(guild_id,)).fetchall()
   def draw_lottery(self,lottery_id,drawn_by):
     row=self.conn.execute("SELECT * FROM lotteries WHERE id=?",(lottery_id,)).fetchone()

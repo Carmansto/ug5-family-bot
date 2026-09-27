@@ -2128,6 +2128,100 @@ class LotteryPendingView(
 # MANAGEMENT VIEW
 # ============================================================
 
+class LotteryReservationsView(AutoDeleteEphemeralView):
+    PAGE_SIZE = 8
+
+    def __init__(self, guild_id, page=0):
+        super().__init__(timeout=300)
+        self.guild_id = guild_id
+        self.requests = db.reserved_lottery_requests(guild_id)
+        self.page = min(page, max(0, (len(self.requests) - 1) // self.PAGE_SIZE))
+        start = self.page * self.PAGE_SIZE
+
+        for req in self.requests[start:start + self.PAGE_SIZE]:
+            button = discord.ui.Button(
+                label=f"Скасувати резерв #{req['id']}",
+                style=discord.ButtonStyle.danger,
+            )
+            button.callback = self.cancel_callback(req['id'])
+            self.add_item(button)
+
+        if self.page:
+            previous = discord.ui.Button(label="◀ Назад")
+            previous.callback = self.page_callback(self.page - 1)
+            self.add_item(previous)
+        if start + self.PAGE_SIZE < len(self.requests):
+            next_page = discord.ui.Button(label="Далі ▶")
+            next_page.callback = self.page_callback(self.page + 1)
+            self.add_item(next_page)
+
+    def content(self):
+        if not self.requests:
+            return "🟢 Активних резервів немає."
+
+        start = self.page * self.PAGE_SIZE
+        lines = ["🟡 **Зарезервовані квитки**"]
+        for req in self.requests[start:start + self.PAGE_SIZE]:
+            numbers = sorted(int(n) for n in json.loads(req['numbers_json']))
+            shown = ", ".join(f"#{n:02d}" for n in numbers[:12])
+            if len(numbers) > 12:
+                shown += f" та ще {len(numbers) - 12}"
+            status = "оплату заявлено" if req['status'] == 'payment_pending' else "очікує оплати"
+            lines.append(
+                f"**#{req['id']} · {discord.utils.escape_markdown(req['lottery_name'][:45])}**\n"
+                f"<@{req['user_id']}> · {status} · {len(numbers)} кв.\n"
+                f"{shown}"
+            )
+        lines.append(f"Сторінка {self.page + 1}/{(len(self.requests) - 1) // self.PAGE_SIZE + 1}")
+        return "\n\n".join(lines)
+
+    @staticmethod
+    def allowed(interaction):
+        return (
+            isinstance(interaction.user, discord.Member)
+            and management_payout_member(interaction.user)
+        )
+
+    def page_callback(self, page):
+        async def callback(interaction):
+            if not self.allowed(interaction) or interaction.guild_id != self.guild_id:
+                await temporary_error(interaction, "❌ Доступ тільки для керівництва.")
+                return
+            self.cancel_auto_delete()
+            view = LotteryReservationsView(self.guild_id, page)
+            await interaction.response.edit_message(content=view.content(), view=view)
+            view.start_auto_delete(interaction, 90)
+        return callback
+
+    def cancel_callback(self, request_id):
+        async def callback(interaction):
+            if not self.allowed(interaction) or interaction.guild_id != self.guild_id:
+                await temporary_error(interaction, "❌ Доступ тільки для керівництва.")
+                return
+
+            req = db.lottery_request(request_id)
+            if not req or not db.cancel_lottery_reservation(
+                request_id, self.guild_id, interaction.user.id
+            ):
+                await temporary_error(interaction, "❌ Резерв уже оброблено. Відкрий список знову.")
+                return
+
+            self.cancel_auto_delete()
+            view = LotteryReservationsView(self.guild_id, self.page)
+            await interaction.response.edit_message(content=view.content(), view=view)
+            view.start_auto_delete(interaction, 90)
+            await refresh_lottery_message(interaction.client, req['lottery_id'])
+            await audit_log(
+                interaction.guild,
+                "❌ Скасовано резерв лотереї",
+                f"{req['lottery_name']} · заявка #{request_id}\n"
+                f"Власник: <@{req['user_id']}>\n"
+                f"Скасував/ла: <@{interaction.user.id}>",
+                discord.Color.red(),
+            )
+        return callback
+
+
 class LotteryManagementView(
     AutoDeleteEphemeralView
 ):
@@ -2170,6 +2264,15 @@ class LotteryManagementView(
             pending_button
         )
 
+        reservations_button = discord.ui.Button(
+            label="Хто тримає резерви",
+            emoji="🎫",
+            style=discord.ButtonStyle.secondary,
+            custom_id="lottery:management:reservations",
+        )
+        reservations_button.callback = self.reservations
+        self.add_item(reservations_button)
+
         draw_button = discord.ui.Button(
             label="Завершити/розіграти",
             emoji="🎲",
@@ -2186,6 +2289,20 @@ class LotteryManagementView(
         self.add_item(
             draw_button
         )
+
+    async def reservations(self, interaction):
+        if (
+            not isinstance(interaction.user, discord.Member)
+            or not management_payout_member(interaction.user)
+        ):
+            await temporary_error(interaction, "❌ Доступ тільки для керівництва.")
+            return
+
+        view = LotteryReservationsView(interaction.guild_id)
+        await interaction.response.send_message(
+            view.content(), view=view, ephemeral=True
+        )
+        view.start_auto_delete(interaction, 90)
 
     async def create(
         self,

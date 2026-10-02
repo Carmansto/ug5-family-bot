@@ -139,7 +139,7 @@ def storage_item_embed(guild_id: int, item_id: int) -> discord.Embed:
       "",
       "**\u041e\u0441\u0442\u0430\u043d\u043d\u044f \u0437\u043c\u0456\u043d\u0430**",
       (
-        f"{action}: **{latest['quantity']} {item['unit']}** "
+        f"{action}: **{amount_text}** "
         f"\u2022 <@{latest['user_id']}>"
       ),
       when,
@@ -155,11 +155,18 @@ def storage_item_embed(guild_id: int, item_id: int) -> discord.Embed:
 def storage_history_embed(
   guild_id: int,
   item_id: Optional[int] = None,
-) -> discord.Embed:
+  page: int = 0,
+  page_size: int = 15,
+) -> tuple[discord.Embed, int, int]:
+  total = db.storage_movement_count(guild_id, item_id)
+  total_pages = max(1, (total + page_size - 1) // page_size)
+  page = max(0, min(page, total_pages - 1))
+
   rows = db.storage_movements(
     guild_id,
     item_id=item_id,
-    limit=15,
+    limit=page_size,
+    offset=page * page_size,
   )
 
   if item_id is not None:
@@ -169,40 +176,107 @@ def storage_history_embed(
       active_only=False,
     )
     title = (
-      f"\U0001f4dc \u0406\u0421\u0422\u041e\u0420\u0406\u042f \u2022 {item['name']}"
+      f"\U0001f4dc ІСТОРІЯ • {item['name']}"
       if item
-      else "\U0001f4dc \u0406\u0421\u0422\u041e\u0420\u0406\u042f \u041f\u0420\u0415\u0414\u041c\u0415\u0422\u0410"
+      else "\U0001f4dc ІСТОРІЯ ПРЕДМЕТА"
     )
   else:
-    title = "\U0001f4dc \u041e\u0421\u0422\u0410\u041d\u041d\u0406 \u041e\u041f\u0415\u0420\u0410\u0426\u0406\u0407 \u0421\u041a\u041b\u0410\u0414\u0423"
+    title = "\U0001f4dc ІСТОРІЯ СКЛАДУ"
 
   embed = discord.Embed(
-    title=title,
+    title=f"{title} • {page + 1}/{total_pages}",
     color=discord.Color.dark_teal(),
   )
 
   if not rows:
-    embed.description = "\u0406\u0441\u0442\u043e\u0440\u0456\u044f \u043f\u043e\u043a\u0438 \u043f\u043e\u0440\u043e\u0436\u043d\u044f."
-    return embed
+    embed.description = "Історія поки порожня."
+    return embed, page, total_pages
 
   lines = []
 
   for row in rows:
-    emoji = "\U0001f4e5" if row["movement_type"] == "ADD" else "\U0001f4e4"
-    sign = "+" if row["movement_type"] == "ADD" else "\u2212"
+    movement_type = row["movement_type"]
     when = format_storage_time(row["created_at"])
-    note = f" \u2022 {row['note']}" if row["note"] else ""
+    note = f"\n↳ 📝 {row['note']}" if row["note"] else ""
+
+    if movement_type == "ADD":
+      operation = f"\U0001f4e5 +{row['quantity']} {row['item_unit']}"
+    elif movement_type == "TAKE":
+      operation = f"\U0001f4e4 −{row['quantity']} {row['item_unit']}"
+    else:
+      operation = (
+        f"\U0001f527 {row['before_quantity']} → "
+        f"{row['after_quantity']} {row['item_unit']}"
+      )
 
     lines.append(
       (
-        f"{emoji} <@{row['user_id']}> \u2022 **{row['item_name']}** "
-        f"{sign}{row['quantity']} {row['item_unit']} \u2022 {when}{note}"
+        f"{operation} • **{row['item_name']}** • "
+        f"<@{row['user_id']}> • {when}{note}"
       )
     )
 
   embed.description = "\n".join(lines)
-  return embed
+  embed.set_footer(text=f"Операцій: {total}")
+  return embed, page, total_pages
 
+
+class StorageHistoryView(discord.ui.View):
+  def __init__(
+    self,
+    guild_id: int,
+    item_id: Optional[int] = None,
+    page: int = 0,
+  ):
+    super().__init__(timeout=300)
+    self.guild_id = guild_id
+    self.item_id = item_id
+    self.page = page
+
+    total = db.storage_movement_count(guild_id, item_id)
+    total_pages = max(1, (total + 14) // 15)
+    self.previous.disabled = page <= 0
+    self.next.disabled = page >= total_pages - 1
+
+  @discord.ui.button(
+    label="Назад",
+    emoji="◀️",
+    style=discord.ButtonStyle.secondary,
+  )
+  async def previous(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    embed, page, _ = storage_history_embed(
+      self.guild_id,
+      self.item_id,
+      self.page - 1,
+    )
+    await interaction.response.edit_message(
+      embed=embed,
+      view=StorageHistoryView(self.guild_id, self.item_id, page),
+    )
+
+  @discord.ui.button(
+    label="Далі",
+    emoji="▶️",
+    style=discord.ButtonStyle.secondary,
+  )
+  async def next(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    embed, page, _ = storage_history_embed(
+      self.guild_id,
+      self.item_id,
+      self.page + 1,
+    )
+    await interaction.response.edit_message(
+      embed=embed,
+      view=StorageHistoryView(self.guild_id, self.item_id, page),
+    )
 
 def storage_page_data(
   guild_id: int,
@@ -403,7 +477,14 @@ class StorageQuantityModal(discord.ui.Modal):
       required=True,
       max_length=12,
     )
+    self.note_input = discord.ui.TextInput(
+      label="Примітка (необов'язково)",
+      placeholder="Наприклад: для виїзду",
+      required=False,
+      max_length=200,
+    )
     self.add_item(self.quantity_input)
+    self.add_item(self.note_input)
 
   async def on_submit(
     self,
@@ -420,6 +501,7 @@ class StorageQuantityModal(discord.ui.Modal):
         interaction.user.id,
         self.movement_type,
         quantity,
+        note=str(self.note_input),
       )
 
       await refresh_storage_panel(self.guild_id)
@@ -832,11 +914,11 @@ class StorageItemView(discord.ui.View):
       embed=storage_history_embed(
         self.guild_id,
         self.item_id,
-      ),
-      view=StorageItemView(
+      )[0],
+      view=StorageHistoryView(
         self.guild_id,
         self.item_id,
-        self.return_page,
+        0,
       ),
     )
 
@@ -1004,6 +1086,101 @@ class StorageRenameModal(discord.ui.Modal):
       )
 
 
+class StorageSetQuantityModal(discord.ui.Modal):
+  def __init__(self, guild_id: int, item_id: int):
+    super().__init__(title="\U0001f527 Встановити кількість")
+    self.guild_id = guild_id
+    self.item_id = item_id
+
+    item = db.get_storage_item(guild_id, item_id)
+    current = str(item["quantity"]) if item else "0"
+
+    self.quantity_input = discord.ui.TextInput(
+      label="Нова кількість",
+      default=current,
+      required=True,
+      max_length=12,
+    )
+    self.note_input = discord.ui.TextInput(
+      label="Примітка (необов'язково)",
+      placeholder="Наприклад: інвентаризація",
+      required=False,
+      max_length=200,
+    )
+    self.add_item(self.quantity_input)
+    self.add_item(self.note_input)
+
+  async def on_submit(self, interaction: discord.Interaction):
+    if (
+      not isinstance(interaction.user, discord.Member)
+      or not management_member(interaction.user)
+    ):
+      await interaction.response.send_message("❌ Немає права.", ephemeral=True)
+      return
+
+    try:
+      quantity = parse_storage_quantity(
+        str(self.quantity_input),
+        allow_zero=True,
+      )
+      result = db.set_storage_quantity(
+        self.guild_id,
+        self.item_id,
+        interaction.user.id,
+        quantity,
+        note=str(self.note_input),
+      )
+      await refresh_storage_panel(self.guild_id)
+      await interaction.response.send_message(
+        content=(
+          f"✅ **{result['item_name']}**\n"
+          f"Було: **{result['before']} {result['unit']}**\n"
+          f"Стало: **{result['after']} {result['unit']}**"
+        ),
+        embed=storage_item_embed(self.guild_id, self.item_id),
+        view=StorageManageItemView(self.guild_id, self.item_id),
+        ephemeral=True,
+      )
+    except ValueError as exc:
+      await interaction.response.send_message(f"❌ {exc}", ephemeral=True)
+
+
+class StorageResetModal(discord.ui.Modal):
+  def __init__(self, guild_id: int):
+    super().__init__(title="🧹 Повне обнулення складу")
+    self.guild_id = guild_id
+
+    self.confirm_input = discord.ui.TextInput(
+      label="Для підтвердження введіть ОБНУЛИТИ",
+      placeholder="ОБНУЛИТИ",
+      required=True,
+      max_length=20,
+    )
+    self.add_item(self.confirm_input)
+
+  async def on_submit(self, interaction: discord.Interaction):
+    if (
+      not isinstance(interaction.user, discord.Member)
+      or not management_member(interaction.user)
+    ):
+      await interaction.response.send_message("❌ Немає права.", ephemeral=True)
+      return
+
+    if str(self.confirm_input).strip().upper() != "ОБНУЛИТИ":
+      await interaction.response.send_message(
+        "❌ Скасовано: введено неправильне слово підтвердження.",
+        ephemeral=True,
+      )
+      return
+
+    db.reset_storage(self.guild_id)
+    await refresh_storage_panel(self.guild_id)
+    await interaction.response.send_message(
+      "🧹 Склад повністю обнулено. Усі предмети та вся історія операцій видалені.",
+      ephemeral=True,
+    )
+
+
 class StorageDeleteConfirmView(discord.ui.View):
   def __init__(
     self,
@@ -1158,10 +1335,11 @@ class StorageManageItemView(discord.ui.View):
       embed=storage_history_embed(
         self.guild_id,
         self.item_id,
-      ),
-      view=StorageManageItemView(
+      )[0],
+      view=StorageHistoryView(
         self.guild_id,
         self.item_id,
+        0,
       ),
     )
 
@@ -1200,6 +1378,32 @@ class StorageManageView(discord.ui.View):
         self.guild_id,
         "manage",
       )
+    )
+
+
+  @discord.ui.button(
+    label="Обнулити склад",
+    emoji="🧹",
+    style=discord.ButtonStyle.danger,
+    row=1,
+  )
+  async def reset(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    if (
+      not isinstance(interaction.user, discord.Member)
+      or not management_member(interaction.user)
+    ):
+      await interaction.response.send_message(
+        "❌ Керування складом доступне тільки керівництву.",
+        ephemeral=True,
+      )
+      return
+
+    await interaction.response.send_modal(
+      StorageResetModal(self.guild_id)
     )
 
 
@@ -1304,6 +1508,11 @@ class StoragePanelView(discord.ui.View):
     await interaction.response.send_message(
       embed=storage_history_embed(
         interaction.guild_id,
+      )[0],
+      view=StorageHistoryView(
+        interaction.guild_id,
+        None,
+        0,
       ),
       ephemeral=True,
     )

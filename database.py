@@ -1951,6 +1951,7 @@ class Database:
     guild_id: int,
     item_id: Optional[int] = None,
     limit: int = 20,
+    offset: int = 0,
   ):
     sql = """
     SELECT
@@ -1967,9 +1968,107 @@ class Database:
       sql += " AND sm.item_id = ?"
       params.append(item_id)
 
-    sql += " ORDER BY sm.id DESC LIMIT ?"
-    params.append(limit)
+    sql += " ORDER BY sm.id DESC LIMIT ? OFFSET ?"
+    params.extend((limit, max(0, offset)))
     return self.conn.execute(sql, params).fetchall()
+
+  def storage_movement_count(
+    self,
+    guild_id: int,
+    item_id: Optional[int] = None,
+  ) -> int:
+    sql = """
+    SELECT COUNT(*) AS cnt
+    FROM storage_movements
+    WHERE guild_id = ?
+    """
+    params = [guild_id]
+
+    if item_id is not None:
+      sql += " AND item_id = ?"
+      params.append(item_id)
+
+    row = self.conn.execute(sql, params).fetchone()
+    return int(row["cnt"] or 0)
+
+  def set_storage_quantity(
+    self,
+    guild_id: int,
+    item_id: int,
+    user_id: int,
+    quantity: int,
+    note: Optional[str] = None,
+  ):
+    if quantity < 0:
+      raise ValueError("Кількість не може бути від'ємною.")
+
+    try:
+      self.conn.execute("BEGIN IMMEDIATE")
+
+      row = self.conn.execute("""
+      SELECT *
+      FROM storage_items
+      WHERE guild_id = ? AND id = ? AND active = 1
+      """, (guild_id, item_id)).fetchone()
+
+      if not row:
+        raise ValueError("Предмет не знайдено.")
+
+      before = int(row["quantity"])
+      after = int(quantity)
+      now = utc_now_iso()
+
+      self.conn.execute("""
+      UPDATE storage_items
+      SET quantity = ?, updated_at = ?
+      WHERE guild_id = ? AND id = ? AND active = 1
+      """, (after, now, guild_id, item_id))
+
+      self.conn.execute("""
+      INSERT INTO storage_movements (
+        guild_id, item_id, user_id, movement_type,
+        quantity, before_quantity, after_quantity,
+        note, created_at
+      )
+      VALUES (?, ?, ?, 'SET', ?, ?, ?, ?, ?)
+      """, (
+        guild_id,
+        item_id,
+        user_id,
+        after,
+        before,
+        after,
+        (note.strip() if note and note.strip() else None),
+        now,
+      ))
+
+      self.conn.commit()
+      return {
+        "before": before,
+        "after": after,
+        "item_name": row["name"],
+        "unit": row["unit"],
+      }
+    except Exception:
+      self.conn.rollback()
+      raise
+
+  def reset_storage(self, guild_id: int):
+    """Delete all storage items (active and archived) and all storage history."""
+    try:
+      self.conn.execute("BEGIN IMMEDIATE")
+      self.conn.execute(
+        "DELETE FROM storage_movements WHERE guild_id = ?",
+        (guild_id,),
+      )
+      self.conn.execute(
+        "DELETE FROM storage_items WHERE guild_id = ?",
+        (guild_id,),
+      )
+      self.conn.commit()
+    except Exception:
+      self.conn.rollback()
+      raise
 
   def storage_summary(self, guild_id: int):
     count_row = self.conn.execute("""

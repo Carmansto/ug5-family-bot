@@ -221,27 +221,57 @@ def storage_history_embed(
   return embed, page, total_pages
 
 
+class StorageMainMenuView(discord.ui.View):
+  """Navigation helper for ephemeral storage screens."""
+
+  def __init__(self, guild_id: int):
+    super().__init__(timeout=300)
+    self.guild_id = guild_id
+
+  @discord.ui.button(
+    label="Головне меню",
+    emoji="🏠",
+    style=discord.ButtonStyle.secondary,
+  )
+  async def home(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      content=None,
+      embed=storage_panel_embed(self.guild_id),
+      view=StoragePanelView(),
+    )
+
+
 class StorageHistoryView(discord.ui.View):
   def __init__(
     self,
     guild_id: int,
     item_id: Optional[int] = None,
     page: int = 0,
+    manage_mode: bool = False,
+    return_page: Optional[int] = None,
   ):
     super().__init__(timeout=300)
     self.guild_id = guild_id
     self.item_id = item_id
     self.page = page
+    self.manage_mode = manage_mode
+    self.return_page = return_page
 
     total = db.storage_movement_count(guild_id, item_id)
     total_pages = max(1, (total + 14) // 15)
     self.previous.disabled = page <= 0
     self.next.disabled = page >= total_pages - 1
+    self.back_to_item.disabled = item_id is None
 
   @discord.ui.button(
-    label="Назад",
+    label="Попередня",
     emoji="◀️",
     style=discord.ButtonStyle.secondary,
+    row=0,
   )
   async def previous(
     self,
@@ -255,13 +285,20 @@ class StorageHistoryView(discord.ui.View):
     )
     await interaction.response.edit_message(
       embed=embed,
-      view=StorageHistoryView(self.guild_id, self.item_id, page),
+      view=StorageHistoryView(
+        self.guild_id,
+        self.item_id,
+        page,
+        self.manage_mode,
+        self.return_page,
+      ),
     )
 
   @discord.ui.button(
-    label="Далі",
+    label="Наступна",
     emoji="▶️",
     style=discord.ButtonStyle.secondary,
+    row=0,
   )
   async def next(
     self,
@@ -275,7 +312,59 @@ class StorageHistoryView(discord.ui.View):
     )
     await interaction.response.edit_message(
       embed=embed,
-      view=StorageHistoryView(self.guild_id, self.item_id, page),
+      view=StorageHistoryView(
+        self.guild_id,
+        self.item_id,
+        page,
+        self.manage_mode,
+        self.return_page,
+      ),
+    )
+
+  @discord.ui.button(
+    label="До предмета",
+    emoji="↩️",
+    style=discord.ButtonStyle.secondary,
+    row=1,
+  )
+  async def back_to_item(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    if self.item_id is None:
+      return
+
+    view = (
+      StorageManageItemView(self.guild_id, self.item_id)
+      if self.manage_mode
+      else StorageItemView(
+        self.guild_id,
+        self.item_id,
+        return_page=self.return_page,
+      )
+    )
+    await interaction.response.edit_message(
+      content=None,
+      embed=storage_item_embed(self.guild_id, self.item_id),
+      view=view,
+    )
+
+  @discord.ui.button(
+    label="Головне меню",
+    emoji="🏠",
+    style=discord.ButtonStyle.secondary,
+    row=1,
+  )
+  async def home(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      content=None,
+      embed=storage_panel_embed(self.guild_id),
+      view=StoragePanelView(),
     )
 
 def storage_page_data(
@@ -702,12 +791,101 @@ class StorageSearchResultsView(discord.ui.View):
     mode: str,
   ):
     super().__init__(timeout=300)
+    self.guild_id = guild_id
+    self.mode = mode
     self.add_item(
       StorageItemSelect(
         guild_id,
         rows,
         mode,
       )
+    )
+
+  @discord.ui.button(
+    label="Пошук",
+    emoji="🔎",
+    style=discord.ButtonStyle.primary,
+    row=1,
+  )
+  async def search_again(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.send_modal(
+      StorageSearchModal(self.guild_id, self.mode)
+    )
+
+  @discord.ui.button(
+    label="Головне меню",
+    emoji="🏠",
+    style=discord.ButtonStyle.secondary,
+    row=1,
+  )
+  async def home(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      content=None,
+      embed=storage_panel_embed(self.guild_id),
+      view=StoragePanelView(),
+    )
+
+
+class StorageQuickActionView(discord.ui.View):
+  def __init__(self, guild_id: int, mode: str):
+    super().__init__(timeout=300)
+    self.guild_id = guild_id
+    self.mode = mode
+
+    rows = db.storage_items_for_guild(guild_id, active_only=True)
+    # Database already sorts by name; sorting again makes the UI contract explicit.
+    rows = sorted(rows, key=lambda row: (row["name"].casefold(), row["id"]))
+
+    if rows:
+      self.add_item(
+        StorageItemSelect(
+          guild_id,
+          rows[:25],
+          mode,
+          row=0,
+        )
+      )
+
+    self.search.disabled = not bool(rows)
+
+  @discord.ui.button(
+    label="Пошук",
+    emoji="🔎",
+    style=discord.ButtonStyle.primary,
+    row=1,
+  )
+  async def search(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.send_modal(
+      StorageSearchModal(self.guild_id, self.mode)
+    )
+
+  @discord.ui.button(
+    label="Головне меню",
+    emoji="🏠",
+    style=discord.ButtonStyle.secondary,
+    row=1,
+  )
+  async def home(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      content=None,
+      embed=storage_panel_embed(self.guild_id),
+      view=StoragePanelView(),
     )
 
 
@@ -850,6 +1028,23 @@ class StorageAllView(discord.ui.View):
       ),
     )
 
+  @discord.ui.button(
+    label="Головне меню",
+    emoji="🏠",
+    style=discord.ButtonStyle.secondary,
+    row=2,
+  )
+  async def home(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      content=None,
+      embed=storage_panel_embed(self.guild_id),
+      view=StoragePanelView(),
+    )
+
 
 class StorageItemView(discord.ui.View):
   def __init__(
@@ -862,7 +1057,6 @@ class StorageItemView(discord.ui.View):
     self.guild_id = guild_id
     self.item_id = item_id
     self.return_page = return_page
-    self.back.disabled = return_page is None
 
   @discord.ui.button(
     label="\u0414\u043e\u0434\u0430\u0442\u0438",
@@ -919,6 +1113,8 @@ class StorageItemView(discord.ui.View):
         self.guild_id,
         self.item_id,
         0,
+        False,
+        self.return_page,
       ),
     )
 
@@ -933,6 +1129,11 @@ class StorageItemView(discord.ui.View):
     button: discord.ui.Button,
   ):
     if self.return_page is None:
+      await interaction.response.edit_message(
+        content=None,
+        embed=storage_panel_embed(self.guild_id),
+        view=StoragePanelView(),
+      )
       return
 
     embed, page, _ = storage_page_embed(
@@ -940,6 +1141,7 @@ class StorageItemView(discord.ui.View):
       self.return_page,
     )
     await interaction.response.edit_message(
+      content=None,
       embed=embed,
       view=StorageAllView(
         self.guild_id,
@@ -1288,6 +1490,20 @@ class StorageManageItemView(discord.ui.View):
     )
 
   @discord.ui.button(
+    label="Встановити кількість",
+    emoji="🔧",
+    style=discord.ButtonStyle.secondary,
+  )
+  async def set_quantity(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.send_modal(
+      StorageSetQuantityModal(self.guild_id, self.item_id)
+    )
+
+  @discord.ui.button(
     label="\u0412\u0438\u0434\u0430\u043b\u0438\u0442\u0438",
     emoji="\U0001f5d1\ufe0f",
     style=discord.ButtonStyle.danger,
@@ -1340,7 +1556,47 @@ class StorageManageItemView(discord.ui.View):
         self.guild_id,
         self.item_id,
         0,
+        True,
+        None,
       ),
+    )
+
+  @discord.ui.button(
+    label="До керування",
+    emoji="↩️",
+    style=discord.ButtonStyle.secondary,
+    row=2,
+  )
+  async def back(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      content=None,
+      embed=discord.Embed(
+        title="⚙️ КЕРУВАННЯ СКЛАДОМ",
+        description="Створіть новий предмет або знайдіть існуючий для редагування.",
+        color=discord.Color.blurple(),
+      ),
+      view=StorageManageView(self.guild_id),
+    )
+
+  @discord.ui.button(
+    label="Головне меню",
+    emoji="🏠",
+    style=discord.ButtonStyle.secondary,
+    row=2,
+  )
+  async def home(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      content=None,
+      embed=storage_panel_embed(self.guild_id),
+      view=StoragePanelView(),
     )
 
 
@@ -1406,6 +1662,23 @@ class StorageManageView(discord.ui.View):
       StorageResetModal(self.guild_id)
     )
 
+  @discord.ui.button(
+    label="Головне меню",
+    emoji="🏠",
+    style=discord.ButtonStyle.secondary,
+    row=2,
+  )
+  async def home(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      content=None,
+      embed=storage_panel_embed(self.guild_id),
+      view=StoragePanelView(),
+    )
+
 
 class StoragePanelView(discord.ui.View):
   def __init__(self):
@@ -1467,11 +1740,19 @@ class StoragePanelView(discord.ui.View):
     interaction: discord.Interaction,
     button: discord.ui.Button,
   ):
-    await interaction.response.send_modal(
-      StorageSearchModal(
-        interaction.guild_id,
-        "add",
-      )
+    rows = db.storage_items_for_guild(interaction.guild_id, active_only=True)
+    await interaction.response.send_message(
+      embed=discord.Embed(
+        title="➕ ДОДАТИ НА СКЛАД",
+        description=(
+          "Оберіть предмет зі списку в алфавітному порядку."
+          if rows else
+          "На складі поки немає предметів."
+        ),
+        color=discord.Color.green(),
+      ),
+      view=StorageQuickActionView(interaction.guild_id, "add"),
+      ephemeral=True,
     )
 
   @discord.ui.button(
@@ -1486,11 +1767,19 @@ class StoragePanelView(discord.ui.View):
     interaction: discord.Interaction,
     button: discord.ui.Button,
   ):
-    await interaction.response.send_modal(
-      StorageSearchModal(
-        interaction.guild_id,
-        "take",
-      )
+    rows = db.storage_items_for_guild(interaction.guild_id, active_only=True)
+    await interaction.response.send_message(
+      embed=discord.Embed(
+        title="➖ ВЗЯТИ ЗІ СКЛАДУ",
+        description=(
+          "Оберіть предмет зі списку в алфавітному порядку."
+          if rows else
+          "На складі поки немає предметів."
+        ),
+        color=discord.Color.red(),
+      ),
+      view=StorageQuickActionView(interaction.guild_id, "take"),
+      ephemeral=True,
     )
 
   @discord.ui.button(

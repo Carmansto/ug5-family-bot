@@ -39,6 +39,7 @@ from config import (
   TIMEZONE_NAME,
   TOKEN,
 )
+import economy
 from database import Database
 from utils import *
 
@@ -6891,6 +6892,8 @@ class ContractBot(commands.Bot):
     self._scheduled_posts_task = None
 
   async def setup_hook(self):
+    economy.register_commands(self)
+    await economy.restore_active_views(self)
     self.add_view(MainContractPanelView(self))
     self.add_view(UnpaidCompletedView(self))
     self.add_view(BirthdayPanelView())
@@ -6925,6 +6928,8 @@ class ContractBot(commands.Bot):
       f"test_user={TEST_USER_ID or 'disabled'} "
       f"timezone={TIMEZONE_NAME}"
     )
+
+    await economy.ensure_economy_panel(self)
 
     try:
       await ensure_birthday_panel(self)

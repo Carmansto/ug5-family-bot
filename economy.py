@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 import discord
 from discord import app_commands
 
-from config import DB_PATH, LOCAL_TZ, GUILD_ID
+from config import DB_PATH, LOCAL_TZ, GUILD_ID, ECONOMY_CHANNEL_ID, ECONOMY_USER_ID
 
 
 # Separate database: never touches the existing Agosto/family economy tables.
@@ -601,6 +601,10 @@ class EconomyMainView(discord.ui.View):
       self.add_item(b)
 
   async def dispatch(self, interaction: discord.Interaction):
+    if not economy_access_allowed(interaction):
+      return await interaction.response.send_message(
+        "🔒 Ця економіка доступна тільки власнику системи.", ephemeral=True
+      )
     user_id = interaction.user.id
     action = interaction.data["custom_id"].split(":")[-1]
     if action == "dashboard":
@@ -618,10 +622,21 @@ class EconomyMainView(discord.ui.View):
       await interaction.response.edit_message(content="Обери роботу:", embed=None, view=JobSelectView(user_id, action))
 
 
+def economy_access_allowed(interaction: discord.Interaction) -> bool:
+  if ECONOMY_USER_ID and interaction.user.id != ECONOMY_USER_ID:
+    return False
+  if ECONOMY_CHANNEL_ID and interaction.channel_id != ECONOMY_CHANNEL_ID:
+    return False
+  return interaction.guild_id == GUILD_ID
+
+
 async def open_economy(interaction: discord.Interaction):
+  if not economy_access_allowed(interaction):
+    reason = "🔒 Економіка доступна тільки тобі." if ECONOMY_USER_ID and interaction.user.id != ECONOMY_USER_ID else "📍 Економіка працює тільки у своєму каналі."
+    return await interaction.response.send_message(reason, ephemeral=True)
   active = db.active_farm(interaction.user.id)
   content = "⚠️ У тебе є незавершений фарм." if active else None
-  await interaction.response.send_message(content=content, embed=embed_main(interaction.user.id), view=EconomyMainView(), ephemeral=True)
+  await interaction.response.send_message(content=content, embed=embed_main(interaction.user.id), view=EconomyMainView())
 
 
 def register_commands(bot):
@@ -631,6 +646,46 @@ def register_commands(bot):
 
 
 async def restore_active_views(bot):
-  # Main menu is persistent. Active farm itself lives in SQLite, so it survives restart.
-  # The user can reopen /economy and continue from the stored farm.
   bot.add_view(EconomyMainView())
+
+
+async def ensure_economy_panel(bot):
+  if not ECONOMY_CHANNEL_ID:
+    print("[ECONOMY] ECONOMY_CHANNEL_ID is not set; panel disabled")
+    return
+  if not ECONOMY_USER_ID:
+    print("[ECONOMY] ECONOMY_USER_ID is not set; panel disabled")
+    return
+
+  channel = bot.get_channel(ECONOMY_CHANNEL_ID)
+  if channel is None:
+    print(f"[ECONOMY] Channel {ECONOMY_CHANNEL_ID} not found")
+    return
+
+  try:
+    async for message in channel.history(limit=50):
+      if message.author.id == bot.user.id and message.components:
+        if any(
+          getattr(component, "custom_id", "").startswith("economy:main:")
+          for row in message.components for component in row.children
+        ):
+          return
+
+    await channel.send(
+      embed=discord.Embed(
+        title="💰 Особиста економіка",
+        description=(
+          "Тут ведеться твій особистий облік фарму.\n\n"
+          "▶️ **Почати фарм** — запустити таймер\n"
+          "📝 **Записати фарм** — внести минулий фарм\n"
+          "📊 **Дашборд** — поточні показники\n"
+          "💼 **Роботи** — керування роботами\n"
+          "📈 **Статистика** — аналіз заробітку"
+        ),
+        color=discord.Color.green(),
+      ),
+      view=EconomyMainView(),
+    )
+    print(f"[ECONOMY] Panel created in channel {ECONOMY_CHANNEL_ID}")
+  except discord.DiscordException as exc:
+    print(f"[ECONOMY] Could not ensure panel: {exc}")

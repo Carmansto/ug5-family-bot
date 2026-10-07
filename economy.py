@@ -9,7 +9,7 @@ import discord
 from config import DB_PATH, LOCAL_TZ, GUILD_ID, ECONOMY_CHANNEL_ID, ECONOMY_USER_ID
 
 
-ECONOMY_VERSION = "3.2"
+ECONOMY_VERSION = "3.3"
 _DB_DIR = Path(DB_PATH).expanduser().resolve().parent
 ECONOMY_DB_PATH = str(_DB_DIR / "economy.db")
 PANEL_REFRESH_SECONDS = 120
@@ -2744,15 +2744,25 @@ def _start_panel_refresher(bot):
 async def open_economy(interaction: discord.Interaction):
     if not economy_access_allowed(interaction):
         return await deny_interaction(interaction)
+
     try:
-        await _refresh_panel_once(interaction.client)
+        result = await ensure_economy_panel(interaction.client)
     except Exception as exc:
-        print(f"[ECONOMY] Manual panel refresh error: {exc}")
-    await interaction.response.send_message(
-        "✅ Панель Economy постійна. Користуйся повідомленням у цьому каналі — "
-        "повторно вводити `/economy` не потрібно.",
-        ephemeral=True,
-    )
+        print(f"[ECONOMY] Manual panel restore error: {exc}")
+        return await interaction.response.send_message(
+            "❌ Не вдалося відновити панель Economy. Перевір права бота на перегляд "
+            "каналу, надсилання повідомлень і редагування власних повідомлень.",
+            ephemeral=True,
+        )
+
+    if result == "created":
+        message = "✅ Панель Economy була видалена — я створив нову."
+    elif result == "updated":
+        message = "✅ Панель Economy оновлено."
+    else:
+        message = "⚠️ Не вдалося знайти канал Economy."
+
+    await interaction.response.send_message(message, ephemeral=True)
 
 
 def register_commands(bot):
@@ -2769,26 +2779,43 @@ async def ensure_economy_panel(bot):
     global _panel_message_id
     if not ECONOMY_CHANNEL_ID or not ECONOMY_USER_ID:
         print("[ECONOMY] ECONOMY_CHANNEL_ID / ECONOMY_USER_ID is not set; panel disabled")
-        return
+        return None
 
     channel = bot.get_channel(ECONOMY_CHANNEL_ID)
     if channel is None:
-        print(f"[ECONOMY] Channel {ECONOMY_CHANNEL_ID} not found")
-        return
+        try:
+            channel = await bot.fetch_channel(ECONOMY_CHANNEL_ID)
+        except discord.DiscordException:
+            print(f"[ECONOMY] Channel {ECONOMY_CHANNEL_ID} not found")
+            return None
 
     try:
         message = await _find_panel_message(bot)
         if message:
-            await message.edit(content=None, embed=main_embed(ECONOMY_USER_ID), view=EconomyMainView(ECONOMY_USER_ID))
+            await message.edit(
+                content=None,
+                embed=main_embed(ECONOMY_USER_ID),
+                view=EconomyMainView(ECONOMY_USER_ID),
+            )
             _panel_message_id = message.id
             db.set_meta("panel_message_id", str(message.id))
             print(f"[ECONOMY] Persistent panel updated in channel {ECONOMY_CHANNEL_ID}")
+            result = "updated"
         else:
-            message = await channel.send(embed=main_embed(ECONOMY_USER_ID), view=EconomyMainView(ECONOMY_USER_ID))
+            # The saved panel message may have been deleted manually.
+            # Create a fresh one and remember its new message ID.
+            message = await channel.send(
+                embed=main_embed(ECONOMY_USER_ID),
+                view=EconomyMainView(ECONOMY_USER_ID),
+            )
             _panel_message_id = message.id
             db.set_meta("panel_message_id", str(message.id))
-            print(f"[ECONOMY] Persistent panel created in channel {ECONOMY_CHANNEL_ID}")
+            print(f"[ECONOMY] Persistent panel recreated in channel {ECONOMY_CHANNEL_ID}")
+            result = "created"
+
         _start_panel_refresher(bot)
+        return result
     except discord.DiscordException as exc:
         print(f"[ECONOMY] Could not ensure panel: {exc}")
+        raise
 

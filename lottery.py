@@ -2772,35 +2772,26 @@ async def ensure_lottery_channels(
 # RESTORE VIEWS
 # ============================================================
 
-def restore_management_view(
-    bot,
-):
-    try:
-        bot.add_view(
-            LotteryManagementView()
-        )
-
-    except Exception:
-        pass
+def restore_management_view(bot):
+    bot.add_view(LotteryManagementView())
 
 
-def restore_active_views(
-    bot,
-):
-    for row in db.active_lotteries(
-        GUILD_ID
-    ):
+def restore_active_views(bot):
+    # Finished lotteries still expose "My tickets" until the draw.
+    rows = db.conn.execute(
+        "SELECT * FROM lotteries WHERE guild_id=? AND status IN ('active','finished')",
+        (GUILD_ID,),
+    ).fetchall()
+    for row in rows:
         if row["message_id"]:
-            try:
-                bot.add_view(
-                    LotteryPublicView(
-                        row["id"]
-                    ),
-                    message_id=row["message_id"],
-                )
+            bot.add_view(
+                LotteryPublicView(row["id"]),
+                message_id=row["message_id"],
+            )
 
-            except Exception:
-                pass
+    # Payment review messages also need callbacks after a restart.
+    for request in db.pending_lottery_requests(GUILD_ID):
+        bot.add_view(LotteryAdminView(request["id"]))
 
 
 # ============================================================

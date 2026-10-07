@@ -40,6 +40,7 @@ from config import (
   TOKEN,
 )
 import economy
+import lottery
 from database import Database
 from utils import *
 
@@ -6806,6 +6807,11 @@ async def scheduled_posts_loop(bot_instance: commands.Bot):
       now = datetime.now(LOCAL_TZ)
       today_key = now.date().isoformat()
 
+      try:
+        await lottery.maybe_finish_expired(bot_instance, now)
+      except Exception as exc:
+        print(f"[LOTTERY] Auto-finish error: {exc}")
+
       # Morning rating: once during the whole scheduled hour.
       if (
         RATING_CHANNEL_ID
@@ -6892,6 +6898,9 @@ class ContractBot(commands.Bot):
     self._scheduled_posts_task = None
 
   async def setup_hook(self):
+    lottery.register_commands(self)
+    lottery.restore_management_view(self)
+    lottery.restore_active_views(self)
     economy.register_commands(self)
     await economy.restore_active_views(self)
     self.add_view(MainContractPanelView(self))
@@ -6928,6 +6937,11 @@ class ContractBot(commands.Bot):
       f"test_user={TEST_USER_ID or 'disabled'} "
       f"timezone={TIMEZONE_NAME}"
     )
+
+    try:
+      await lottery.ensure_lottery_channels(self)
+    except Exception as exc:
+      print(f"[LOTTERY] Could not ensure panel: {exc}")
 
     await economy.ensure_economy_panel(self)
 

@@ -12,6 +12,7 @@ from config import DB_PATH, LOCAL_TZ, GUILD_ID, ECONOMY_CHANNEL_ID, ECONOMY_USER
 # Clean DB schema. If you used the old economy.py, delete/rename economy.db before first launch.
 _DB_DIR = Path(DB_PATH).expanduser().resolve().parent
 ECONOMY_DB_PATH = str(_DB_DIR / "economy.db")
+ECONOMY_UI_VERSION = "2.2"
 
 
 def now_dt() -> datetime:
@@ -160,18 +161,38 @@ class EconomyDB:
         self.conn.commit()
         return cur.lastrowid
 
-    def create_manual_session(self, user_id: int, job_id: int, worked_seconds: int) -> int:
-        if worked_seconds <= 0:
-            raise ValueError("worked_seconds")
+    def create_manual_session(self, user_id, job_id, worked_seconds, status):
+        if worked_seconds <= 0 or status not in ("pending_sale", "completed"):
+            raise ValueError("manual_session")
         stamp = now_iso()
+        completed_at = stamp if status == "completed" else None
         cur = self.conn.execute("""
-            INSERT INTO work_sessions(
-                user_id,job_id,status,worked_seconds,current_started_at,
-                work_finished_at,created_at
-            ) VALUES(?,?, 'pending_sale',?,NULL,?,?)
-        """, (user_id, job_id, int(worked_seconds), stamp, stamp))
-        self.conn.commit()
-        return cur.lastrowid
+            INSERT INTO work_sessions(user_id,job_id,status,worked_seconds,current_started_at,work_finished_at,completed_at,created_at)
+            VALUES(?,?,?,?,NULL,?,?,?)
+        """, (user_id, job_id, status, int(worked_seconds), stamp, completed_at, stamp))
+        self.conn.commit(); return cur.lastrowid
+
+    def history(self, user_id, limit=25):
+        return self.conn.execute("""SELECT s.*,j.name job_name,j.income_mode FROM work_sessions s JOIN jobs j ON j.id=s.job_id WHERE s.user_id=? ORDER BY s.id DESC LIMIT ?""",(user_id,limit)).fetchall()
+
+    def transactions(self, session_id):
+        return self.conn.execute("SELECT * FROM transactions WHERE session_id=? ORDER BY id",(session_id,)).fetchall()
+
+    def all_jobs(self, user_id):
+        return self.conn.execute("SELECT * FROM jobs WHERE user_id=? ORDER BY active DESC,name COLLATE NOCASE",(user_id,)).fetchall()
+
+    def annul_job_keep_history(self,user_id,job_id):
+        self.conn.execute("UPDATE jobs SET active=0 WHERE user_id=? AND id=?",(user_id,job_id)); self.conn.commit()
+
+    def annul_job_with_history(self,user_id,job_id):
+        ids=[r["id"] for r in self.conn.execute("SELECT id FROM work_sessions WHERE user_id=? AND job_id=?",(user_id,job_id)).fetchall()]
+        try:
+            self.conn.execute("BEGIN")
+            if ids:
+                q=",".join("?"*len(ids)); self.conn.execute(f"DELETE FROM transactions WHERE session_id IN ({q})",ids); self.conn.execute(f"DELETE FROM work_sessions WHERE id IN ({q})",ids)
+            self.conn.execute("DELETE FROM jobs WHERE user_id=? AND id=?",(user_id,job_id)); self.conn.commit()
+        except Exception:
+            self.conn.rollback(); raise
 
     def worked_seconds(self, row) -> int:
         total = int(row["worked_seconds"] or 0)
@@ -316,6 +337,28 @@ class EconomyDB:
 db = EconomyDB(ECONOMY_DB_PATH)
 
 
+async def economy_owner_check(interaction: discord.Interaction) -> bool:
+    """Allow Economy UI interactions only for the configured owner."""
+    if not ECONOMY_USER_ID or interaction.user.id != ECONOMY_USER_ID:
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                "🔒 Цією Economy може користуватися тільки власник.",
+                ephemeral=True,
+            )
+        return False
+    return True
+
+
+class ProtectedEconomyView(discord.ui.View):
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await economy_owner_check(interaction)
+
+
+class ProtectedEconomyModal(discord.ui.Modal):
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await economy_owner_check(interaction)
+
+
 def session_embed(row) -> discord.Embed:
     income, expense = db.totals(row["id"])
     profit = income - expense
@@ -341,26 +384,45 @@ def session_embed(row) -> discord.Embed:
 def main_embed(user_id: int) -> discord.Embed:
     current = db.open_session(user_id)
     pending_count = len(db.pending(user_id))
-    embed = discord.Embed(title="💰 ECONOMY", color=discord.Color.green())
+
+    embed = discord.Embed(
+        title="💰 ECONOMY",
+        description="Оберіть дію нижче.",
+        color=discord.Color.green(),
+    )
+
     if current:
+        income, expense = db.totals(current["id"])
         icon = "🟢" if current["status"] == "working" else "⏸️"
+        state = "Робота активна" if current["status"] == "working" else "Роботу зупинено"
         embed.add_field(
-            name="Поточна робота",
-            value=f"{icon} **{current['job_name']}**\n⏱️ {duration_text(db.worked_seconds(current))}",
+            name=f"{icon} {current['job_name']}",
+            value=(
+                f"{state}\n"
+                f"⏱️ {duration_text(db.worked_seconds(current))}\n"
+                f"💰 {money(income)} $  •  💸 {money(expense)} $"
+            ),
             inline=False,
         )
-    else:
-        embed.add_field(name="Поточна робота", value="Немає", inline=False)
-    embed.add_field(name="📦 Очікують продажу", value=str(pending_count), inline=False)
+
+    if pending_count:
+        embed.add_field(
+            name="📦 Очікують продажу",
+            value=f"{pending_count} запис(и)",
+            inline=False,
+        )
+
+    embed.set_footer(text=f"Economy v{ECONOMY_UI_VERSION}")
     return embed
 
 
-class AmountModal(discord.ui.Modal):
-    def __init__(self, session_id: int, user_id: int, kind: str):
+class AmountModal(ProtectedEconomyModal):
+    def __init__(self, session_id: int, user_id: int, kind: str, allow_completed: bool = False):
         super().__init__(title="Додати дохід" if kind == "income" else "Додати витрату")
         self.session_id = session_id
         self.user_id = user_id
         self.kind = kind
+        self.allow_completed = allow_completed
         self.amount = discord.ui.TextInput(label="Сума", placeholder="Наприклад: 350000")
         self.note = discord.ui.TextInput(
             label="Коментар", required=False, max_length=100,
@@ -376,7 +438,7 @@ class AmountModal(discord.ui.Modal):
             return await interaction.response.send_message("❌ Введи коректну суму.", ephemeral=True)
 
         row = db.session(self.session_id, self.user_id)
-        if not row or row["status"] == "completed":
+        if not row or (row["status"] == "completed" and not self.allow_completed):
             return await interaction.response.send_message("❌ Цей запис уже закритий.", ephemeral=True)
 
         db.add_transaction(
@@ -384,12 +446,11 @@ class AmountModal(discord.ui.Modal):
             str(self.note.value).strip() or None
         )
         row = db.session(self.session_id, self.user_id)
-        await interaction.response.edit_message(
-            embed=session_embed(row), view=SessionView(self.user_id, self.session_id)
-        )
+        view = CompletedManualView(self.user_id, self.session_id) if self.allow_completed else SessionView(self.user_id, self.session_id)
+        await interaction.response.edit_message(embed=session_embed(row), view=view)
 
 
-class SessionView(discord.ui.View):
+class SessionView(ProtectedEconomyView):
     def __init__(self, user_id: int, session_id: int):
         super().__init__(timeout=900)
         self.user_id = user_id
@@ -507,69 +568,54 @@ class JobSelect(discord.ui.Select):
         )
 
 
-class JobSelectView(discord.ui.View):
+class JobSelectView(ProtectedEconomyView):
     def __init__(self, user_id: int):
         super().__init__(timeout=300)
         self.add_item(JobSelect(user_id))
 
 
-class ManualTimeModal(discord.ui.Modal, title="Ручний запис роботи"):
-    hours = discord.ui.TextInput(label="Години", placeholder="Наприклад: 3", default="0", max_length=3)
-    minutes = discord.ui.TextInput(label="Хвилини", placeholder="Наприклад: 30", default="0", max_length=2)
-
-    def __init__(self, user_id: int, job_id: int):
-        super().__init__()
-        self.user_id = user_id
-        self.job_id = job_id
-
-    async def on_submit(self, interaction: discord.Interaction):
+class ManualTimeModal(ProtectedEconomyModal, title="Ручний запис роботи"):
+    hours=discord.ui.TextInput(label="Години",default="0",max_length=3)
+    minutes=discord.ui.TextInput(label="Хвилини",default="0",max_length=2)
+    def __init__(self,user_id,job_id): super().__init__(); self.user_id=user_id; self.job_id=job_id
+    async def on_submit(self,interaction):
         try:
-            hours = int(str(self.hours.value).strip() or "0")
-            minutes = int(str(self.minutes.value).strip() or "0")
-            if hours < 0 or minutes < 0 or minutes > 59 or (hours == 0 and minutes == 0):
-                raise ValueError
-        except ValueError:
-            return await interaction.response.send_message(
-                "❌ Вкажи коректний час. Хвилини — від 0 до 59.", ephemeral=True
-            )
+            h=int(str(self.hours.value) or 0); m=int(str(self.minutes.value) or 0)
+            if h<0 or m<0 or m>59 or h==m==0: raise ValueError
+        except ValueError: return await interaction.response.send_message("❌ Вкажи коректний час.",ephemeral=True)
+        sec=h*3600+m*60
+        await interaction.response.send_message(f"📝 Час: **{duration_text(sec)}**\nЯк записати сесію?",view=ManualChoiceView(self.user_id,self.job_id,sec),ephemeral=True)
 
-        sid = db.create_manual_session(self.user_id, self.job_id, hours * 3600 + minutes * 60)
-        row = db.session(sid, self.user_id)
-        await interaction.response.edit_message(
-            content="📝 Ручний запис створено. Тепер можеш додати доходи та витрати.",
-            embed=session_embed(row),
-            view=SessionView(self.user_id, sid),
-        )
+class ManualChoiceView(ProtectedEconomyView):
+    def __init__(self,u,j,sec): super().__init__(timeout=180); self.u=u; self.j=j; self.sec=sec
+    @discord.ui.button(label="Очікують продажу",emoji="📦",style=discord.ButtonStyle.primary)
+    async def pending(self,interaction,button):
+        sid=db.create_manual_session(self.u,self.j,self.sec,"pending_sale"); row=db.session(sid,self.u)
+        await interaction.response.edit_message(content="📦 Запис створено.",embed=session_embed(row),view=SessionView(self.u,sid))
+    @discord.ui.button(label="Записати",emoji="✅",style=discord.ButtonStyle.success)
+    async def record(self,interaction,button):
+        sid=db.create_manual_session(self.u,self.j,self.sec,"completed"); row=db.session(sid,self.u)
+        await interaction.response.edit_message(content="✅ Фінальний запис створено.",embed=session_embed(row),view=CompletedManualView(self.u,sid))
 
+class CompletedManualView(ProtectedEconomyView):
+    def __init__(self,u,sid):
+        super().__init__(timeout=600); self.u=u; self.sid=sid
+        a=discord.ui.Button(label="Дохід",emoji="💰",style=discord.ButtonStyle.success); a.callback=self.inc; self.add_item(a)
+        b=discord.ui.Button(label="Витрата",emoji="💸",style=discord.ButtonStyle.danger); b.callback=self.exp; self.add_item(b)
+        c=discord.ui.Button(label="Готово",emoji="✅",style=discord.ButtonStyle.primary,row=1); c.callback=self.done; self.add_item(c)
+    async def inc(self,i): await i.response.send_modal(AmountModal(self.sid,self.u,"income",True))
+    async def exp(self,i): await i.response.send_modal(AmountModal(self.sid,self.u,"expense",True))
+    async def done(self,i): await i.response.edit_message(content="✅ Запис збережено.",embed=session_embed(db.session(self.sid,self.u)),view=EconomyMainView(self.u))
 
 class ManualJobSelect(discord.ui.Select):
-    def __init__(self, user_id: int):
-        self.user_id = user_id
-        jobs = db.jobs(user_id)
-        options = [
-            discord.SelectOption(label=row["name"][:100], value=str(row["id"]))
-            for row in jobs[:25]
-        ]
-        super().__init__(
-            placeholder="Оберіть роботу для ручного запису",
-            min_values=1, max_values=1,
-            options=options or [discord.SelectOption(label="Спочатку додай роботу", value="0")],
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        job_id = int(self.values[0])
-        if not job_id:
-            return await interaction.response.send_message("Спочатку додай роботу.", ephemeral=True)
-        await interaction.response.send_modal(ManualTimeModal(self.user_id, job_id))
+    def __init__(self,u):
+        self.u=u; jobs=db.jobs(u); super().__init__(placeholder="Оберіть роботу",options=[discord.SelectOption(label=r["name"][:100],value=str(r["id"])) for r in jobs[:25]])
+    async def callback(self,i): await i.response.send_modal(ManualTimeModal(self.u,int(self.values[0])))
+class ManualJobSelectView(ProtectedEconomyView):
+    def __init__(self,u): super().__init__(timeout=300); self.add_item(ManualJobSelect(u))
 
 
-class ManualJobSelectView(discord.ui.View):
-    def __init__(self, user_id: int):
-        super().__init__(timeout=300)
-        self.add_item(ManualJobSelect(user_id))
-
-
-class AddJobModal(discord.ui.Modal, title="Нова робота"):
+class AddJobModal(ProtectedEconomyModal, title="Нова робота"):
     name = discord.ui.TextInput(label="Назва", placeholder="Наприклад: Каменяр", max_length=50)
 
     def __init__(self, user_id: int):
@@ -584,7 +630,7 @@ class AddJobModal(discord.ui.Modal, title="Нова робота"):
         )
 
 
-class IncomeModeView(discord.ui.View):
+class IncomeModeView(ProtectedEconomyView):
     def __init__(self, user_id: int, name: str):
         super().__init__(timeout=120)
         self.user_id = user_id
@@ -623,7 +669,7 @@ class PendingSelect(discord.ui.Select):
         )
 
 
-class PendingView(discord.ui.View):
+class PendingView(ProtectedEconomyView):
     def __init__(self, user_id: int):
         super().__init__(timeout=300)
         self.user_id = user_id
@@ -638,7 +684,30 @@ class PendingView(discord.ui.View):
         )
 
 
-class StatsView(discord.ui.View):
+def session_details_embed(row):
+    e=session_embed(row); e.add_field(name="📅 Дата",value=parse_dt(row["created_at"]).strftime("%d.%m.%Y %H:%M"),inline=False)
+    tx=db.transactions(row["id"]); lines=[]
+    for t in tx[-15:]: lines.append(("+" if t["kind"]=="income" else "-")+f"{money(t['amount'])} $"+(f" — {t['note']}" if t["note"] else ""))
+    e.add_field(name="🧾 Операції",value="\n".join(lines) if lines else "Немає",inline=False)
+    inc,exp=db.totals(row["id"]); sec=db.worked_seconds(row)
+    if row["status"]=="completed" and sec: e.add_field(name="⚡ Чистими / год",value=f"{money(round((inc-exp)/(sec/3600)))} $",inline=False)
+    return e
+class HistorySelect(discord.ui.Select):
+    def __init__(self,u):
+        self.u=u; icons={"working":"🟢","paused":"⏸️","pending_sale":"📦","completed":"✅"}; rows=db.history(u)
+        super().__init__(placeholder="Оберіть сесію",options=[discord.SelectOption(label=f"{icons[r['status']]} {r['job_name']}"[:100],value=str(r["id"]),description=f"{parse_dt(r['created_at']).strftime('%d.%m.%Y')} • {duration_text(db.worked_seconds(r))}"[:100]) for r in rows])
+    async def callback(self,i):
+        r=db.session(int(self.values[0]),self.u); v=SessionView(self.u,r["id"]) if r["status"]!="completed" else HistoryView(self.u)
+        await i.response.edit_message(content=None,embed=session_details_embed(r),view=v)
+class HistoryView(ProtectedEconomyView):
+    def __init__(self,u):
+        super().__init__(timeout=300); self.u=u
+        if db.history(u): self.add_item(HistorySelect(u))
+    @discord.ui.button(label="Меню",emoji="◀️",style=discord.ButtonStyle.secondary,row=1)
+    async def back(self,i,b): await i.response.edit_message(content=None,embed=main_embed(self.u),view=EconomyMainView(self.u))
+
+
+class StatsView(ProtectedEconomyView):
     def __init__(self, user_id: int):
         super().__init__(timeout=300)
         self.user_id = user_id
@@ -676,112 +745,195 @@ class StatsView(discord.ui.View):
         )
 
 
-class EconomyMainView(discord.ui.View):
-    def __init__(self, user_id: Optional[int] = None):
-        super().__init__(timeout=None)
+class EconomyMainView(ProtectedEconomyView):
+    def __init__(self, user_id=None, persistent: bool = False):
+        super().__init__(timeout=None if persistent else 300)
         self.user_id = user_id
+        uid = user_id or ECONOMY_USER_ID
+        current = db.open_session(uid) if uid else None
+        pending_rows = db.pending(uid) if uid else []
+
+        def add(label, emoji, style, cid, callback, row):
+            button = discord.ui.Button(
+                label=label, emoji=emoji, style=style, custom_id=cid, row=row
+            )
+            button.callback = callback
+            self.add_item(button)
+
+        # Рядок 1 — дії з роботою.
+        if current:
+            add("Поточна робота", "🟢", discord.ButtonStyle.success,
+                "economy:main:current", self.current, 0)
+        else:
+            add("Почати роботу", "▶️", discord.ButtonStyle.primary,
+                "economy:main:start", self.start, 0)
+
+        add("Записати роботу", "📝", discord.ButtonStyle.secondary,
+            "economy:main:manual", self.manual, 0)
+
+        # Рядок 2 — записи та історія.
+        if pending_rows:
+            add("Очікують продажу", "📦", discord.ButtonStyle.secondary,
+                "economy:main:pending", self.pending, 1)
+        add("Історія", "📋", discord.ButtonStyle.secondary,
+            "economy:main:history", self.history, 1)
+
+        # Рядок 3 — аналітика та налаштування.
+        add("Статистика", "📊", discord.ButtonStyle.secondary,
+            "economy:main:stats", self.stats, 2)
+        add("Роботи", "💼", discord.ButtonStyle.secondary,
+            "economy:main:jobs", self.jobs, 2)
 
     def uid(self, interaction):
         return self.user_id or interaction.user.id
 
-    @discord.ui.button(label="Поточна робота", emoji="🟢", style=discord.ButtonStyle.success,
-                       custom_id="economy:main:current")
-    async def current(self, interaction, button):
+    async def current(self, interaction):
         uid = self.uid(interaction)
         row = db.open_session(uid)
         if not row:
-            return await interaction.response.send_message("Поточної роботи немає.", ephemeral=True)
+            return await interaction.response.send_message(
+                "Поточної роботи немає. Відкрий Economy ще раз — меню оновиться.",
+                ephemeral=True,
+            )
         await interaction.response.send_message(
-            embed=session_embed(row), view=SessionView(uid, row["id"]), ephemeral=True
+            embed=session_embed(row),
+            view=SessionView(uid, row["id"]),
+            ephemeral=True,
         )
 
-    @discord.ui.button(label="Почати роботу", emoji="▶️", style=discord.ButtonStyle.primary,
-                       custom_id="economy:main:start")
-    async def start(self, interaction, button):
+    async def start(self, interaction):
         uid = self.uid(interaction)
         if db.open_session(uid):
-            return await interaction.response.send_message("❌ Спочатку заверши поточну роботу.", ephemeral=True)
+            return await interaction.response.send_message(
+                "❌ Уже є поточна робота.", ephemeral=True
+            )
         if not db.jobs(uid):
             return await interaction.response.send_message(
-                "Спочатку додай хоча б одну роботу через **Роботи**.", ephemeral=True
+                "Спочатку додай роботу через **Роботи**.", ephemeral=True
             )
-        await interaction.response.send_message("Оберіть роботу:", view=JobSelectView(uid), ephemeral=True)
+        await interaction.response.send_message(
+            "Оберіть роботу:", view=JobSelectView(uid), ephemeral=True
+        )
 
-    @discord.ui.button(label="Записати роботу", emoji="📝", style=discord.ButtonStyle.secondary,
-                       custom_id="economy:main:manual", row=0)
-    async def manual(self, interaction, button):
+    async def manual(self, interaction):
         uid = self.uid(interaction)
         if not db.jobs(uid):
             return await interaction.response.send_message(
-                "Спочатку додай хоча б одну роботу через **Роботи**.", ephemeral=True
+                "Спочатку додай роботу через **Роботи**.", ephemeral=True
             )
         await interaction.response.send_message(
-            "📝 Обери роботу, яку хочеш записати вручну:",
-            view=ManualJobSelectView(uid), ephemeral=True
+            "📝 Обери роботу для ручного запису:",
+            view=ManualJobSelectView(uid),
+            ephemeral=True,
         )
 
-    @discord.ui.button(label="Очікують продажу", emoji="📦", style=discord.ButtonStyle.secondary,
-                       custom_id="economy:main:pending", row=1)
-    async def pending_btn(self, interaction, button):
+    async def pending(self, interaction):
         uid = self.uid(interaction)
         rows = db.pending(uid)
         if not rows:
-            return await interaction.response.send_message("📦 Немає записів, що очікують продажу.", ephemeral=True)
+            return await interaction.response.send_message(
+                "📦 Немає записів, що очікують продажу.", ephemeral=True
+            )
         await interaction.response.send_message(
             f"📦 **Очікують продажу: {len(rows)}**",
-            view=PendingView(uid), ephemeral=True
+            view=PendingView(uid),
+            ephemeral=True,
         )
 
-    @discord.ui.button(label="Статистика", emoji="📊", style=discord.ButtonStyle.secondary,
-                       custom_id="economy:main:stats", row=1)
-    async def stats_btn(self, interaction, button):
+    async def history(self, interaction):
         uid = self.uid(interaction)
-        s = db.stats(uid, 30)
-        profit = s["income"] - s["expense"]
-        hourly = round(profit / (s["completed_seconds"] / 3600)) if s["completed_seconds"] else 0
-        embed = discord.Embed(title="📊 Статистика — 30 днів", color=discord.Color.blue())
-        embed.add_field(name="⏱️ Відпрацьовано", value=duration_text(s["worked_seconds"]), inline=False)
-        embed.add_field(name="💰 Дохід", value=f"{money(s['income'])} $", inline=True)
-        embed.add_field(name="💸 Витрати", value=f"{money(s['expense'])} $", inline=True)
+        if not db.history(uid):
+            return await interaction.response.send_message(
+                "📋 Історія поки порожня.", ephemeral=True
+            )
+        await interaction.response.send_message(
+            "📋 **Історія сесій**\nОбери сесію, щоб переглянути всі деталі.",
+            view=HistoryView(uid),
+            ephemeral=True,
+        )
+
+    async def stats(self, interaction):
+        uid = self.uid(interaction)
+        data = db.stats(uid, 30)
+        profit = data["income"] - data["expense"]
+        hourly = (
+            round(profit / (data["completed_seconds"] / 3600))
+            if data["completed_seconds"]
+            else 0
+        )
+        embed = discord.Embed(
+            title="📊 Статистика — 30 днів", color=discord.Color.blue()
+        )
+        embed.add_field(
+            name="⏱️ Відпрацьовано",
+            value=duration_text(data["worked_seconds"]),
+            inline=False,
+        )
+        embed.add_field(name="💰 Дохід", value=f"{money(data['income'])} $", inline=True)
+        embed.add_field(name="💸 Витрати", value=f"{money(data['expense'])} $", inline=True)
         embed.add_field(name="📈 Чистими", value=f"{money(profit)} $", inline=True)
         embed.add_field(name="⚡ Чистими / год", value=f"{money(hourly)} $", inline=False)
-        embed.add_field(name="📦 Очікують продажу", value=str(s["pending_count"]), inline=False)
-        embed.set_footer(text="Фінанси враховуються лише після «Все продано».")
-        await interaction.response.send_message(embed=embed, view=StatsView(uid), ephemeral=True)
+        embed.add_field(
+            name="📦 Очікують продажу",
+            value=str(data["pending_count"]),
+            inline=False,
+        )
+        embed.set_footer(
+            text="Фінанси враховуються лише по повністю закритих записах."
+        )
+        await interaction.response.send_message(
+            embed=embed, view=StatsView(uid), ephemeral=True
+        )
 
-    @discord.ui.button(label="Роботи", emoji="💼", style=discord.ButtonStyle.secondary,
-                       custom_id="economy:main:jobs", row=2)
-    async def jobs_btn(self, interaction, button):
+    async def jobs(self, interaction):
         uid = self.uid(interaction)
-        jobs = db.jobs(uid)
+        rows = db.all_jobs(uid)
         text = "\n".join(
-            f"• **{r['name']}** — {'дохід одразу' if r['income_mode']=='instant' else 'продаж пізніше'}"
-            for r in jobs
+            f"• **{row['name']}** — {'активна' if row['active'] else 'анульована'}"
+            for row in rows
         ) or "Ще немає робіт."
         await interaction.response.send_message(
             f"💼 **Роботи**\n{text}",
-            view=JobsView(uid), ephemeral=True
+            view=JobsView(uid),
+            ephemeral=True,
         )
 
 
-class JobsView(discord.ui.View):
-    def __init__(self, user_id: int):
-        super().__init__(timeout=300)
-        self.user_id = user_id
-
-    @discord.ui.button(label="Додати роботу", emoji="➕", style=discord.ButtonStyle.success)
-    async def add(self, interaction, button):
-        await interaction.response.send_modal(AddJobModal(self.user_id))
-
-    @discord.ui.button(label="Меню", emoji="◀️", style=discord.ButtonStyle.secondary)
-    async def back(self, interaction, button):
-        await interaction.response.edit_message(
-            content=None, embed=main_embed(self.user_id), view=EconomyMainView(self.user_id)
-        )
+class JobSettingsSelect(discord.ui.Select):
+    def __init__(self,u): self.u=u; super().__init__(placeholder="Оберіть роботу",options=[discord.SelectOption(label=r["name"],value=str(r["id"])) for r in db.jobs(u)[:25]])
+    async def callback(self,i):
+        jid=int(self.values[0]); r=next(x for x in db.jobs(self.u) if x["id"]==jid); await i.response.edit_message(content=f"⚙️ **{r['name']}**",view=AnnulChoiceView(self.u,jid,r["name"]))
+class JobSettingsView(ProtectedEconomyView):
+    def __init__(self,u): super().__init__(timeout=300); self.add_item(JobSettingsSelect(u))
+class AnnulChoiceView(ProtectedEconomyView):
+    def __init__(self,u,jid,name): super().__init__(timeout=180); self.u=u; self.jid=jid; self.name=name
+    @discord.ui.button(label="Зберегти історію",emoji="🗃️",style=discord.ButtonStyle.secondary)
+    async def keep(self,i,b):
+        cur=db.open_session(self.u)
+        if cur and cur["job_id"]==self.jid: return await i.response.send_message("❌ Спочатку заверши поточну сесію.",ephemeral=True)
+        db.annul_job_keep_history(self.u,self.jid); await i.response.edit_message(content=f"🗃️ **{self.name}** анульовано, історію збережено.",view=EconomyMainView(self.u))
+    @discord.ui.button(label="Видалити з історією",emoji="🗑️",style=discord.ButtonStyle.danger)
+    async def wipe(self,i,b): await i.response.edit_message(content=f"⚠️ Видалити **{self.name}** і всю історію?",view=AnnulConfirmView(self.u,self.jid,self.name))
+class AnnulConfirmView(ProtectedEconomyView):
+    def __init__(self,u,jid,name): super().__init__(timeout=120); self.u=u; self.jid=jid; self.name=name
+    @discord.ui.button(label="Так, видалити все",emoji="🗑️",style=discord.ButtonStyle.danger)
+    async def yes(self,i,b): db.annul_job_with_history(self.u,self.jid); await i.response.edit_message(content=f"🗑️ **{self.name}** та історію видалено.",view=EconomyMainView(self.u))
+    @discord.ui.button(label="Скасувати",style=discord.ButtonStyle.secondary)
+    async def no(self,i,b): await i.response.edit_message(content="Скасовано.",view=EconomyMainView(self.u))
+class JobsView(ProtectedEconomyView):
+    def __init__(self,u): super().__init__(timeout=300); self.u=u
+    @discord.ui.button(label="Додати роботу",emoji="➕",style=discord.ButtonStyle.success)
+    async def add(self,i,b): await i.response.send_modal(AddJobModal(self.u))
+    @discord.ui.button(label="Налаштування",emoji="⚙️",style=discord.ButtonStyle.secondary)
+    async def settings(self,i,b):
+        if not db.jobs(self.u): return await i.response.send_message("Немає активних робіт.",ephemeral=True)
+        await i.response.edit_message(content="⚙️ **Налаштування робіт**",view=JobSettingsView(self.u))
+    @discord.ui.button(label="Меню",emoji="◀️",style=discord.ButtonStyle.secondary)
+    async def back(self,i,b): await i.response.edit_message(content=None,embed=main_embed(self.u),view=EconomyMainView(self.u))
 
 
 def economy_access_allowed(interaction: discord.Interaction) -> bool:
-    if ECONOMY_USER_ID and interaction.user.id != ECONOMY_USER_ID:
+    if not ECONOMY_USER_ID or interaction.user.id != ECONOMY_USER_ID:
         return False
     if ECONOMY_CHANNEL_ID and interaction.channel_id != ECONOMY_CHANNEL_ID:
         return False
@@ -811,7 +963,27 @@ def register_commands(bot):
 
 
 async def restore_active_views(bot):
-    bot.add_view(EconomyMainView())
+    # Persistent public panel callbacks. The actual personal menu is created
+    # fresh on every /economy call, so its buttons always match the DB state.
+    bot.add_view(EconomyMainView(ECONOMY_USER_ID, persistent=True))
+
+
+def economy_panel_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="💰 ECONOMY",
+        description=(
+            "Особистий облік роботи та заробітку.\n\n"
+            "▶️ **Почати роботу** — запустити облік часу\n"
+            "📝 **Записати роботу** — внести сесію вручну\n"
+            "📦 **Очікують продажу** — незакриті продажі\n"
+            "📋 **Історія** — деталі кожної сесії\n"
+            "📊 **Статистика** — фінальний результат\n"
+            "💼 **Роботи** — список і налаштування"
+        ),
+        color=discord.Color.green(),
+    )
+    embed.set_footer(text=f"Economy v{ECONOMY_UI_VERSION}")
+    return embed
 
 
 async def ensure_economy_panel(bot):
@@ -825,29 +997,28 @@ async def ensure_economy_panel(bot):
         return
 
     try:
+        # Important: refresh an existing panel instead of leaving old buttons in Discord.
         async for message in channel.history(limit=50):
-            if message.author.id == bot.user.id and message.components:
-                if any(
-                    (getattr(component, "custom_id", "") or "").startswith("economy:main:")
-                    for row in message.components for component in row.children
-                ):
-                    return
+            if message.author.id != bot.user.id or not message.components:
+                continue
+            has_economy = any(
+                (getattr(component, "custom_id", "") or "").startswith("economy:main:")
+                for row in message.components
+                for component in row.children
+            )
+            if has_economy:
+                await message.edit(
+                    embed=economy_panel_embed(),
+                    view=EconomyMainView(ECONOMY_USER_ID, persistent=True),
+                )
+                print(f"[ECONOMY] Panel refreshed to v{ECONOMY_UI_VERSION}")
+                return
 
         await channel.send(
-            embed=discord.Embed(
-                title="💰 ECONOMY",
-                description=(
-                    "Особистий облік роботи та заробітку.\n\n"
-                    "▶️ **Почати роботу** — запустити облік часу\n"
-                    "📝 **Записати роботу** — внести минулу роботу вручну\n"
-                    "📦 **Очікують продажу** — незакриті результати робіт\n"
-                    "📊 **Статистика** — час і фінальний заробіток\n"
-                    "💼 **Роботи** — налаштування робіт"
-                ),
-                color=discord.Color.green(),
-            ),
-            view=EconomyMainView(),
+            embed=economy_panel_embed(),
+            view=EconomyMainView(ECONOMY_USER_ID, persistent=True),
         )
         print(f"[ECONOMY] Panel created in channel {ECONOMY_CHANNEL_ID}")
     except discord.DiscordException as exc:
         print(f"[ECONOMY] Could not ensure panel: {exc}")
+

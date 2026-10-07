@@ -160,6 +160,19 @@ class EconomyDB:
         self.conn.commit()
         return cur.lastrowid
 
+    def create_manual_session(self, user_id: int, job_id: int, worked_seconds: int) -> int:
+        if worked_seconds <= 0:
+            raise ValueError("worked_seconds")
+        stamp = now_iso()
+        cur = self.conn.execute("""
+            INSERT INTO work_sessions(
+                user_id,job_id,status,worked_seconds,current_started_at,
+                work_finished_at,created_at
+            ) VALUES(?,?, 'pending_sale',?,NULL,?,?)
+        """, (user_id, job_id, int(worked_seconds), stamp, stamp))
+        self.conn.commit()
+        return cur.lastrowid
+
     def worked_seconds(self, row) -> int:
         total = int(row["worked_seconds"] or 0)
         if row["status"] == "working" and row["current_started_at"]:
@@ -500,6 +513,62 @@ class JobSelectView(discord.ui.View):
         self.add_item(JobSelect(user_id))
 
 
+class ManualTimeModal(discord.ui.Modal, title="Ручний запис роботи"):
+    hours = discord.ui.TextInput(label="Години", placeholder="Наприклад: 3", default="0", max_length=3)
+    minutes = discord.ui.TextInput(label="Хвилини", placeholder="Наприклад: 30", default="0", max_length=2)
+
+    def __init__(self, user_id: int, job_id: int):
+        super().__init__()
+        self.user_id = user_id
+        self.job_id = job_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            hours = int(str(self.hours.value).strip() or "0")
+            minutes = int(str(self.minutes.value).strip() or "0")
+            if hours < 0 or minutes < 0 or minutes > 59 or (hours == 0 and minutes == 0):
+                raise ValueError
+        except ValueError:
+            return await interaction.response.send_message(
+                "❌ Вкажи коректний час. Хвилини — від 0 до 59.", ephemeral=True
+            )
+
+        sid = db.create_manual_session(self.user_id, self.job_id, hours * 3600 + minutes * 60)
+        row = db.session(sid, self.user_id)
+        await interaction.response.edit_message(
+            content="📝 Ручний запис створено. Тепер можеш додати доходи та витрати.",
+            embed=session_embed(row),
+            view=SessionView(self.user_id, sid),
+        )
+
+
+class ManualJobSelect(discord.ui.Select):
+    def __init__(self, user_id: int):
+        self.user_id = user_id
+        jobs = db.jobs(user_id)
+        options = [
+            discord.SelectOption(label=row["name"][:100], value=str(row["id"]))
+            for row in jobs[:25]
+        ]
+        super().__init__(
+            placeholder="Оберіть роботу для ручного запису",
+            min_values=1, max_values=1,
+            options=options or [discord.SelectOption(label="Спочатку додай роботу", value="0")],
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        job_id = int(self.values[0])
+        if not job_id:
+            return await interaction.response.send_message("Спочатку додай роботу.", ephemeral=True)
+        await interaction.response.send_modal(ManualTimeModal(self.user_id, job_id))
+
+
+class ManualJobSelectView(discord.ui.View):
+    def __init__(self, user_id: int):
+        super().__init__(timeout=300)
+        self.add_item(ManualJobSelect(user_id))
+
+
 class AddJobModal(discord.ui.Modal, title="Нова робота"):
     name = discord.ui.TextInput(label="Назва", placeholder="Наприклад: Каменяр", max_length=50)
 
@@ -638,6 +707,19 @@ class EconomyMainView(discord.ui.View):
             )
         await interaction.response.send_message("Оберіть роботу:", view=JobSelectView(uid), ephemeral=True)
 
+    @discord.ui.button(label="Записати роботу", emoji="📝", style=discord.ButtonStyle.secondary,
+                       custom_id="economy:main:manual", row=0)
+    async def manual(self, interaction, button):
+        uid = self.uid(interaction)
+        if not db.jobs(uid):
+            return await interaction.response.send_message(
+                "Спочатку додай хоча б одну роботу через **Роботи**.", ephemeral=True
+            )
+        await interaction.response.send_message(
+            "📝 Обери роботу, яку хочеш записати вручну:",
+            view=ManualJobSelectView(uid), ephemeral=True
+        )
+
     @discord.ui.button(label="Очікують продажу", emoji="📦", style=discord.ButtonStyle.secondary,
                        custom_id="economy:main:pending", row=1)
     async def pending_btn(self, interaction, button):
@@ -757,6 +839,7 @@ async def ensure_economy_panel(bot):
                 description=(
                     "Особистий облік роботи та заробітку.\n\n"
                     "▶️ **Почати роботу** — запустити облік часу\n"
+                    "📝 **Записати роботу** — внести минулу роботу вручну\n"
                     "📦 **Очікують продажу** — незакриті результати робіт\n"
                     "📊 **Статистика** — час і фінальний заробіток\n"
                     "💼 **Роботи** — налаштування робіт"

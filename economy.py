@@ -1,6 +1,7 @@
 import asyncio
 import sqlite3
 import time
+import statistics
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -10,7 +11,7 @@ import discord
 from config import DB_PATH, LOCAL_TZ, GUILD_ID, ECONOMY_CHANNEL_ID, ECONOMY_USER_ID
 
 
-ECONOMY_VERSION = "3.4"
+ECONOMY_VERSION = "3.6"
 _DB_DIR = Path(DB_PATH).expanduser().resolve().parent
 ECONOMY_DB_PATH = str(_DB_DIR / "economy.db")
 PANEL_REFRESH_SECONDS = 120
@@ -18,6 +19,35 @@ _panel_message_id = None
 _panel_refresh_task = None
 UNDO_SECONDS = 60
 _undo_actions = {}
+_session_locks = {}
+_recent_actions = {}
+
+
+def session_lock(user_id: int, session_id: int) -> asyncio.Lock:
+    key = (int(user_id), int(session_id))
+    lock = _session_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _session_locks[key] = lock
+    return lock
+
+
+def allow_action(user_id: int, key: str, window: float = 1.5) -> bool:
+    """Reject the same fast repeated action (double click / double submit)."""
+    now = time.monotonic()
+    action_key = (int(user_id), key)
+    previous = _recent_actions.get(action_key, 0.0)
+    if now - previous < window:
+        return False
+    _recent_actions[action_key] = now
+
+    # Keep this tiny in-memory cache bounded during long bot uptimes.
+    if len(_recent_actions) > 500:
+        cutoff = now - 30.0
+        for old_key, stamp in list(_recent_actions.items()):
+            if stamp < cutoff:
+                _recent_actions.pop(old_key, None)
+    return True
 
 
 def now_dt() -> datetime:
@@ -125,6 +155,7 @@ class EconomyDB:
             self.conn.executescript(
                 """
                 DROP TABLE IF EXISTS goals;
+                DROP TABLE IF EXISTS work_segments;
                 DROP TABLE IF EXISTS transactions;
                 DROP TABLE IF EXISTS work_sessions;
                 DROP TABLE IF EXISTS farms;
@@ -172,6 +203,18 @@ class EconomyDB:
                 FOREIGN KEY(session_id) REFERENCES work_sessions(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS work_segments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                started_at TEXT NOT NULL,
+                ended_at TEXT NOT NULL,
+                seconds INTEGER NOT NULL CHECK(seconds >= 0),
+                source TEXT NOT NULL DEFAULT 'timer'
+                    CHECK(source IN ('timer', 'manual', 'legacy')),
+                FOREIGN KEY(session_id) REFERENCES work_sessions(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS goals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
@@ -196,6 +239,8 @@ class EconomyDB:
                 ON work_sessions(job_id, status, completed_at);
             CREATE INDEX IF NOT EXISTS idx_tx_session
                 ON transactions(session_id, kind);
+            CREATE INDEX IF NOT EXISTS idx_segments_session
+                ON work_segments(session_id, started_at);
             CREATE INDEX IF NOT EXISTS idx_goals_user
                 ON goals(user_id, completed_at);
             """
@@ -205,7 +250,32 @@ class EconomyDB:
         if not self._column_exists("work_sessions", "note"):
             self.conn.execute("ALTER TABLE work_sessions ADD COLUMN note TEXT")
 
-        self.conn.execute("PRAGMA user_version=3")
+        # v3 -> v4: keep every future work approach as a separate segment.
+        # Existing sessions are preserved as one legacy segment so no time is lost.
+        if version < 4:
+            old_rows = self.conn.execute(
+                """
+                SELECT s.*
+                FROM work_sessions s
+                WHERE s.worked_seconds > 0
+                  AND NOT EXISTS (
+                    SELECT 1 FROM work_segments ws WHERE ws.session_id=s.id
+                  )
+                """
+            ).fetchall()
+            for row in old_rows:
+                started = row["created_at"]
+                ended = row["work_finished_at"] or row["completed_at"] or row["created_at"]
+                self.conn.execute(
+                    """
+                    INSERT INTO work_segments(
+                        session_id,user_id,started_at,ended_at,seconds,source
+                    ) VALUES(?,?,?,?,?,'legacy')
+                    """,
+                    (row["id"], row["user_id"], started, ended, int(row["worked_seconds"] or 0)),
+                )
+
+        self.conn.execute("PRAGMA user_version=4")
         self.conn.commit()
 
     # ---------- Jobs ----------
@@ -335,8 +405,17 @@ class EconomyDB:
                 stamp,
             ),
         )
+        session_id = cur.lastrowid
+        self.conn.execute(
+            """
+            INSERT INTO work_segments(
+                session_id,user_id,started_at,ended_at,seconds,source
+            ) VALUES(?,?,?,?,?,'manual')
+            """,
+            (session_id, user_id, stamp, stamp, int(worked_seconds)),
+        )
         self.conn.commit()
-        return cur.lastrowid
+        return session_id
 
     def worked_seconds(self, row) -> int:
         total = int(row["worked_seconds"] or 0)
@@ -349,6 +428,32 @@ class EconomyDB:
             )
         return total
 
+    def work_segments(self, session_id: int):
+        return self.conn.execute(
+            """
+            SELECT * FROM work_segments
+            WHERE session_id=?
+            ORDER BY started_at ASC, id ASC
+            """,
+            (session_id,),
+        ).fetchall()
+
+    def _insert_segment(
+        self, session_id: int, user_id: int, started_at: str, ended_at: str,
+        seconds: int, source: str = "timer"
+    ):
+        seconds = max(0, int(seconds))
+        if seconds <= 0:
+            return
+        self.conn.execute(
+            """
+            INSERT INTO work_segments(
+                session_id,user_id,started_at,ended_at,seconds,source
+            ) VALUES(?,?,?,?,?,?)
+            """,
+            (session_id, user_id, started_at, ended_at, seconds, source),
+        )
+
     def add_worked_time(self, session_id: int, user_id: int, seconds: int) -> bool:
         seconds = int(seconds)
         if seconds <= 0:
@@ -356,11 +461,18 @@ class EconomyDB:
         row = self.session(session_id, user_id)
         if not row:
             return False
-        self.conn.execute(
-            "UPDATE work_sessions SET worked_seconds=worked_seconds+? WHERE id=? AND user_id=?",
-            (seconds, session_id, user_id),
-        )
-        self.conn.commit()
+        stamp = now_iso()
+        try:
+            self.conn.execute("BEGIN")
+            self.conn.execute(
+                "UPDATE work_sessions SET worked_seconds=worked_seconds+? WHERE id=? AND user_id=?",
+                (seconds, session_id, user_id),
+            )
+            self._insert_segment(session_id, user_id, stamp, stamp, seconds, "manual")
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return True
 
     def get_meta(self, key: str):
@@ -383,40 +495,41 @@ class EconomyDB:
     def pause(self, session_id: int, user_id: int):
         row = self.session(session_id, user_id)
         if not row or row["status"] != "working":
-            return
-        total = self.worked_seconds(row)
-        self.conn.execute(
-            """
-            UPDATE work_sessions
-            SET status='paused', worked_seconds=?, current_started_at=NULL
-            WHERE id=? AND user_id=?
-            """,
-            (total, session_id, user_id),
-        )
-        self.conn.commit()
+            return False
+        ended = now_dt()
+        started = parse_dt(row["current_started_at"])
+        delta = max(0, int((ended - started).total_seconds()))
+        total = int(row["worked_seconds"] or 0) + delta
+        try:
+            self.conn.execute("BEGIN")
+            self._insert_segment(
+                session_id, user_id, row["current_started_at"], ended.isoformat(), delta, "timer"
+            )
+            self.conn.execute(
+                """
+                UPDATE work_sessions
+                SET status='paused', worked_seconds=?, current_started_at=NULL
+                WHERE id=? AND user_id=?
+                """,
+                (total, session_id, user_id),
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        return True
 
     def resume(self, session_id: int, user_id: int) -> bool:
-        """
-        Resume the same work session.
-
-        A paused session continues normally.
-        A pending-sale session can also be reopened for more work. This keeps
-        all previous worked time, income and expenses in the SAME session.
-        """
         row = self.session(session_id, user_id)
         if not row or row["status"] not in ("paused", "pending_sale"):
             return False
-
         current = self.open_session(user_id)
         if current and current["id"] != session_id:
             return False
-
         self.conn.execute(
             """
             UPDATE work_sessions
-            SET status='working',
-                current_started_at=?,
-                work_finished_at=NULL
+            SET status='working', current_started_at=?, work_finished_at=NULL
             WHERE id=? AND user_id=?
             """,
             (now_iso(), session_id, user_id),
@@ -427,18 +540,33 @@ class EconomyDB:
     def finish_work(self, session_id: int, user_id: int):
         row = self.session(session_id, user_id)
         if not row or row["status"] not in ("working", "paused"):
-            return
-        total = self.worked_seconds(row)
-        self.conn.execute(
-            """
-            UPDATE work_sessions
-            SET status='pending_sale', worked_seconds=?, current_started_at=NULL,
-                work_finished_at=?
-            WHERE id=? AND user_id=?
-            """,
-            (total, now_iso(), session_id, user_id),
-        )
-        self.conn.commit()
+            return False
+        ended = now_dt()
+        total = int(row["worked_seconds"] or 0)
+        delta = 0
+        try:
+            self.conn.execute("BEGIN")
+            if row["status"] == "working" and row["current_started_at"]:
+                started = parse_dt(row["current_started_at"])
+                delta = max(0, int((ended - started).total_seconds()))
+                total += delta
+                self._insert_segment(
+                    session_id, user_id, row["current_started_at"], ended.isoformat(), delta, "timer"
+                )
+            self.conn.execute(
+                """
+                UPDATE work_sessions
+                SET status='pending_sale', worked_seconds=?, current_started_at=NULL,
+                    work_finished_at=?
+                WHERE id=? AND user_id=?
+                """,
+                (total, ended.isoformat(), session_id, user_id),
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        return True
 
     def complete(self, session_id: int, user_id: int):
         row = self.session(session_id, user_id)
@@ -528,7 +656,9 @@ class EconomyDB:
         self.conn.commit()
         self.refresh_goals(tx["user_id"])
 
-    def restore_session(self, session: dict, transactions: list[dict]):
+    def restore_session(
+        self, session: dict, transactions: list[dict], segments: Optional[list[dict]] = None
+    ):
         self.conn.execute("BEGIN")
         try:
             self.conn.execute(
@@ -557,31 +687,75 @@ class EconomyDB:
                         tx["amount"], tx.get("note"), tx["created_at"],
                     ),
                 )
+            for seg in segments or []:
+                self.conn.execute(
+                    """
+                    INSERT OR REPLACE INTO work_segments(
+                        id,session_id,user_id,started_at,ended_at,seconds,source
+                    ) VALUES(?,?,?,?,?,?,?)
+                    """,
+                    (
+                        seg["id"], seg["session_id"], seg["user_id"],
+                        seg["started_at"], seg["ended_at"], seg["seconds"], seg["source"],
+                    ),
+                )
             self.conn.commit()
         except Exception:
             self.conn.rollback()
             raise
         self.refresh_goals(session["user_id"])
 
-    def history_count(self, user_id: int) -> int:
+    def _history_where(
+        self, user_id: int, status: Optional[str] = None,
+        job_id: Optional[int] = None, date_filter: Optional[str] = None
+    ):
+        where = ["s.user_id=?"]
+        params = [user_id]
+        if status:
+            where.append("s.status=?")
+            params.append(status)
+        if job_id is not None:
+            where.append("s.job_id=?")
+            params.append(job_id)
+        if date_filter:
+            where.append(
+                "(substr(s.created_at,1,10)=? OR EXISTS ("
+                "SELECT 1 FROM work_segments ws "
+                "WHERE ws.session_id=s.id AND substr(ws.started_at,1,10)=?"
+                "))"
+            )
+            params.extend([date_filter, date_filter])
+        return " AND ".join(where), params
+
+    def history_count(
+        self, user_id: int, status: Optional[str] = None,
+        job_id: Optional[int] = None, date_filter: Optional[str] = None
+    ) -> int:
+        where, params = self._history_where(user_id, status, job_id, date_filter)
         return int(
             self.conn.execute(
-                "SELECT COUNT(*) c FROM work_sessions WHERE user_id=?", (user_id,)
+                f"SELECT COUNT(*) c FROM work_sessions s WHERE {where}", params
             ).fetchone()["c"]
         )
 
-    def history_page(self, user_id: int, page: int, page_size: int = 20):
+    def history_page(
+        self, user_id: int, page: int, page_size: int = 20,
+        status: Optional[str] = None, job_id: Optional[int] = None,
+        date_filter: Optional[str] = None
+    ):
         offset = max(0, page) * page_size
+        where, params = self._history_where(user_id, status, job_id, date_filter)
+        params = list(params) + [page_size, offset]
         return self.conn.execute(
-            """
+            f"""
             SELECT s.*, j.name AS job_name, j.income_mode
             FROM work_sessions s
             JOIN jobs j ON j.id=s.job_id
-            WHERE s.user_id=?
+            WHERE {where}
             ORDER BY s.id DESC
             LIMIT ? OFFSET ?
             """,
-            (user_id, page_size, offset),
+            params,
         ).fetchall()
 
     def pending(self, user_id: int):
@@ -738,6 +912,17 @@ class EconomyDB:
             income = int(totals["income"])
             expense = int(totals["expense"])
 
+        hourly_values = []
+        for session_row in sessions:
+            sec = int(session_row["worked_seconds"] or 0)
+            if sec <= 0:
+                continue
+            inc, exp = self.totals(session_row["id"])
+            hourly_values.append(round((inc - exp) / (sec / 3600)))
+        median_hourly = (
+            round(statistics.median(hourly_values)) if hourly_values else 0
+        )
+
         pending = self.pending_totals(user_id)
         return {
             "worked_seconds": int(worked["sec"]),
@@ -745,6 +930,7 @@ class EconomyDB:
             "completed_sessions": len(sessions),
             "income": income,
             "expense": expense,
+            "median_hourly": median_hourly,
             "pending_count": pending["sessions"],
             "pending_income": pending["income"],
             "pending_expense": pending["expense"],
@@ -783,6 +969,7 @@ class EconomyDB:
                     "best_profit": None,
                     "best_hourly": None,
                     "best_session_id": None,
+                    "hourly_values": [],
                 },
             )
             inc, exp = self.totals(row["id"])
@@ -793,6 +980,8 @@ class EconomyDB:
             job["seconds"] += sec
             job["income"] += inc
             job["expense"] += exp
+            if sec > 0:
+                job["hourly_values"].append(hourly)
             if job["best_profit"] is None or profit > job["best_profit"]:
                 job["best_profit"] = profit
                 job["best_hourly"] = hourly
@@ -803,6 +992,10 @@ class EconomyDB:
             profit = job["income"] - job["expense"]
             job["profit"] = profit
             job["hourly"] = round(profit / (job["seconds"] / 3600)) if job["seconds"] else 0
+            job["median_hourly"] = (
+                round(statistics.median(job["hourly_values"]))
+                if job["hourly_values"] else 0
+            )
             result.append(job)
         return sorted(result, key=lambda x: x["hourly"], reverse=True)
 
@@ -996,7 +1189,9 @@ async def perform_undo(user_id: int):
         db.restore_transaction(payload["transaction"])
         return ("session", payload["session_id"])
     if kind == "delete_session":
-        db.restore_session(payload["session"], payload["transactions"])
+        db.restore_session(
+            payload["session"], payload["transactions"], payload.get("segments", [])
+        )
         return ("session", payload["session"]["id"])
     return None
 
@@ -1055,6 +1250,32 @@ def session_details_embed(row) -> discord.Embed:
     else:
         embed.add_field(name="🧾 Операції", value="Немає", inline=False)
 
+    segments = db.work_segments(row["id"])
+    approach_lines = []
+    for seg in segments[-10:]:
+        start_dt = parse_dt(seg["started_at"])
+        end_dt = parse_dt(seg["ended_at"])
+        if start_dt.date() == end_dt.date():
+            stamp = start_dt.strftime("%d.%m")
+        else:
+            stamp = f"{start_dt.strftime('%d.%m')}→{end_dt.strftime('%d.%m')}"
+        suffix = " • вручну" if seg["source"] == "manual" else ""
+        approach_lines.append(
+            f"`{stamp}` • {duration_text(seg['seconds'])}{suffix}"
+        )
+    if row["status"] == "working" and row["current_started_at"]:
+        live_seconds = max(0, int((now_dt() - parse_dt(row["current_started_at"])).total_seconds()))
+        approach_lines.append(
+            f"`{parse_dt(row['current_started_at']).strftime('%d.%m')}` • "
+            f"{duration_text(live_seconds)} • зараз"
+        )
+    if approach_lines:
+        if len(segments) > 10:
+            approach_lines.insert(0, f"… ще {len(segments)-10} підходів")
+        embed.add_field(
+            name="📅 Підходи до роботи", value="\n".join(approach_lines), inline=False
+        )
+
     if row["status"] == "completed":
         income, expense = db.totals(row["id"])
         sec = int(row["worked_seconds"] or 0)
@@ -1091,16 +1312,41 @@ def pending_overview_embed(user_id: int) -> discord.Embed:
     return embed
 
 
-def history_embed(user_id: int, page: int = 0, page_size: int = 20) -> discord.Embed:
-    rows = db.history_page(user_id, page, page_size)
-    total = db.history_count(user_id)
+def history_filter_label(
+    user_id: int, status: Optional[str] = None, job_id: Optional[int] = None,
+    date_filter: Optional[str] = None
+) -> str:
+    parts = []
+    if status == "completed":
+        parts.append("✅ завершені")
+    elif status == "pending_sale":
+        parts.append("📦 очікують продажу")
+    if job_id is not None:
+        job = db.job(user_id, job_id)
+        parts.append(f"💼 {job['name'] if job else 'робота'}")
+    if date_filter:
+        try:
+            parts.append(f"📅 {datetime.strptime(date_filter, '%Y-%m-%d').strftime('%d.%m.%Y')}")
+        except ValueError:
+            parts.append(f"📅 {date_filter}")
+    return " • ".join(parts) if parts else "Усі сесії"
+
+
+def history_embed(
+    user_id: int, page: int = 0, page_size: int = 20,
+    status: Optional[str] = None, job_id: Optional[int] = None,
+    date_filter: Optional[str] = None
+) -> discord.Embed:
+    rows = db.history_page(user_id, page, page_size, status, job_id, date_filter)
+    total = db.history_count(user_id, status, job_id, date_filter)
     pages = max(1, (total + page_size - 1) // page_size)
     embed = discord.Embed(
         title=f"📋 Історія сесій — {page+1}/{pages}",
+        description=f"**Фільтр:** {history_filter_label(user_id, status, job_id, date_filter)}",
         color=discord.Color.blurple(),
     )
     if not rows:
-        embed.description = "Історія поки порожня."
+        embed.description += "\n\nЗа цим фільтром сесій немає."
         return embed
     icons = {"working":"🟢","paused":"⏸️","pending_sale":"📦","completed":"✅"}
     lines=[]
@@ -1112,8 +1358,8 @@ def history_embed(user_id: int, page: int = 0, page_size: int = 20) -> discord.E
             f"{icons.get(row['status'],'•')} **{row['job_name']}** • {dt}{note}\n"
             f"⏱️ {duration_text(db.worked_seconds(row))} • 📈 {money(inc-exp)} $"
         )
-    embed.description = "\n\n".join(lines)[:4096]
-    embed.set_footer(text="Обери конкретну сесію у списку нижче")
+    embed.description += "\n\n" + "\n\n".join(lines)[:3800]
+    embed.set_footer(text="Обери сесію нижче або зміни фільтр")
     return embed
 
 
@@ -1139,19 +1385,23 @@ def comparison_embed(user_id: int, days: Optional[int], label: str) -> discord.E
 def main_embed(user_id: int) -> discord.Embed:
     current = db.open_session(user_id)
     pending = db.pending_totals(user_id)
+    db.refresh_goals(user_id)
+    active_goals = db.goals(user_id, completed=False)
+
     embed = discord.Embed(
         title="💰 ECONOMY",
-        description="Оберіть дію нижче.",
+        description="Твій поточний стан",
         color=discord.Color.green(),
     )
 
     if current:
         icon = "🟢" if current["status"] == "working" else "⏸️"
+        state = "працює" if current["status"] == "working" else "пауза"
         embed.add_field(
-            name="Поточна робота",
+            name="🧑‍💼 Поточна робота",
             value=(
-                f"{icon} **{current['job_name']}**\n"
-                f"⏱️ {duration_text(db.worked_seconds(current))}"
+                f"{icon} **{current['job_name']}** • {state}\n"
+                f"⏱️ **{duration_text(db.worked_seconds(current))}**"
             ),
             inline=False,
         )
@@ -1159,15 +1409,36 @@ def main_embed(user_id: int) -> discord.Embed:
     if pending["sessions"]:
         profit = pending["income"] - pending["expense"]
         embed.add_field(
-            name="📦 У процесі продажу",
+            name="📦 Очікують продажу",
             value=(
-                f"Записів: **{pending['sessions']}**\n"
-                f"💰 Уже отримано: **{money(pending['income'])} $**\n"
-                f"💸 Витрати: **{money(pending['expense'])} $**\n"
+                f"Сесій: **{pending['sessions']}**\n"
+                f"💰 Незакрито отримано: **{money(pending['income'])} $**\n"
                 f"📈 Поточний результат: **{money(profit)} $**"
             ),
             inline=False,
         )
+
+    if active_goals:
+        goal = active_goals[0]
+        current_value = db.goal_progress(goal)
+        target = int(goal["target_amount"])
+        percent = max(0, min(100, round((current_value / target) * 100))) if target else 0
+        kind = "Дохід" if goal["goal_type"] == "income" else "Чистий прибуток"
+        scope = goal["job_name"] or "Усі роботи"
+        extra_goals = f"\nЩе активних цілей: **{len(active_goals)-1}**" if len(active_goals) > 1 else ""
+        embed.add_field(
+            name="🎯 Активна ціль",
+            value=(
+                f"**{kind} • {scope}**\n"
+                f"{progress_bar(current_value, target)} **{percent}%**\n"
+                f"{money(current_value)} / {money(target)} $"
+                f"{extra_goals}"
+            ),
+            inline=False,
+        )
+
+    if not current and not pending["sessions"] and not active_goals:
+        embed.description = "Немає активної роботи, незакритих продажів або цілей."
 
     embed.set_footer(text=f"Economy v{ECONOMY_VERSION} • main")
     return embed
@@ -1197,7 +1468,10 @@ def stats_embed(user_id: int, days: Optional[int], label: str) -> discord.Embed:
     )
     embed.add_field(name="📈 Чистими", value=f"{money(profit)} $", inline=True)
     embed.add_field(
-        name="⚡ Чистими / год", value=f"{money(hourly)} $", inline=False
+        name="⚡ Середнє / год", value=f"{money(hourly)} $", inline=True
+    )
+    embed.add_field(
+        name="📊 Медіана / год", value=f"{money(s['median_hourly'])} $", inline=True
     )
     embed.add_field(
         name="✅ Завершено сесій", value=str(s["completed_sessions"]), inline=True
@@ -1242,7 +1516,10 @@ def job_stats_embed(user_id: int, job_id: int, days: Optional[int], label: str):
         name="📈 Чистими", value=f"{money(row['profit'])} $", inline=True
     )
     embed.add_field(
-        name="⚡ Чистими / год", value=f"{money(row['hourly'])} $", inline=False
+        name="⚡ Середнє / год", value=f"{money(row['hourly'])} $", inline=True
+    )
+    embed.add_field(
+        name="📊 Медіана / год", value=f"{money(row['median_hourly'])} $", inline=True
     )
     embed.add_field(name="✅ Сесій", value=str(row["sessions"]), inline=True)
     if row["best_profit"] is not None:
@@ -1320,19 +1597,29 @@ class AmountModal(ProtectedEconomyModal):
                 "❌ Введи коректну суму.", ephemeral=True
             )
 
-        row = db.session(self.session_id, self.user_id)
-        if not row or (row["status"] == "completed" and not self.allow_completed):
+        signature = (
+            f"tx:{self.session_id}:{self.kind}:{amount}:"
+            f"{str(self.note.value).strip()}"
+        )
+        if not allow_action(self.user_id, signature, 2.5):
             return await interaction.response.send_message(
-                "❌ Цей запис уже закритий.", ephemeral=True
+                "⏳ Ця операція вже обробляється.", ephemeral=True
             )
 
-        db.add_transaction(
-            self.session_id,
-            self.user_id,
-            self.kind,
-            amount,
-            str(self.note.value).strip() or None,
-        )
+        async with session_lock(self.user_id, self.session_id):
+            row = db.session(self.session_id, self.user_id)
+            if not row or (row["status"] == "completed" and not self.allow_completed):
+                return await interaction.response.send_message(
+                    "❌ Цей запис уже закритий.", ephemeral=True
+                )
+
+            db.add_transaction(
+                self.session_id,
+                self.user_id,
+                self.kind,
+                amount,
+                str(self.note.value).strip() or None,
+            )
         row = db.session(self.session_id, self.user_id)
         view = (
             CompletedManualView(self.user_id, self.session_id)
@@ -1412,14 +1699,18 @@ class AddTimeModal(ProtectedEconomyModal):
                 "❌ Вкажи коректний час. Хвилини — від 0 до 59.", ephemeral=True
             )
 
-        row = db.session(self.session_id, self.user_id)
-        if not row:
+        seconds = hours * 3600 + minutes * 60
+        if not allow_action(self.user_id, f"addtime:{self.session_id}:{seconds}", 2.5):
             return await interaction.response.send_message(
-                "❌ Сесію не знайдено.", ephemeral=True
+                "⏳ Цей час уже додається.", ephemeral=True
             )
-        db.add_worked_time(
-            self.session_id, self.user_id, hours * 3600 + minutes * 60
-        )
+        async with session_lock(self.user_id, self.session_id):
+            row = db.session(self.session_id, self.user_id)
+            if not row:
+                return await interaction.response.send_message(
+                    "❌ Сесію не знайдено.", ephemeral=True
+                )
+            db.add_worked_time(self.session_id, self.user_id, seconds)
         row = db.session(self.session_id, self.user_id)
         if row["status"] == "completed":
             await edit_panel_from_modal(
@@ -1650,9 +1941,13 @@ class SessionView(ProtectedEconomyView):
         self.add_item(back)
 
     async def add_income(self, interaction):
+        if not allow_action(self.user_id, f"open_income:{self.session_id}", 1.2):
+            return await interaction.response.send_message("⏳ Вікно доходу вже відкривається.", ephemeral=True)
         await interaction.response.send_modal(AmountModal(self.session_id, self.user_id, "income"))
 
     async def add_expense(self, interaction):
+        if not allow_action(self.user_id, f"open_expense:{self.session_id}", 1.2):
+            return await interaction.response.send_message("⏳ Вікно витрати вже відкривається.", ephemeral=True)
         await interaction.response.send_modal(AmountModal(self.session_id, self.user_id, "expense"))
 
     async def operations(self, interaction):
@@ -1662,39 +1957,61 @@ class SessionView(ProtectedEconomyView):
         await interaction.response.send_modal(AddTimeModal(self.user_id, self.session_id))
 
     async def pause(self, interaction):
-        db.pause(self.session_id, self.user_id)
-        row = db.session(self.session_id, self.user_id)
-        await interaction.response.edit_message(content=None, embed=session_embed(row), view=SessionView(self.user_id, self.session_id))
-
-    async def resume(self, interaction):
-        current = db.open_session(self.user_id)
-        if current and current["id"] != self.session_id:
-            return await interaction.response.send_message(
-                "❌ Уже є інша поточна робота. Спочатку зупини або заверши її.",
-                ephemeral=True,
-            )
-
-        if not db.resume(self.session_id, self.user_id):
-            return await interaction.response.send_message(
-                "❌ Цю сесію вже не можна продовжити.",
-                ephemeral=True,
-            )
-
+        async with session_lock(self.user_id, self.session_id):
+            row = db.session(self.session_id, self.user_id)
+            if not row or row["status"] != "working":
+                return await interaction.response.send_message(
+                    "⏳ Стан сесії вже змінився.", ephemeral=True
+                )
+            db.pause(self.session_id, self.user_id)
         row = db.session(self.session_id, self.user_id)
         await interaction.response.edit_message(
-            content=None,
-            embed=session_embed(row),
+            content=None, embed=session_embed(row),
+            view=SessionView(self.user_id, self.session_id)
+        )
+
+    async def resume(self, interaction):
+        async with session_lock(self.user_id, self.session_id):
+            current = db.open_session(self.user_id)
+            if current and current["id"] != self.session_id:
+                return await interaction.response.send_message(
+                    "❌ Уже є інша поточна робота. Спочатку зупини або заверши її.",
+                    ephemeral=True,
+                )
+            if not db.resume(self.session_id, self.user_id):
+                return await interaction.response.send_message(
+                    "⏳ Стан сесії вже змінився або її не можна продовжити.",
+                    ephemeral=True,
+                )
+        row = db.session(self.session_id, self.user_id)
+        await interaction.response.edit_message(
+            content=None, embed=session_embed(row),
             view=SessionView(self.user_id, self.session_id),
         )
 
     async def finish(self, interaction):
-        db.finish_work(self.session_id, self.user_id)
+        async with session_lock(self.user_id, self.session_id):
+            row = db.session(self.session_id, self.user_id)
+            if not row or row["status"] not in ("working", "paused"):
+                return await interaction.response.send_message(
+                    "⏳ Стан сесії вже змінився.", ephemeral=True
+                )
+            db.finish_work(self.session_id, self.user_id)
         row = db.session(self.session_id, self.user_id)
-        await interaction.response.edit_message(content=None, embed=session_embed(row), view=SessionView(self.user_id, self.session_id))
+        await interaction.response.edit_message(
+            content=None, embed=session_embed(row),
+            view=SessionView(self.user_id, self.session_id)
+        )
 
     async def complete(self, interaction):
-        store_undo(self.user_id, "complete", {"session_id": self.session_id})
-        db.complete(self.session_id, self.user_id)
+        async with session_lock(self.user_id, self.session_id):
+            row = db.session(self.session_id, self.user_id)
+            if not row or row["status"] != "pending_sale":
+                return await interaction.response.send_message(
+                    "⏳ Сесію вже закрито або її стан змінився.", ephemeral=True
+                )
+            store_undo(self.user_id, "complete", {"session_id": self.session_id})
+            db.complete(self.session_id, self.user_id)
         row = db.session(self.session_id, self.user_id)
         await interaction.response.edit_message(
             content=f"✅ Сесію закрито. ↩️ Повернути можна протягом {UNDO_SECONDS} с.",
@@ -1842,14 +2159,20 @@ class DeleteSessionConfirmView(ProtectedEconomyView):
         label="Так, анулювати", emoji="🗑️", style=discord.ButtonStyle.danger
     )
     async def confirm(self, interaction, button):
-        row = db.session(self.session_id, self.user_id)
-        txs = db.transactions(self.session_id)
-        if row:
+        async with session_lock(self.user_id, self.session_id):
+            row = db.session(self.session_id, self.user_id)
+            txs = db.transactions(self.session_id)
+            segments = db.work_segments(self.session_id)
+            if not row:
+                return await interaction.response.send_message(
+                    "⏳ Цю сесію вже видалено.", ephemeral=True
+                )
             store_undo(self.user_id, "delete_session", {
                 "session": _row_dict(row),
                 "transactions": [_row_dict(tx) for tx in txs],
+                "segments": [_row_dict(seg) for seg in segments],
             })
-        db.delete_session(self.session_id, self.user_id)
+            db.delete_session(self.session_id, self.user_id)
         await interaction.response.edit_message(
             content=f"🗑️ Сесію анульовано. ↩️ Повернути можна протягом {UNDO_SECONDS} с.",
             embed=history_embed(self.user_id, 0),
@@ -2021,12 +2344,16 @@ class DeleteTransactionConfirmView(ProtectedEconomyView):
         label="Так, видалити", emoji="🗑️", style=discord.ButtonStyle.danger
     )
     async def confirm(self, interaction, button):
-        tx = db.transaction(self.transaction_id, self.user_id)
-        if tx:
+        async with session_lock(self.user_id, self.session_id):
+            tx = db.transaction(self.transaction_id, self.user_id)
+            if not tx:
+                return await interaction.response.send_message(
+                    "⏳ Цю операцію вже видалено.", ephemeral=True
+                )
             store_undo(self.user_id, "delete_transaction", {
                 "transaction": _row_dict(tx), "session_id": self.session_id
             })
-        db.delete_transaction(self.transaction_id, self.user_id)
+            db.delete_transaction(self.transaction_id, self.user_id)
         row = db.session(self.session_id, self.user_id)
         await interaction.response.edit_message(
             content=f"✅ Операцію видалено. ↩️ Повернути можна протягом {UNDO_SECONDS} с.",
@@ -2063,6 +2390,8 @@ class JobSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         job_id = int(self.values[0])
+        if not allow_action(self.user_id, f"start_job:{job_id}", 1.5):
+            return await interaction.response.send_message("⏳ Робота вже запускається.", ephemeral=True)
         try:
             session_id = db.start_session(self.user_id, job_id)
         except RuntimeError:
@@ -2129,6 +2458,8 @@ class ManualFinishChoiceView(ProtectedEconomyView):
         label="Очікують продажу", emoji="📦", style=discord.ButtonStyle.primary
     )
     async def pending(self, interaction, button):
+        if not allow_action(self.user_id, f"manual_pending:{self.job_id}:{self.seconds}", 2.0):
+            return await interaction.response.send_message("⏳ Запис уже створюється.", ephemeral=True)
         sid = db.create_manual_session(
             self.user_id, self.job_id, self.seconds, "pending_sale"
         )
@@ -2141,6 +2472,8 @@ class ManualFinishChoiceView(ProtectedEconomyView):
 
     @discord.ui.button(label="Записати", emoji="✅", style=discord.ButtonStyle.success)
     async def complete_now(self, interaction, button):
+        if not allow_action(self.user_id, f"manual_complete:{self.job_id}:{self.seconds}", 2.0):
+            return await interaction.response.send_message("⏳ Запис уже створюється.", ephemeral=True)
         sid = db.create_manual_session(
             self.user_id, self.job_id, self.seconds, "completed"
         )
@@ -2239,16 +2572,126 @@ class PendingView(ProtectedEconomyView):
 
 
 # ---------- History ----------
+class HistoryDateModal(ProtectedEconomyModal):
+    def __init__(self, user_id: int):
+        super().__init__(title="Фільтр історії за датою")
+        self.user_id = user_id
+        self.date = discord.ui.TextInput(
+            label="Дата", placeholder="Наприклад: 08.10.2026", max_length=10
+        )
+        self.add_item(self.date)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw = str(self.date.value).strip()
+        try:
+            parsed = datetime.strptime(raw, "%d.%m.%Y").date().isoformat()
+        except ValueError:
+            return await interaction.response.send_message(
+                "❌ Введи дату у форматі ДД.ММ.РРРР.", ephemeral=True
+            )
+        await edit_panel_from_modal(
+            interaction, content=None,
+            embed=history_embed(self.user_id, 0, date_filter=parsed),
+            view=HistoryView(self.user_id, 0, date_filter=parsed),
+        )
+
+
+class HistoryJobFilterSelect(discord.ui.Select):
+    def __init__(self, user_id: int):
+        self.user_id = user_id
+        rows = db.all_jobs(user_id)
+        options = [
+            discord.SelectOption(label=row["name"][:100], value=str(row["id"]))
+            for row in rows[:25]
+        ]
+        super().__init__(placeholder="Оберіть роботу", options=options)
+
+    async def callback(self, interaction):
+        job_id = int(self.values[0])
+        await interaction.response.edit_message(
+            content=None, embed=history_embed(self.user_id, 0, job_id=job_id),
+            view=HistoryView(self.user_id, 0, job_id=job_id),
+        )
+
+
+class HistoryJobFilterView(ProtectedEconomyView):
+    def __init__(self, user_id: int):
+        super().__init__(timeout=None)
+        self.user_id = user_id
+        if db.all_jobs(user_id):
+            self.add_item(HistoryJobFilterSelect(user_id))
+        back = discord.ui.Button(label="Назад", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+        back.callback = self.back
+        self.add_item(back)
+
+    async def back(self, interaction):
+        await interaction.response.edit_message(
+            content=None, embed=history_embed(self.user_id, 0),
+            view=HistoryView(self.user_id, 0),
+        )
+
+
+class HistoryFilterView(ProtectedEconomyView):
+    def __init__(self, user_id: int):
+        super().__init__(timeout=None)
+        self.user_id = user_id
+
+    @discord.ui.button(label="Усі", emoji="📋", style=discord.ButtonStyle.secondary, row=0)
+    async def all(self, interaction, button):
+        await interaction.response.edit_message(
+            content=None, embed=history_embed(self.user_id, 0),
+            view=HistoryView(self.user_id, 0),
+        )
+
+    @discord.ui.button(label="Завершені", emoji="✅", style=discord.ButtonStyle.secondary, row=0)
+    async def completed(self, interaction, button):
+        await interaction.response.edit_message(
+            content=None, embed=history_embed(self.user_id, 0, status="completed"),
+            view=HistoryView(self.user_id, 0, status="completed"),
+        )
+
+    @discord.ui.button(label="Очікують продажу", emoji="📦", style=discord.ButtonStyle.secondary, row=0)
+    async def pending(self, interaction, button):
+        await interaction.response.edit_message(
+            content=None, embed=history_embed(self.user_id, 0, status="pending_sale"),
+            view=HistoryView(self.user_id, 0, status="pending_sale"),
+        )
+
+    @discord.ui.button(label="За роботою", emoji="💼", style=discord.ButtonStyle.primary, row=1)
+    async def by_job(self, interaction, button):
+        if not db.all_jobs(self.user_id):
+            return await interaction.response.send_message("Немає робіт для фільтра.", ephemeral=True)
+        await interaction.response.edit_message(
+            content="💼 **Оберіть роботу**", embed=None,
+            view=HistoryJobFilterView(self.user_id),
+        )
+
+    @discord.ui.button(label="За датою", emoji="📅", style=discord.ButtonStyle.primary, row=1)
+    async def by_date(self, interaction, button):
+        await interaction.response.send_modal(HistoryDateModal(self.user_id))
+
+    @discord.ui.button(label="Назад", emoji="◀️", style=discord.ButtonStyle.secondary, row=2)
+    async def back(self, interaction, button):
+        await interaction.response.edit_message(
+            content=None, embed=history_embed(self.user_id, 0),
+            view=HistoryView(self.user_id, 0),
+        )
+
+
 class HistorySelect(discord.ui.Select):
-    def __init__(self, user_id: int, page: int):
+    def __init__(
+        self, user_id: int, page: int, status: Optional[str] = None,
+        job_id: Optional[int] = None, date_filter: Optional[str] = None
+    ):
         self.user_id = user_id
         self.page = page
-        rows = db.history_page(user_id, page)
+        self.status = status
+        self.job_id = job_id
+        self.date_filter = date_filter
+        rows = db.history_page(user_id, page, 20, status, job_id, date_filter)
         icons = {
-            "working": "🟢",
-            "paused": "⏸️",
-            "pending_sale": "📦",
-            "completed": "✅",
+            "working": "🟢", "paused": "⏸️",
+            "pending_sale": "📦", "completed": "✅",
         }
         options = []
         for row in rows:
@@ -2269,57 +2712,69 @@ class HistorySelect(discord.ui.Select):
         sid = int(self.values[0])
         row = db.session(sid, self.user_id)
         await interaction.response.edit_message(
-            content=None,
-            embed=session_details_embed(row),
+            content=None, embed=session_details_embed(row),
             view=SessionHistoryView(self.user_id, sid),
         )
 
 
 class HistoryView(ProtectedEconomyView):
-    def __init__(self, user_id: int, page: int = 0):
+    def __init__(
+        self, user_id: int, page: int = 0, status: Optional[str] = None,
+        job_id: Optional[int] = None, date_filter: Optional[str] = None
+    ):
         super().__init__(timeout=None)
         self.user_id = user_id
         self.page = max(0, page)
-        total = db.history_count(user_id)
-        rows = db.history_page(user_id, self.page)
+        self.status = status
+        self.job_id = job_id
+        self.date_filter = date_filter
+        total = db.history_count(user_id, status, job_id, date_filter)
+        rows = db.history_page(user_id, self.page, 20, status, job_id, date_filter)
         if rows:
-            self.add_item(HistorySelect(user_id, self.page))
+            self.add_item(HistorySelect(user_id, self.page, status, job_id, date_filter))
 
         if self.page > 0:
-            prev = discord.ui.Button(
-                label="Назад", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1
-            )
+            prev = discord.ui.Button(label="Назад", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1)
             prev.callback = self.prev_page
             self.add_item(prev)
         if (self.page + 1) * 20 < total:
-            nxt = discord.ui.Button(
-                label="Далі", emoji="➡️", style=discord.ButtonStyle.secondary, row=1
-            )
+            nxt = discord.ui.Button(label="Далі", emoji="➡️", style=discord.ButtonStyle.secondary, row=1)
             nxt.callback = self.next_page
             self.add_item(nxt)
 
-        menu = discord.ui.Button(
-            label="Меню", emoji="◀️", style=discord.ButtonStyle.secondary, row=2
-        )
+        filters = discord.ui.Button(label="Фільтри", emoji="🔎", style=discord.ButtonStyle.primary, row=1)
+        filters.callback = self.filters
+        self.add_item(filters)
+
+        menu = discord.ui.Button(label="Меню", emoji="◀️", style=discord.ButtonStyle.secondary, row=2)
         menu.callback = self.menu
         self.add_item(menu)
 
     async def prev_page(self, interaction):
+        page = self.page - 1
         await interaction.response.edit_message(
-            content=None, embed=history_embed(self.user_id, self.page - 1),
-            view=HistoryView(self.user_id, self.page - 1),
+            content=None,
+            embed=history_embed(self.user_id, page, 20, self.status, self.job_id, self.date_filter),
+            view=HistoryView(self.user_id, page, self.status, self.job_id, self.date_filter),
         )
 
     async def next_page(self, interaction):
+        page = self.page + 1
         await interaction.response.edit_message(
-            content=None, embed=history_embed(self.user_id, self.page + 1),
-            view=HistoryView(self.user_id, self.page + 1),
+            content=None,
+            embed=history_embed(self.user_id, page, 20, self.status, self.job_id, self.date_filter),
+            view=HistoryView(self.user_id, page, self.status, self.job_id, self.date_filter),
+        )
+
+    async def filters(self, interaction):
+        await interaction.response.edit_message(
+            content="🔎 **Фільтри історії**", embed=None,
+            view=HistoryFilterView(self.user_id),
         )
 
     async def menu(self, interaction):
         await interaction.response.edit_message(
-            content=None,
-            embed=main_embed(self.user_id),
+            content=None, embed=main_embed(self.user_id),
             view=EconomyMainView(self.user_id),
         )
 

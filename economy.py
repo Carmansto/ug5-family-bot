@@ -11,7 +11,7 @@ import discord
 from config import DB_PATH, LOCAL_TZ, GUILD_ID, ECONOMY_CHANNEL_ID, ECONOMY_USER_ID
 
 
-ECONOMY_VERSION = "3.6"
+ECONOMY_VERSION = "3.7"
 _DB_DIR = Path(DB_PATH).expanduser().resolve().parent
 ECONOMY_DB_PATH = str(_DB_DIR / "economy.db")
 PANEL_REFRESH_SECONDS = 120
@@ -1927,16 +1927,27 @@ class SessionView(ProtectedEconomyView):
             self.add_item(ops)
             self.add_item(note)
             if status == "pending_sale":
-                add_time = discord.ui.Button(label="Додати час", emoji="➕", style=discord.ButtonStyle.secondary, row=2)
+                add_time = discord.ui.Button(
+                    label="Додати час", emoji="➕",
+                    style=discord.ButtonStyle.secondary, row=3
+                )
                 add_time.callback = self.add_time
                 self.add_item(add_time)
 
-        # 4. Destructive/navigation.
+        # 4. Destructive action — same lower row as extra time when available.
         if status in ("working", "paused", "pending_sale"):
-            annul = discord.ui.Button(label="Анулювати", emoji="🗑️", style=discord.ButtonStyle.danger, row=3)
+            annul = discord.ui.Button(
+                label="Анулювати", emoji="🗑️",
+                style=discord.ButtonStyle.danger, row=3
+            )
             annul.callback = self.annul
             self.add_item(annul)
-        back = discord.ui.Button(label="Меню", emoji="◀️", style=discord.ButtonStyle.secondary, row=3)
+
+        # 5. Navigation is always the last row.
+        back = discord.ui.Button(
+            label="Меню", emoji="◀️",
+            style=discord.ButtonStyle.secondary, row=4
+        )
         back.callback = self.back
         self.add_item(back)
 
@@ -2101,16 +2112,28 @@ class SessionHistoryView(ProtectedEconomyView):
         self.add_item(note)
 
         if row["status"] in ("pending_sale", "completed"):
-            add_time = discord.ui.Button(label="Додати час", emoji="➕", style=discord.ButtonStyle.secondary, row=1)
+            add_time = discord.ui.Button(
+                label="Додати час", emoji="➕",
+                style=discord.ButtonStyle.secondary, row=2
+            )
             add_time.callback = self.add_time
             self.add_item(add_time)
 
-        annul = discord.ui.Button(label="Анулювати сесію", emoji="🗑️", style=discord.ButtonStyle.danger, row=2)
+        annul = discord.ui.Button(
+            label="Анулювати", emoji="🗑️",
+            style=discord.ButtonStyle.danger, row=2
+        )
         annul.callback = self.annul
         self.add_item(annul)
 
-        history_btn = discord.ui.Button(label="Історія", emoji="📋", style=discord.ButtonStyle.secondary, row=3)
-        menu = discord.ui.Button(label="Меню", emoji="◀️", style=discord.ButtonStyle.secondary, row=3)
+        history_btn = discord.ui.Button(
+            label="Історія", emoji="📋",
+            style=discord.ButtonStyle.secondary, row=3
+        )
+        menu = discord.ui.Button(
+            label="Меню", emoji="◀️",
+            style=discord.ButtonStyle.secondary, row=3
+        )
         history_btn.callback = self.back_history
         menu.callback = self.menu
         self.add_item(history_btn)
@@ -2325,7 +2348,10 @@ class OperationManageView(ProtectedEconomyView):
             ),
         )
 
-    @discord.ui.button(label="Назад", emoji="◀️", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(
+        label="Назад", emoji="◀️",
+        style=discord.ButtonStyle.secondary, row=1
+    )
     async def back(self, interaction, button):
         await interaction.response.edit_message(
             content=None, embed=operations_embed(self.user_id, self.session_id),
@@ -2995,7 +3021,7 @@ class StatsView(ProtectedEconomyView):
             view=RankingView(self.user_id, self.days, self.label),
         )
 
-    @discord.ui.button(label="Порівняння", emoji="⚖️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Порівняти", emoji="⚖️", style=discord.ButtonStyle.secondary, row=1)
     async def comparison(self, interaction, button):
         await interaction.response.edit_message(
             content=None, embed=comparison_embed(self.user_id, self.days, self.label),
@@ -3132,7 +3158,10 @@ class GoalDetailView(ProtectedEconomyView):
         self.goal_id = goal_id
         self.completed = completed
 
-    @discord.ui.button(label="Видалити ціль", emoji="🗑️", style=discord.ButtonStyle.danger)
+    @discord.ui.button(
+        label="Видалити ціль", emoji="🗑️",
+        style=discord.ButtonStyle.danger, row=0
+    )
     async def delete(self, interaction, button):
         await interaction.response.edit_message(
             content="⚠️ Видалити цю ціль?",
@@ -3362,12 +3391,16 @@ class JobsView(ProtectedEconomyView):
         super().__init__(timeout=None)
         self.user_id = user_id
 
-    @discord.ui.button(label="Додати роботу", emoji="➕", style=discord.ButtonStyle.success)
+    @discord.ui.button(
+        label="Додати роботу", emoji="➕",
+        style=discord.ButtonStyle.success, row=0
+    )
     async def add(self, interaction, button):
         await interaction.response.send_modal(AddJobModal(self.user_id))
 
     @discord.ui.button(
-        label="Налаштування", emoji="⚙️", style=discord.ButtonStyle.secondary
+        label="Налаштування", emoji="⚙️",
+        style=discord.ButtonStyle.secondary, row=0
     )
     async def settings(self, interaction, button):
         if not db.jobs(self.user_id):
@@ -3379,7 +3412,10 @@ class JobsView(ProtectedEconomyView):
             view=JobSettingsView(self.user_id),
         )
 
-    @discord.ui.button(label="Меню", emoji="◀️", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(
+        label="Меню", emoji="◀️",
+        style=discord.ButtonStyle.secondary, row=1
+    )
     async def back(self, interaction, button):
         await interaction.response.edit_message(
             content=None,
@@ -3395,48 +3431,81 @@ class EconomyMainView(ProtectedEconomyView):
         self.user_id = user_id
         uid = user_id or ECONOMY_USER_ID
 
-        # Row 0 — work.
-        if uid and db.open_session(uid):
-            work = discord.ui.Button(label="Поточна робота", emoji="🟢", style=discord.ButtonStyle.success, custom_id="economy:main:current", row=0)
+        current = db.open_session(uid) if uid else None
+
+        # Row 0 — only the two most important actions.
+        if current:
+            work = discord.ui.Button(
+                label="Поточна робота", emoji="🟢",
+                style=discord.ButtonStyle.success,
+                custom_id="economy:main:current", row=0
+            )
             work.callback = self.current
         else:
-            work = discord.ui.Button(label="Почати роботу", emoji="▶️", style=discord.ButtonStyle.primary, custom_id="economy:main:start", row=0)
+            work = discord.ui.Button(
+                label="Почати роботу", emoji="▶️",
+                style=discord.ButtonStyle.primary,
+                custom_id="economy:main:start", row=0
+            )
             work.callback = self.start
         self.add_item(work)
 
-        if uid and not db.open_session(uid):
-            last = db.latest_job(uid)
-            if last:
-                label = (f"{last['name']} знову")[:80]
-                quick = discord.ui.Button(
-                    label=label, emoji="⚡", style=discord.ButtonStyle.secondary,
-                    custom_id="economy:main:quick", row=0
-                )
-                quick.callback = self.quick_start
-                self.add_item(quick)
-
-        manual = discord.ui.Button(label="Записати роботу", emoji="📝", style=discord.ButtonStyle.secondary, custom_id="economy:main:manual", row=0)
+        manual = discord.ui.Button(
+            label="Ручний запис", emoji="📝",
+            style=discord.ButtonStyle.secondary,
+            custom_id="economy:main:manual", row=0
+        )
         manual.callback = self.manual
         self.add_item(manual)
 
-        # Row 1 — records.
+        # Row 1 — shortcuts / unfinished records.
+        if uid and not current and db.latest_job(uid):
+            quick = discord.ui.Button(
+                label="Повторити роботу", emoji="⚡",
+                style=discord.ButtonStyle.secondary,
+                custom_id="economy:main:quick", row=1
+            )
+            quick.callback = self.quick_start
+            self.add_item(quick)
+
         if uid and db.pending(uid):
-            pending = discord.ui.Button(label="Очікують продажу", emoji="📦", style=discord.ButtonStyle.secondary, custom_id="economy:main:pending", row=1)
+            pending = discord.ui.Button(
+                label="Очікують продажу", emoji="📦",
+                style=discord.ButtonStyle.secondary,
+                custom_id="economy:main:pending", row=1
+            )
             pending.callback = self.pending
             self.add_item(pending)
 
-        history = discord.ui.Button(label="Історія", emoji="📋", style=discord.ButtonStyle.secondary, custom_id="economy:main:history", row=1)
+        # Row 2 — records and analytics.
+        history = discord.ui.Button(
+            label="Історія", emoji="📋",
+            style=discord.ButtonStyle.secondary,
+            custom_id="economy:main:history", row=2
+        )
+        stats = discord.ui.Button(
+            label="Статистика", emoji="📊",
+            style=discord.ButtonStyle.secondary,
+            custom_id="economy:main:stats", row=2
+        )
         history.callback = self.history
-        self.add_item(history)
-
-        # Row 2 — analysis/settings.
-        stats = discord.ui.Button(label="Статистика", emoji="📊", style=discord.ButtonStyle.secondary, custom_id="economy:main:stats", row=2)
-        goals = discord.ui.Button(label="Цілі", emoji="🎯", style=discord.ButtonStyle.secondary, custom_id="economy:main:goals", row=2)
-        jobs = discord.ui.Button(label="Роботи", emoji="💼", style=discord.ButtonStyle.secondary, custom_id="economy:main:jobs", row=2)
         stats.callback = self.stats
+        self.add_item(history)
+        self.add_item(stats)
+
+        # Row 3 — secondary sections.
+        goals = discord.ui.Button(
+            label="Цілі", emoji="🎯",
+            style=discord.ButtonStyle.secondary,
+            custom_id="economy:main:goals", row=3
+        )
+        jobs = discord.ui.Button(
+            label="Роботи", emoji="💼",
+            style=discord.ButtonStyle.secondary,
+            custom_id="economy:main:jobs", row=3
+        )
         goals.callback = self.goals
         jobs.callback = self.jobs
-        self.add_item(stats)
         self.add_item(goals)
         self.add_item(jobs)
 

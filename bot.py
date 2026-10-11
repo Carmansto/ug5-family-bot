@@ -5154,9 +5154,10 @@ def bonus_allocations(
   return result
 
 
-def bonus_preview_data(
+async def bonus_preview_data(
   guild_id: int,
   end_at: Optional[str] = None,
+  guild: Optional[discord.Guild] = None,
 ):
   start_at = bonus_ensure_start(guild_id)
   end_at = end_at or utc_now_iso()
@@ -5176,7 +5177,40 @@ def bonus_preview_data(
     end_at,
   )
 
-  top5 = users[:5]
+  # Premiums are ONLY for configured main-roster roles.
+  role_ids = set(get_leaderboard_role_ids(guild_id))
+  if guild is None:
+    running_bot = globals().get("bot")
+    guild = running_bot.get_guild(guild_id) if running_bot else None
+
+  qualified = []
+  valid_roles = set()
+
+  if guild is not None and role_ids:
+    valid_roles = {
+      role_id
+      for role_id in role_ids
+      if guild.get_role(role_id) is not None
+    }
+
+    for uid in users:
+      member = guild.get_member(uid)
+
+      if member is None:
+        try:
+          member = await guild.fetch_member(uid)
+        except discord.DiscordException:
+          member = None
+
+      if (
+        member is not None
+        and valid_roles.intersection(
+          role.id for role in member.roles
+        )
+      ):
+        qualified.append(uid)
+
+  top5 = qualified[:5]
   level, pool_cents = bonus_reached_level(
     family_cents,
     thresholds,
@@ -5206,6 +5240,8 @@ def bonus_preview_data(
     "level": level,
     "pool_cents": pool_cents,
     "ranking": ranking,
+    "qualified_user_ids": qualified,
+    "valid_role_ids": sorted(valid_roles),
   }
 
 
@@ -5225,11 +5261,16 @@ def bonus_period_text(
   return f"{start_at} \u2014 {end_at}"
 
 
-def build_bonus_preview_embed(
+async def build_bonus_preview_embed(
   guild_id: int,
   end_at: Optional[str] = None,
+  guild: Optional[discord.Guild] = None,
 ) -> discord.Embed:
-  data = bonus_preview_data(guild_id, end_at)
+  data = await bonus_preview_data(
+    guild_id,
+    end_at,
+    guild=guild,
+  )
 
   level_text = (
     str(data["level"])
@@ -5255,6 +5296,33 @@ def build_bonus_preview_embed(
       inline=False,
     )
 
+  selected_roles = get_leaderboard_role_ids(guild_id)
+  if selected_roles:
+    embed.add_field(
+      name="\U0001f465 \u041e\u0441\u043d\u043e\u0432\u043d\u0438\u0439 \u0441\u043a\u043b\u0430\u0434",
+      value=" ".join(
+        f"<@&{role_id}>"
+        for role_id in selected_roles
+      ),
+      inline=False,
+    )
+  else:
+    embed.add_field(
+      name="\u26a0\ufe0f \u0420\u043e\u043b\u0456 \u0434\u043b\u044f \u043f\u0440\u0435\u043c\u0456\u044e\u0432\u0430\u043d\u043d\u044f",
+      value="\u041d\u0430\u043b\u0430\u0448\u0442\u0443\u0439\u0442\u0435 \u0440\u043e\u043b\u0456 \u0443 `/leaderboard-settings`.",
+      inline=False,
+    )
+
+  if selected_roles and not data["valid_role_ids"]:
+    embed.add_field(
+      name="\u26d4 \u0420\u043e\u043b\u0456 \u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u043e",
+      value=(
+        "\u0417\u0431\u0435\u0440\u0435\u0436\u0435\u043d\u0456 \u0440\u043e\u043b\u0456 \u0431\u0456\u043b\u044c\u0448\u0435 \u043d\u0435 \u0456\u0441\u043d\u0443\u044e\u0442\u044c \u043d\u0430 \u0441\u0435\u0440\u0432\u0435\u0440\u0456. "
+        "\u041e\u043d\u043e\u0432\u0438 `/leaderboard-settings`."
+      ),
+      inline=False,
+    )
+
   if data["ranking"]:
     medals = ["\U0001f947", "\U0001f948", "\U0001f949", "4\ufe0f\u20e3", "5\ufe0f\u20e3"]
     lines = []
@@ -5274,7 +5342,10 @@ def build_bonus_preview_embed(
   else:
     embed.add_field(
       name="\U0001f3c6 \u0422\u041e\u041f-5",
-      value="\u0423 \u0446\u044c\u043e\u043c\u0443 \u043f\u0435\u0440\u0456\u043e\u0434\u0456 \u0449\u0435 \u043d\u0435\u043c\u0430\u0454 \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443.",
+      value=(
+        "\u041d\u0435\u043c\u0430\u0454 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432 \u043e\u0441\u043d\u043e\u0432\u043d\u043e\u0433\u043e \u0441\u043a\u043b\u0430\u0434\u0443 "
+        "\u0437 \u0431\u0430\u043b\u0430\u043c\u0438 \u0437\u0430 \u0446\u0435\u0439 \u043f\u0435\u0440\u0456\u043e\u0434."
+      ),
       inline=False,
     )
 
@@ -5475,7 +5546,7 @@ def build_bonus_period_embed(
       f"\u0410\u0432\u0442\u043e\u0437\u0430\u043a\u0440\u0438\u0442\u0442\u044f: **{schedule_text}**\n"
       f"\u041d\u0430\u0441\u0442\u0443\u043f\u043d\u0435 \u0437\u0430\u043a\u0440\u0438\u0442\u0442\u044f: **{next_text}**\n\n"
       "\u041f\u0440\u0438 \u0437\u0430\u043a\u0440\u0438\u0442\u0442\u0456 \u0431\u043e\u0442 \u0441\u043f\u043e\u0447\u0430\u0442\u043a\u0443 \u0444\u0456\u043a\u0441\u0443\u0454 \u0444\u043e\u043d\u0434 \u0456 \u0422\u041e\u041f-5, "
-      "\u043d\u0430\u0440\u0430\u0445\u043e\u0432\u0443\u0454 \u043f\u0440\u0435\u043c\u0456\u0457, \u0430 \u043f\u043e\u0442\u0456\u043c \u043e\u0431\u043d\u0443\u043b\u044f\u0454 \u0440\u0435\u0439\u0442\u0438\u043d\u0433 "
+      "\u043d\u0430\u0440\u0430\u0445\u043e\u0432\u0443\u0454 \u043f\u0440\u0435\u043c\u0456\u0457, \u0430 \u043f\u043e\u0442\u0456\u043c \u043e\u0431\u043d\u0443\u043b\u044f\u0454 \u0440\u0435\u0439\u0442\u0438\u043d\u0433 \u043e\u0441\u043d\u043e\u0432\u043d\u043e\u0433\u043e \u0441\u043a\u043b\u0430\u0434\u0443 "
       "\u043d\u0430 \u043d\u043e\u0432\u0438\u0439 \u043f\u0435\u0440\u0456\u043e\u0434."
     ),
     color=discord.Color.blurple(),
@@ -5675,6 +5746,19 @@ async def close_bonus_period(
   end_local: Optional[datetime] = None,
   bot_instance: Optional[commands.Bot] = None,
 ):
+  role_ids = get_leaderboard_role_ids(guild.id)
+  valid_role_ids = [
+    role_id
+    for role_id in role_ids
+    if guild.get_role(role_id) is not None
+  ]
+
+  if not valid_role_ids:
+    raise ValueError(
+      "\u0414\u043b\u044f \u043f\u0440\u0435\u043c\u0456\u0439 \u0441\u043f\u043e\u0447\u0430\u0442\u043a\u0443 \u043e\u0431\u0435\u0440\u0438 "
+      "\u0434\u0456\u0439\u0441\u043d\u0456 \u0440\u043e\u043b\u0456 \u043e\u0441\u043d\u043e\u0432\u043d\u043e\u0433\u043e \u0441\u043a\u043b\u0430\u0434\u0443 \u0432 `/leaderboard-settings`."
+    )
+
   if not bonus_config_ready(guild.id):
     raise ValueError(
       "\u0421\u043f\u043e\u0447\u0430\u0442\u043a\u0443 \u043d\u0430\u043b\u0430\u0448\u0442\u0443\u0439 3 \u043f\u043e\u0440\u043e\u0433\u0438 \u0442\u0430 \u0440\u043e\u0437\u043f\u043e\u0434\u0456\u043b \u0422\u041e\u041f-5."
@@ -5712,9 +5796,10 @@ async def close_bonus_period(
       "\u041a\u0456\u043d\u0435\u0446\u044c \u043f\u0435\u0440\u0456\u043e\u0434\u0443 \u043c\u0430\u0454 \u0431\u0443\u0442\u0438 \u043f\u0456\u0437\u043d\u0456\u0448\u0435 \u0437\u0430 \u0439\u043e\u0433\u043e \u043f\u043e\u0447\u0430\u0442\u043e\u043a."
     )
 
-  data = bonus_preview_data(
+  data = await bonus_preview_data(
     guild.id,
     end_at,
+    guild=guild,
   )
 
   awards = [
@@ -5750,6 +5835,7 @@ async def close_bonus_period(
     closed_by,
     close_mode,
     awards,
+    data["qualified_user_ids"],
   )
 
   result_embed = build_bonus_results_embed(
@@ -6549,6 +6635,166 @@ class BonusCloseConfirmView(discord.ui.View):
     )
 
 
+def build_bonus_rollback_embed(guild_id: int) -> discord.Embed:
+  period = db.latest_bonus_period(guild_id)
+
+  if period is None:
+    return discord.Embed(
+      title="\u21a9\ufe0f \u0412\u0406\u0414\u041a\u0410\u0422 \u041f\u0420\u0415\u041c\u0406\u0410\u041b\u042c\u041d\u041e\u0413\u041e \u041f\u0415\u0420\u0406\u041e\u0414\u0423",
+      description="\u041d\u0435\u043c\u0430\u0454 \u0437\u0430\u043a\u0440\u0438\u0442\u043e\u0433\u043e \u043f\u0435\u0440\u0456\u043e\u0434\u0443, \u044f\u043a\u0438\u0439 \u043c\u043e\u0436\u043d\u0430 \u0432\u0456\u0434\u043a\u043e\u0442\u0438\u0442\u0438.",
+      color=discord.Color.orange(),
+    )
+
+  awards = db.bonus_awards_for_period(period["id"])
+  pending = sum(1 for row in awards if row["status"] == "pending")
+  paid = sum(1 for row in awards if row["status"] == "paid")
+  total_cents = sum(int(row["amount_cents"] or 0) for row in awards)
+
+  embed = discord.Embed(
+    title="\u21a9\ufe0f \u0412\u0406\u0414\u041a\u0410\u0422 \u041e\u0421\u0422\u0410\u041d\u041d\u042c\u041e\u0413\u041e \u041f\u0415\u0420\u0406\u041e\u0414\u0423",
+    description=(
+      f"\u041f\u0435\u0440\u0456\u043e\u0434 **#{period['id']}**\n"
+      f"\U0001f4c5 **{bonus_period_text(period['start_at'], period['end_at'])}**\n\n"
+      f"\U0001f3c6 \u041f\u0440\u0435\u043c\u0456\u0439: **{len(awards)}**\n"
+      f"\U0001f4b0 \u0421\u0443\u043c\u0430: **{format_cents(total_cents)}**\n"
+      f"\U0001f4b0 \u0414\u043e \u0432\u0438\u043f\u043b\u0430\u0442\u0438: **{pending}**\n"
+      f"\u2705 \u0412\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u043e: **{paid}**"
+    ),
+    color=discord.Color.orange(),
+  )
+
+  if any(row["status"] != "pending" for row in awards):
+    embed.add_field(
+      name="\u26d4 \u0412\u0456\u0434\u043a\u0430\u0442 \u0437\u0430\u0431\u043b\u043e\u043a\u043e\u0432\u0430\u043d\u043e",
+      value=(
+        "\u0423 \u0446\u044c\u043e\u043c\u0443 \u043f\u0435\u0440\u0456\u043e\u0434\u0456 \u0432\u0436\u0435 \u0454 \u0432\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u0456 \u0430\u0431\u043e \u0437\u043c\u0456\u043d\u0435\u043d\u0456 \u043f\u0440\u0435\u043c\u0456\u0457. "
+        "\u0410\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u043d\u0438\u0439 \u0432\u0456\u0434\u043a\u0430\u0442 \u0437\u0430\u0431\u043b\u043e\u043a\u043e\u0432\u0430\u043d\u043e."
+      ),
+      inline=False,
+    )
+  else:
+    embed.add_field(
+      name="\u0429\u043e \u0431\u0443\u0434\u0435 \u0432\u0456\u0434\u043a\u043e\u0447\u0435\u043d\u043e",
+      value=(
+        "\u2022 \u043e\u0441\u0442\u0430\u043d\u043d\u0456\u0439 \u0437\u0430\u043a\u0440\u0438\u0442\u0438\u0439 \u043f\u0440\u0435\u043c\u0456\u0430\u043b\u044c\u043d\u0438\u0439 \u043f\u0435\u0440\u0456\u043e\u0434;\n"
+        "\u2022 \u0439\u043e\u0433\u043e \u043d\u0435\u0432\u0438\u043f\u043b\u0430\u0447\u0435\u043d\u0456 \u043f\u0440\u0435\u043c\u0456\u0457;\n"
+        "\u2022 \u043f\u043e\u0447\u0430\u0442\u043e\u043a \u043f\u0440\u0435\u043c\u0456\u0430\u043b\u044c\u043d\u043e\u0433\u043e \u043f\u0435\u0440\u0456\u043e\u0434\u0443;\n"
+        "\u2022 \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u0432\u0435 \u0441\u043a\u0438\u0434\u0430\u043d\u043d\u044f \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443.\n\n"
+        "\u041a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0438 \u0456 \u0432\u0438\u043f\u043b\u0430\u0442\u0438 \u0437\u0430 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0430\u043c\u0438 \u043d\u0435 \u0447\u0456\u043f\u0430\u044e\u0442\u044c\u0441\u044f."
+      ),
+      inline=False,
+    )
+
+  return embed
+
+
+class BonusRollbackBackView(discord.ui.View):
+  def __init__(self, guild_id: int):
+    super().__init__(timeout=180)
+    self.guild_id = guild_id
+
+  @discord.ui.button(
+    label="\u041d\u0430\u0437\u0430\u0434",
+    emoji="\u21a9\ufe0f",
+    style=discord.ButtonStyle.secondary,
+  )
+  async def back(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      content=None,
+      embed=build_bonus_panel_embed(self.guild_id),
+      view=BonusPanelView(self.guild_id),
+    )
+
+
+class BonusRollbackConfirmView(discord.ui.View):
+  def __init__(self, guild_id: int):
+    super().__init__(timeout=180)
+    self.guild_id = guild_id
+
+  @discord.ui.button(
+    label="\u0412\u0456\u0434\u043a\u043e\u0442\u0438\u0442\u0438 \u043f\u0435\u0440\u0456\u043e\u0434",
+    emoji="\u21a9\ufe0f",
+    style=discord.ButtonStyle.danger,
+  )
+  async def confirm(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    if (
+      not isinstance(interaction.user, discord.Member)
+      or not management_member(interaction.user)
+    ):
+      await interaction.response.send_message(
+        "\u274c \u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e \u0442\u0456\u043b\u044c\u043a\u0438 \u043a\u0435\u0440\u0456\u0432\u043d\u0438\u0446\u0442\u0432\u0443.",
+        ephemeral=True,
+      )
+      return
+
+    guild = interaction.guild
+    if guild is None:
+      return
+
+    try:
+      result = db.rollback_latest_bonus_period(self.guild_id)
+
+      await audit_log(
+        guild,
+        "\u21a9\ufe0f \u041f\u0440\u0435\u043c\u0456\u0430\u043b\u044c\u043d\u0438\u0439 \u043f\u0435\u0440\u0456\u043e\u0434 \u0432\u0456\u0434\u043a\u043e\u0447\u0435\u043d\u043e",
+        (
+          f"\u041f\u0435\u0440\u0456\u043e\u0434: #{result['period_id']}\n"
+          f"\u0414\u0430\u0442\u0438: {bonus_period_text(result['start_at'], result['end_at'])}\n"
+          f"\u0412\u0438\u0434\u0430\u043b\u0435\u043d\u043e \u043f\u0440\u0435\u043c\u0456\u0439: {result['award_count']}\n"
+          f"\u0421\u0443\u043c\u0430: {format_cents(result['award_total_cents'])}\n"
+          f"\u0412\u0456\u0434\u043a\u043e\u0442\u0438\u0432: <@{interaction.user.id}>"
+        ),
+        discord.Color.orange(),
+      )
+
+      legacy_text = (
+        "\n\u26a0\ufe0f \u0412\u0456\u0434\u043d\u043e\u0432\u043b\u0435\u043d\u043e \u0439 \u0433\u043b\u043e\u0431\u0430\u043b\u044c\u043d\u0438\u0439 \u0440\u0435\u0439\u0442\u0438\u043d\u0433, "
+        "\u044f\u043a\u0438\u0439 \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u0432\u043e \u0441\u043a\u0438\u043d\u0443\u043b\u0430 \u0441\u0442\u0430\u0440\u0430 \u0432\u0435\u0440\u0441\u0456\u044f."
+        if result["restored_legacy_global"]
+        else ""
+      )
+
+      await interaction.response.edit_message(
+        content=(
+          "\u2705 \u041e\u0441\u0442\u0430\u043d\u043d\u0456\u0439 \u043f\u0440\u0435\u043c\u0456\u0430\u043b\u044c\u043d\u0438\u0439 \u043f\u0435\u0440\u0456\u043e\u0434 \u0432\u0456\u0434\u043a\u043e\u0447\u0435\u043d\u043e. "
+          "\u041f\u0435\u0440\u0435\u0432\u0456\u0440 `/leaderboard-settings` \u0456 \u0437\u0430\u043a\u0440\u0438\u0439 \u043f\u0435\u0440\u0456\u043e\u0434 \u0437\u0430\u043d\u043e\u0432\u043e."
+          f"{legacy_text}"
+        ),
+        embed=build_bonus_panel_embed(self.guild_id),
+        view=BonusPanelView(self.guild_id),
+      )
+    except ValueError as exc:
+      await interaction.response.edit_message(
+        content=f"\u274c {exc}",
+        embed=build_bonus_rollback_embed(self.guild_id),
+        view=BonusRollbackBackView(self.guild_id),
+      )
+
+  @discord.ui.button(
+    label="\u0421\u043a\u0430\u0441\u0443\u0432\u0430\u0442\u0438",
+    emoji="\u21a9\ufe0f",
+    style=discord.ButtonStyle.secondary,
+  )
+  async def cancel(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    await interaction.response.edit_message(
+      content=None,
+      embed=build_bonus_panel_embed(self.guild_id),
+      view=BonusPanelView(self.guild_id),
+    )
+
+
 class BonusPanelView(discord.ui.View):
   def __init__(self, guild_id: int):
     super().__init__(timeout=300)
@@ -6605,9 +6851,11 @@ class BonusPanelView(discord.ui.View):
     interaction: discord.Interaction,
     button: discord.ui.Button,
   ):
-    await interaction.response.edit_message(
-      embed=build_bonus_preview_embed(
-        self.guild_id
+    await interaction.response.defer()
+    await interaction.edit_original_response(
+      embed=await build_bonus_preview_embed(
+        self.guild_id,
+        guild=interaction.guild,
       ),
       view=BonusBackView(
         self.guild_id
@@ -6637,9 +6885,11 @@ class BonusPanelView(discord.ui.View):
       )
       return
 
-    await interaction.response.edit_message(
-      embed=build_bonus_preview_embed(
-        self.guild_id
+    await interaction.response.defer()
+    await interaction.edit_original_response(
+      embed=await build_bonus_preview_embed(
+        self.guild_id,
+        guild=interaction.guild,
       ),
       view=BonusCloseConfirmView(
         self.guild_id
@@ -6720,6 +6970,30 @@ class BonusPanelView(discord.ui.View):
       view=BonusBackView(
         self.guild_id
       ),
+    )
+
+  @discord.ui.button(
+    label="\u0412\u0456\u0434\u043a\u043e\u0442\u0438\u0442\u0438 \u043f\u0435\u0440\u0456\u043e\u0434",
+    emoji="\u21a9\ufe0f",
+    style=discord.ButtonStyle.danger,
+    row=3,
+  )
+  async def rollback_period(
+    self,
+    interaction: discord.Interaction,
+    button: discord.ui.Button,
+  ):
+    if db.latest_bonus_period(self.guild_id) is None:
+      await interaction.response.send_message(
+        "\u274c \u041d\u0435\u043c\u0430\u0454 \u0437\u0430\u043a\u0440\u0438\u0442\u043e\u0433\u043e \u043f\u0435\u0440\u0456\u043e\u0434\u0443 \u0434\u043b\u044f \u0432\u0456\u0434\u043a\u0430\u0442\u0443.",
+        ephemeral=True,
+      )
+      return
+
+    await interaction.response.edit_message(
+      content=None,
+      embed=build_bonus_rollback_embed(self.guild_id),
+      view=BonusRollbackConfirmView(self.guild_id),
     )
 
   @discord.ui.button(

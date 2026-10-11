@@ -127,6 +127,15 @@ class Database:
     )
     """)
 
+    bonus_period_columns = {
+      row["name"]
+      for row in self.conn.execute("PRAGMA table_info(bonus_periods)").fetchall()
+    }
+    if "rating_reset_snapshot_json" not in bonus_period_columns:
+      self.conn.execute(
+        "ALTER TABLE bonus_periods ADD COLUMN rating_reset_snapshot_json TEXT"
+      )
+
     self.conn.execute("""
     CREATE TABLE IF NOT EXISTS bonus_awards (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1210,20 +1219,38 @@ class Database:
     closed_by: Optional[int],
     close_mode: str,
     awards: list[tuple[int, int, int, str]],
+    rating_reset_user_ids: Optional[list[int]] = None,
   ) -> int:
     now = utc_now_iso()
+    reset_ids = []
+    for raw_uid in rating_reset_user_ids or []:
+      try:
+        uid = int(raw_uid)
+      except (TypeError, ValueError):
+        continue
+      if uid not in reset_ids:
+        reset_ids.append(uid)
 
     try:
       self.conn.execute("BEGIN IMMEDIATE")
+
+      reset_snapshot = {}
+      for user_id in reset_ids:
+        row = self.conn.execute("""
+        SELECT rating_reset_at
+        FROM member_resets
+        WHERE guild_id = ? AND user_id = ?
+        """, (guild_id, user_id)).fetchone()
+        reset_snapshot[str(user_id)] = row["rating_reset_at"] if row else None
 
       cur = self.conn.execute("""
       INSERT INTO bonus_periods (
         guild_id, start_at, end_at, family_earned_cents,
         threshold_level, prize_pool_cents, thresholds_json,
         distribution_json, ranking_json, closed_by,
-        close_mode, created_at
+        close_mode, created_at, rating_reset_snapshot_json
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       """, (
         guild_id,
         start_at,
@@ -1237,6 +1264,7 @@ class Database:
         closed_by,
         close_mode,
         now,
+        json.dumps(reset_snapshot, ensure_ascii=True),
       ))
 
       period_id = cur.lastrowid
@@ -1260,20 +1288,28 @@ class Database:
           now,
         ))
 
-      for key in (
-        "bonus_period_start_at",
-        "rating_reset_at",
-      ):
+      # The bonus period has its own clock. Do NOT touch the global
+      # rating_reset_at here: that would reset the rating for everybody.
+      self.conn.execute("""
+      INSERT INTO bot_settings (guild_id, key, value)
+      VALUES (?, 'bonus_period_start_at', ?)
+      ON CONFLICT(guild_id, key)
+      DO UPDATE SET value = excluded.value
+      """, (guild_id, end_at))
+
+      # Reset rating only for members of the configured main roster that
+      # actually participated in this bonus period.
+      for user_id in reset_ids:
         self.conn.execute("""
-        INSERT INTO bot_settings (guild_id, key, value)
-        VALUES (?, ?, ?)
-        ON CONFLICT(guild_id, key)
-        DO UPDATE SET value = excluded.value
-        """, (
-          guild_id,
-          key,
-          end_at,
-        ))
+        INSERT INTO member_resets (
+          guild_id, user_id, rating_reset_at, earnings_reset_at, updated_at
+        )
+        VALUES (?, ?, ?, NULL, ?)
+        ON CONFLICT(guild_id, user_id)
+        DO UPDATE SET
+          rating_reset_at = excluded.rating_reset_at,
+          updated_at = excluded.updated_at
+        """, (guild_id, user_id, end_at, now))
 
       self.conn.commit()
       return period_id
@@ -1331,6 +1367,136 @@ class Database:
     WHERE period_id = ?
     ORDER BY COALESCE(rank, 999) ASC, id ASC
     """, (period_id,)).fetchall()
+
+  def latest_bonus_period(self, guild_id: int):
+    return self.conn.execute("""
+    SELECT *
+    FROM bonus_periods
+    WHERE guild_id = ?
+    ORDER BY id DESC
+    LIMIT 1
+    """, (guild_id,)).fetchone()
+
+  def rollback_latest_bonus_period(self, guild_id: int):
+    """
+    Roll back the latest closed bonus period.
+
+    Contracts and contract payouts are untouched. Automatic rollback is blocked
+    once any award from this period has already been paid.
+    """
+    try:
+      self.conn.execute("BEGIN IMMEDIATE")
+
+      period = self.conn.execute("""
+      SELECT *
+      FROM bonus_periods
+      WHERE guild_id = ?
+      ORDER BY id DESC
+      LIMIT 1
+      """, (guild_id,)).fetchone()
+
+      if period is None:
+        raise ValueError("Немає закритого преміального періоду для відкату.")
+
+      awards = self.conn.execute("""
+      SELECT *
+      FROM bonus_awards
+      WHERE guild_id = ? AND period_id = ?
+      ORDER BY id ASC
+      """, (guild_id, period["id"])).fetchall()
+
+      changed_awards = [row for row in awards if row["status"] != "pending"]
+      if changed_awards:
+        raise ValueError(
+          "У цьому періоді вже є виплачені або змінені премії. "
+          "Автоматичний відкат заблоковано."
+        )
+
+      snapshot = {}
+      raw_snapshot = period["rating_reset_snapshot_json"]
+      if raw_snapshot:
+        try:
+          parsed = json.loads(raw_snapshot)
+          if isinstance(parsed, dict):
+            snapshot = parsed
+        except Exception:
+          snapshot = {}
+
+      self.conn.execute("""
+      DELETE FROM bonus_awards
+      WHERE guild_id = ? AND period_id = ?
+      """, (guild_id, period["id"]))
+
+      self.conn.execute("""
+      DELETE FROM bonus_periods
+      WHERE guild_id = ? AND id = ?
+      """, (guild_id, period["id"]))
+
+      self.conn.execute("""
+      INSERT INTO bot_settings (guild_id, key, value)
+      VALUES (?, 'bonus_period_start_at', ?)
+      ON CONFLICT(guild_id, key)
+      DO UPDATE SET value = excluded.value
+      """, (guild_id, period["start_at"]))
+
+      restored_members = 0
+      now = utc_now_iso()
+      for raw_uid, previous_reset in snapshot.items():
+        try:
+          user_id = int(raw_uid)
+        except (TypeError, ValueError):
+          continue
+
+        if previous_reset is None:
+          self.conn.execute("""
+          UPDATE member_resets
+          SET rating_reset_at = NULL, updated_at = ?
+          WHERE guild_id = ? AND user_id = ?
+          """, (now, guild_id, user_id))
+        else:
+          self.conn.execute("""
+          INSERT INTO member_resets (
+            guild_id, user_id, rating_reset_at, earnings_reset_at, updated_at
+          )
+          VALUES (?, ?, ?, NULL, ?)
+          ON CONFLICT(guild_id, user_id)
+          DO UPDATE SET
+            rating_reset_at = excluded.rating_reset_at,
+            updated_at = excluded.updated_at
+          """, (guild_id, user_id, previous_reset, now))
+        restored_members += 1
+
+      # Legacy safety for periods closed by the old implementation, which
+      # incorrectly moved the GLOBAL rating_reset_at for the whole family.
+      restored_legacy_global = False
+      if not snapshot:
+        global_row = self.conn.execute("""
+        SELECT value
+        FROM bot_settings
+        WHERE guild_id = ? AND key = 'rating_reset_at'
+        """, (guild_id,)).fetchone()
+
+        if global_row and global_row["value"] == period["end_at"]:
+          self.conn.execute("""
+          UPDATE bot_settings
+          SET value = ?
+          WHERE guild_id = ? AND key = 'rating_reset_at'
+          """, (period["start_at"], guild_id))
+          restored_legacy_global = True
+
+      self.conn.commit()
+      return {
+        "period_id": int(period["id"]),
+        "start_at": period["start_at"],
+        "end_at": period["end_at"],
+        "award_count": len(awards),
+        "award_total_cents": sum(int(row["amount_cents"] or 0) for row in awards),
+        "restored_members": restored_members,
+        "restored_legacy_global": restored_legacy_global,
+      }
+    except Exception:
+      self.conn.rollback()
+      raise
 
   def manual_bonus_history(self, guild_id: int, limit: int = 10):
     return self.conn.execute("""

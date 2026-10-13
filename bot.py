@@ -7411,6 +7411,85 @@ async def contracts_admin(interaction: discord.Interaction):
 
 
 @bot.tree.command(
+  name="rating-from",
+  description="Встановити точний початок поточного рейтингу",
+)
+@app_commands.describe(
+  date="Дата у форматі 12.10.2026",
+  time="Час у форматі 00:01",
+)
+async def rating_from_command(
+  interaction: discord.Interaction,
+  date: str,
+  time: str = "00:01",
+):
+  if (
+    not isinstance(interaction.user, discord.Member)
+    or not management_member(interaction.user)
+  ):
+    await interaction.response.send_message(
+      "❌ Команда доступна тільки керівництву.",
+      ephemeral=True,
+    )
+    return
+
+  if interaction.guild is None:
+    await interaction.response.send_message(
+      "❌ Це працює тільки на сервері.",
+      ephemeral=True,
+    )
+    return
+
+  raw = f"{date.strip()} {time.strip()}"
+  parsed = None
+
+  for fmt in (
+    "%d.%m.%Y %H:%M",
+    "%Y-%m-%d %H:%M",
+  ):
+    try:
+      parsed = datetime.strptime(raw, fmt)
+      break
+    except ValueError:
+      pass
+
+  if parsed is None:
+    await interaction.response.send_message(
+      "❌ Невірна дата/час. Приклад: /rating-from date:12.10.2026 time:00:01",
+      ephemeral=True,
+    )
+    return
+
+  local_dt = parsed.replace(tzinfo=LOCAL_TZ)
+  reset_at = local_dt.astimezone(timezone.utc).isoformat()
+
+  db.force_rating_period_start(
+    interaction.guild.id,
+    reset_at,
+  )
+
+  reset_ts = int(local_dt.timestamp())
+
+  await audit_log(
+    interaction.guild,
+    "📅 Початок рейтингу змінено",
+    (
+      f"Новий початок: <t:{reset_ts}:f>\n"
+      f"Змінив/ла: <@{interaction.user.id}>"
+    ),
+    discord.Color.orange(),
+  )
+
+  await interaction.response.send_message(
+    (
+      f"✅ Початок рейтингу встановлено на **<t:{reset_ts}:f>**.\n"
+      "Усі бали з контрактів до цього моменту більше не входять у поточний рейтинг.\n"
+      "Контракти, фінанси та виплати не змінені."
+    ),
+    ephemeral=True,
+  )
+
+@bot.tree.command(
   name="reset-rating",
   description="\u041e\u0431\u043d\u0443\u043b\u0438\u0442\u0438 \u043f\u043e\u0442\u043e\u0447\u043d\u0438\u0439 \u0440\u0435\u0439\u0442\u0438\u043d\u0433 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432",
 )

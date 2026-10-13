@@ -1788,6 +1788,41 @@ class Database:
 
     self.conn.commit()
 
+  def force_rating_period_start(
+    self,
+    guild_id: int,
+    reset_at: str,
+  ):
+    """
+    Force the whole rating to start from one exact timestamp.
+
+    Individual rating resets are cleared so they cannot override the chosen
+    global start. Contracts, payouts and financial history are not changed.
+    """
+    now = utc_now_iso()
+
+    try:
+      self.conn.execute("BEGIN IMMEDIATE")
+
+      self.conn.execute("""
+      INSERT INTO bot_settings (guild_id, key, value)
+      VALUES (?, 'rating_reset_at', ?)
+      ON CONFLICT(guild_id, key)
+      DO UPDATE SET value = excluded.value
+      """, (guild_id, reset_at))
+
+      self.conn.execute("""
+      UPDATE member_resets
+      SET rating_reset_at = NULL,
+          updated_at = ?
+      WHERE guild_id = ?
+      """, (now, guild_id))
+
+      self.conn.commit()
+    except Exception:
+      self.conn.rollback()
+      raise
+
   # ----------------------------
   # Family item storage
   # ----------------------------

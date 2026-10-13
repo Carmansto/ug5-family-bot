@@ -2253,24 +2253,67 @@ class ContractAdminPanelView(discord.ui.View):
     )
 
 
+def effective_rating_reset_at(
+  guild_id: int,
+  user_id: int,
+) -> Optional[str]:
+  global_reset = db.get_setting(
+    guild_id,
+    "rating_reset_at",
+  )
+  member_reset = db.get_member_reset(
+    guild_id,
+    user_id,
+    "rating",
+  )
+
+  if not global_reset:
+    return member_reset
+  if not member_reset:
+    return global_reset
+
+  try:
+    global_dt = datetime.fromisoformat(global_reset)
+    member_dt = datetime.fromisoformat(member_reset)
+
+    if global_dt.tzinfo is None:
+      global_dt = global_dt.replace(tzinfo=timezone.utc)
+    if member_dt.tzinfo is None:
+      member_dt = member_dt.replace(tzinfo=timezone.utc)
+
+    return (
+      member_reset
+      if member_dt.astimezone(timezone.utc) > global_dt.astimezone(timezone.utc)
+      else global_reset
+    )
+  except Exception:
+    return max(global_reset, member_reset)
+
 def build_public_rating_embed(guild_id: int) -> discord.Embed:
   rows = db.all_non_cancelled(guild_id)
   rating_reset_at = db.get_setting(guild_id, "rating_reset_at")
 
-  rating_rows = [
-    row for row in rows
-    if not rating_reset_at or row["created_at"] >= rating_reset_at
-  ]
-
   points = defaultdict(lambda: Fraction(0, 1))
+  reset_cache = {}
 
-  for row in rating_rows:
+  for row in rows:
     members = parse_ids(row["participant_ids"])
     if not members:
       continue
 
     share = Fraction(10, len(members))
+
     for uid in members:
+      if uid not in reset_cache:
+        reset_cache[uid] = effective_rating_reset_at(
+          guild_id,
+          uid,
+        )
+
+      member_reset = reset_cache[uid]
+      if member_reset and row["created_at"] < member_reset:
+        continue
+
       points[uid] += share
 
   ranking = sorted(
@@ -2281,57 +2324,63 @@ def build_public_rating_embed(guild_id: int) -> discord.Embed:
 
   reset_ts = iso_to_unix(rating_reset_at) if rating_reset_at else None
   subtitle = (
-    f"\u041f\u043e\u0442\u043e\u0447\u043d\u0438\u0439 \u0440\u0435\u0439\u0442\u0438\u043d\u0433 \u2022 \u0437 <t:{reset_ts}:d>"
+    f"Поточний рейтинг • з <t:{reset_ts}:d>"
     if reset_ts
-    else "\u041f\u043e\u0442\u043e\u0447\u043d\u0438\u0439 \u0440\u0435\u0439\u0442\u0438\u043d\u0433 \u2022 \u0432\u0456\u0434 \u043f\u043e\u0447\u0430\u0442\u043a\u0443"
+    else "Поточний рейтинг • від початку"
   )
 
   embed = discord.Embed(
-    title="\U0001f3c6 \u0420\u0435\u0439\u0442\u0438\u043d\u0433 \u0443\u0447\u0430\u0441\u043d\u0438\u043a\u0456\u0432",
+    title="🏆 Рейтинг учасників",
     description=subtitle,
     color=discord.Color.gold(),
   )
 
   if not ranking:
     embed.add_field(
-      name="\u0420\u0435\u0439\u0442\u0438\u043d\u0433",
-      value="\u041f\u043e\u043a\u0438 \u043d\u0435\u043c\u0430\u0454 \u0432\u0438\u043a\u043e\u043d\u0430\u043d\u0438\u0445 \u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u0456\u0432.",
+      name="Рейтинг",
+      value="Поки немає виконаних контрактів.",
       inline=False,
     )
     return embed
 
   lines = [
-    f"**{idx}.** <@{uid}> \u2014 **{format_points_with_word(points[uid])}**"
+    f"**{idx}.** <@{uid}> — **{format_points_with_word(points[uid])}**"
     for idx, uid in enumerate(ranking[:25], start=1)
   ]
   embed.add_field(
-    name="\u0422\u0430\u0431\u043b\u0438\u0446\u044f",
+    name="Таблиця",
     value="\n".join(lines),
     inline=False,
   )
-  embed.set_footer(text="\u0423 \u0440\u0435\u0439\u0442\u0438\u043d\u0433\u0443 \u043f\u043e\u043a\u0430\u0437\u0443\u044e\u0442\u044c\u0441\u044f \u0442\u0456\u043b\u044c\u043a\u0438 \u0431\u0430\u043b\u0438.")
+  embed.set_footer(text="У рейтингу показуються тільки бали.")
   return embed
-
 
 def rating_data_for_guild(guild_id: int):
   rows = db.all_non_cancelled(guild_id)
   rating_reset_at = db.get_setting(guild_id, "rating_reset_at")
 
-  rating_rows = [
-    row for row in rows
-    if not rating_reset_at or row["created_at"] >= rating_reset_at
-  ]
-
   points = defaultdict(lambda: Fraction(0, 1))
   participations = Counter()
+  reset_cache = {}
 
-  for row in rating_rows:
+  for row in rows:
     members = parse_ids(row["participant_ids"])
     if not members:
       continue
 
     share = Fraction(10, len(members))
+
     for uid in members:
+      if uid not in reset_cache:
+        reset_cache[uid] = effective_rating_reset_at(
+          guild_id,
+          uid,
+        )
+
+      member_reset = reset_cache[uid]
+      if member_reset and row["created_at"] < member_reset:
+        continue
+
       points[uid] += share
       participations[uid] += 1
 
@@ -2341,7 +2390,6 @@ def rating_data_for_guild(guild_id: int):
     reverse=True,
   )
   return points, participations, users, rating_reset_at
-
 
 def rating_data_for_guild_all_time(guild_id: int):
   rows = db.all_non_cancelled(guild_id)
